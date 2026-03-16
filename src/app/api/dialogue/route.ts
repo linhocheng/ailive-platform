@@ -16,6 +16,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { getFirestore } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 import { generateEmbedding, cosineSimilarity } from '@/lib/embeddings';
+import { generateImageForCharacter } from '@/lib/generate-image';
 
 export const maxDuration = 60;
 
@@ -199,20 +200,10 @@ async function executeTool(
 
   if (toolName === 'generate_image') {
     const prompt = String(toolInput.prompt || '');
-    const aspectRatio = String(toolInput.aspect_ratio || '1:1');
     if (!prompt) return '需要圖像描述才能生成。';
     try {
-      const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'https://ailive-platform.vercel.app';
-      const res = await fetch(`${baseUrl}/api/image/generate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ characterId, prompt, aspectRatio }),
-      });
-      const d = await res.json();
-      if (d.success && d.imageUrl) {
-        return `IMAGE_URL:${d.imageUrl}`;
-      }
-      return `⚠️ 生圖失敗：${d.error || '未知錯誤'}`;
+      const result = await generateImageForCharacter(characterId, prompt);
+      return `IMAGE_URL:${result.imageUrl}`;
     } catch (e: unknown) {
       return `⚠️ 生圖錯誤：${e instanceof Error ? e.message : String(e)}`;
     }
