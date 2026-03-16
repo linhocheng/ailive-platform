@@ -49,6 +49,12 @@ function taskShouldRun(task: Record<string, unknown>, now: ReturnType<typeof get
   return true;
 }
 
+
+// strip markdown code fences
+function stripJson(s: string): string {
+  return s.replace(/^```[\w]*\n?/m, '').replace(/\n?```$/m, '').trim();
+}
+
 async function runLearnTask(characterId: string, char: Record<string, unknown>, client: Anthropic, dateStr: string) {
   const db = getFirestore();
   const { generateEmbedding } = await import('@/lib/embeddings');
@@ -68,7 +74,7 @@ async function runLearnTask(characterId: string, char: Record<string, unknown>, 
     }],
   });
 
-  const raw = (res.content[0] as Anthropic.TextBlock).text.trim();
+  const raw = stripJson((res.content[0] as Anthropic.TextBlock).text.trim());
   const insight = JSON.parse(raw);
   const embedding = await generateEmbedding(`${insight.title} ${insight.content}`);
 
@@ -116,7 +122,7 @@ async function runReflectTask(characterId: string, char: Record<string, unknown>
     }],
   });
 
-  const raw = (res.content[0] as Anthropic.TextBlock).text.trim();
+  const raw = stripJson((res.content[0] as Anthropic.TextBlock).text.trim());
   const insight = JSON.parse(raw);
   const embedding = await generateEmbedding(`${insight.title} ${insight.content}`);
 
@@ -189,7 +195,7 @@ async function runPostTask(
     }],
   });
 
-  const raw = (res.content[0] as Anthropic.TextBlock).text.trim();
+  const raw = stripJson((res.content[0] as Anthropic.TextBlock).text.trim());
   const post = JSON.parse(raw);
 
   const postRef = await db.collection('platform_posts').add({

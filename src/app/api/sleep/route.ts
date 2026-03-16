@@ -17,6 +17,11 @@ import { generateEmbedding, cosineSimilarity } from '@/lib/embeddings';
 
 export const maxDuration = 60;
 
+
+function stripJson(s: string): string {
+  return s.replace(/^```[\w]*\n?/m, '').replace(/\n?```$/m, '').trim();
+}
+
 export async function POST(req: NextRequest) {
   try {
     const db = getFirestore();
@@ -150,7 +155,7 @@ export async function POST(req: NextRequest) {
         }],
       });
 
-      const propRaw = (propRes.content[0] as Anthropic.TextBlock).text.trim();
+      const propRaw = stripJson((propRes.content[0] as Anthropic.TextBlock).text.trim());
       const proposal = JSON.parse(propRaw);
 
       await db.collection('platform_soul_proposals').add({
