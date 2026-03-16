@@ -147,6 +147,35 @@ async function executeTool(
 }
 
 // ===== 主對話 =====
+
+/**
+ * GET /api/dialogue?conversationId=xxx
+ * 讀取對話歷史
+ */
+export async function GET(req: NextRequest) {
+  try {
+    const db = getFirestore();
+    const conversationId = req.nextUrl.searchParams.get('conversationId');
+    if (!conversationId) return NextResponse.json({ error: 'conversationId 必填' }, { status: 400 });
+
+    const doc = await db.collection('platform_conversations').doc(conversationId).get();
+    if (!doc.exists) return NextResponse.json({ messages: [], conversationId });
+
+    const data = doc.data()!;
+    const messages = (data.messages || []) as Array<{ role: string; content: string; timestamp: string }>;
+
+    return NextResponse.json({
+      success: true,
+      conversationId,
+      characterId: data.characterId,
+      messages,
+      messageCount: data.messageCount || 0,
+    });
+  } catch (e: unknown) {
+    return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
+  }
+}
+
 export async function POST(req: NextRequest) {
   try {
     const db = getFirestore();
