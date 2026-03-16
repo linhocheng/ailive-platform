@@ -33,6 +33,9 @@ function getTaipeiDate(): string {
 }
 
 // ===== 工具定義 =====
+// web_search 是 Anthropic server-side tool，不需要 executeTool 處理
+const WEB_SEARCH_TOOL = { type: 'web_search_20250305', name: 'web_search' } as unknown as Anthropic.Tool;
+
 const PLATFORM_TOOLS: Anthropic.Tool[] = [
   {
     name: 'query_knowledge_base',
@@ -350,7 +353,10 @@ export async function POST(req: NextRequest) {
 ---
 現在時間（台北）：${taipeiTime}
 
-說話前的天條：先呼叫 query_knowledge_base 查記憶，查了才說，不從空氣裡編。
+說話前的天條：
+- 需要回想過去說過的事、對方的喜好、自己的洞察 → 呼叫 query_knowledge_base
+- 需要知道當前事件、時事、不確定的資訊 → 呼叫 web_search
+- 不確定就查，查了才說，不從空氣裡編。
 
 ${convData.summary ? `對話摘要（上次回顧）：\n${convData.summary}` : ''}`;
 
@@ -380,8 +386,8 @@ ${convData.summary ? `對話摘要（上次回顧）：\n${convData.summary}` : 
         model: 'claude-sonnet-4-6',
         max_tokens: 1500,
         system: systemPrompt,
-        tools: PLATFORM_TOOLS,
-        tool_choice: turn === 0 ? { type: 'any' } : { type: 'auto' }, // 第一輪強制用工具
+        tools: [WEB_SEARCH_TOOL, ...PLATFORM_TOOLS],
+        tool_choice: { type: 'auto' }, // auto：讓 Claude 自己判斷要不要查網路/記憶
         messages: currentMessages,
       });
 
@@ -400,6 +406,8 @@ ${convData.summary ? `對話摘要（上次回顧）：\n${convData.summary}` : 
         for (const block of response.content) {
           if (block.type === 'tool_use') {
             toolsUsed.push(block.name);
+            // web_search 由 Anthropic 伺服器端處理，不需要手動 executeTool
+            if (block.name === 'web_search') continue;
             const result = await executeTool(block.name, block.input as Record<string, unknown>, characterId);
             toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: result });
           }
