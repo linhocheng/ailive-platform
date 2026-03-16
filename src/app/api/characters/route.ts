@@ -12,7 +12,7 @@ export async function GET() {
   try {
     const admin = getFirebaseAdmin();
     const db = admin.firestore();
-    const snap = await db.collection(COLLECTION).orderBy('createdAt', 'desc').get();
+    const snap = await db.collection(COLLECTION).get();
 
     const characters = snap.docs.map(d => ({
       id: d.id,
@@ -20,6 +20,11 @@ export async function GET() {
       createdAt: d.data().createdAt?.toDate?.()?.toISOString() || null,
       updatedAt: d.data().updatedAt?.toDate?.()?.toISOString() || null,
     }));
+    characters.sort((a, b) => {
+      const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const tb = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      return tb - ta;
+    });
 
     return NextResponse.json({ success: true, characters, count: characters.length });
   } catch (e: unknown) {
