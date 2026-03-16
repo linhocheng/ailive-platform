@@ -9,6 +9,9 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@google-cloud/vertexai": "^1.10.0",
+    "firebase-admin": "^13.7.0",
+    "google-auth-library": "^10.6.1",
     "next": "16.1.6",
     "react": "19.2.3",
     "react-dom": "19.2.3"
