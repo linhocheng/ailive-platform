@@ -6,6 +6,7 @@ interface Message {
   role: 'user' | 'assistant';
   content: string;
   timestamp: string;
+  imageUrl?: string;
 }
 
 interface Character {
@@ -91,7 +92,7 @@ export default function ChatPage() {
     const userContent = input.trim() || '（傳了一張圖）';
     const currentImage = pendingImage;
 
-    const userMsg: Message = { role: 'user', content: userContent, timestamp: new Date().toISOString() };
+    const userMsg: Message = { role: 'user', content: userContent, timestamp: new Date().toISOString(), imageUrl: currentImage?.preview };
     setMessages(prev => [...prev, userMsg]);
     setInput('');
     setPendingImage(null);
@@ -124,8 +125,17 @@ export default function ChatPage() {
         localStorage.setItem(`conv-${characterId}`, d.conversationId);
       }
 
+      // 解析生圖 URL（格式：IMAGE_URL:https://...）
+      const replyText = d.reply || '';
+      const imageUrlMatch = replyText.match(/IMAGE_URL:(https?:\/\/[^\s]+)/);
+      const extractedImageUrl = imageUrlMatch ? imageUrlMatch[1] : undefined;
+      const cleanReply = replyText.replace(/IMAGE_URL:https?:\/\/[^\s]+/g, '').trim();
+
       setMessages(prev => [...prev, {
-        role: 'assistant', content: d.reply, timestamp: new Date().toISOString(),
+        role: 'assistant',
+        content: cleanReply || '（圖片已生成）',
+        timestamp: new Date().toISOString(),
+        imageUrl: extractedImageUrl,
       }]);
     } catch (err) {
       setMessages(prev => [...prev, {
@@ -214,6 +224,9 @@ export default function ChatPage() {
                 fontSize: 14, lineHeight: 1.75, fontWeight: 300,
                 whiteSpace: 'pre-wrap', wordBreak: 'break-word',
               }}>
+                {msg.imageUrl && (
+                  <img src={msg.imageUrl} alt="" style={{ maxWidth: '100%', borderRadius: 10, display: 'block', marginBottom: msg.content ? 8 : 0 }} />
+                )}
                 {msg.content}
               </div>
             </div>

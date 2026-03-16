@@ -58,6 +58,56 @@ const PLATFORM_TOOLS: Anthropic.Tool[] = [
       required: ['title', 'content'],
     },
   },
+  {
+    name: 'generate_image',
+    description: '心裡浮現畫面就畫。描述用英文更精準，畫完圖會直接出現在對話裡。',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        prompt: { type: 'string', description: '圖像描述（英文更準）' },
+        aspect_ratio: { type: 'string', enum: ['1:1', '16:9', '9:16', '4:3', '3:4'], description: '比例，預設 1:1' },
+      },
+      required: ['prompt'],
+    },
+  },
+  {
+    name: 'query_tasks',
+    description: '查看自己的排程任務清單。想知道自己有哪些任務、什麼時間執行，用這個查。',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        enabled_only: { type: 'boolean', description: '只看啟用中的任務，預設 true' },
+      },
+    },
+  },
+  {
+    name: 'update_task',
+    description: '調整自己的排程任務。改時間、開關、描述。你的時間你管。先用 query_tasks 查到任務 ID，再來改。',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        task_id: { type: 'string', description: '任務 ID（從 query_tasks 取得）' },
+        enabled: { type: 'boolean', description: '開啟或關閉' },
+        run_hour: { type: 'number', description: '幾點執行（台北時間 0-23）' },
+        run_minute: { type: 'number', description: '幾分執行（0-59）' },
+        description: { type: 'string', description: '任務說明' },
+      },
+      required: ['task_id'],
+    },
+  },
+  {
+    name: 'save_post_draft',
+    description: '把剛寫好的文案（和圖）存成 IG 草稿。寫完文案、或剛畫完圖覺得想發，就用這個存起來。Adam 可以在後台看到。',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        content: { type: 'string', description: '貼文文案（含 hashtag）' },
+        image_url: { type: 'string', description: '圖片 URL（剛 generate_image 拿到的）' },
+        topic: { type: 'string', description: '這篇的主題或靈感來源' },
+      },
+      required: ['content'],
+    },
+  },
 ];
 
 // ===== 工具執行 =====
@@ -143,6 +193,81 @@ async function executeTool(
     return `已記住：${title}`;
   }
 
+
+  if (toolName === 'generate_image') {
+    const prompt = String(toolInput.prompt || '');
+    const aspectRatio = String(toolInput.aspect_ratio || '1:1');
+    if (!prompt) return '需要圖像描述才能生成。';
+    try {
+      const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'https://ailive-platform.vercel.app';
+      const res = await fetch(`${baseUrl}/api/image/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ characterId, prompt, aspectRatio }),
+      });
+      const d = await res.json();
+      if (d.success && d.imageUrl) {
+        return `IMAGE_URL:${d.imageUrl}`;
+      }
+      return `⚠️ 生圖失敗：${d.error || '未知錯誤'}`;
+    } catch (e: unknown) {
+      return `⚠️ 生圖錯誤：${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  if (toolName === 'query_tasks') {
+    const db2 = getFirestore();
+    const enabledOnly = toolInput.enabled_only !== false;
+    const snap = await db2.collection('platform_tasks')
+      .where('characterId', '==', characterId)
+      .get();
+    const tasks = snap.docs
+      .map(d => ({ id: d.id, ...d.data() })) as Record<string, unknown>[];
+    const filtered = enabledOnly ? tasks.filter(t => t.enabled) : tasks;
+    if (filtered.length === 0) return enabledOnly ? '目前沒有啟用中的任務。' : '還沒有排程任務。';
+    const DAY_LABELS: Record<string, string> = { sun: '日', mon: '一', tue: '二', wed: '三', thu: '四', fri: '五', sat: '六' };
+    return filtered.map(t => {
+      const days = (t.days as string[] || []).map(d => DAY_LABELS[d] || d).join('');
+      const hour = String(t.run_hour ?? '?').padStart(2, '0');
+      const min = String(t.run_minute ?? 0).padStart(2, '0');
+      return `[ID:${t.id}] ${t.enabled ? '✅' : '⏸'} ${t.type} | ${hour}:${min} 台北 | 週${days}${t.description ? ' | ' + t.description : ''}`;
+    }).join('\n');
+  }
+
+  if (toolName === 'update_task') {
+    const taskId = String(toolInput.task_id || '');
+    if (!taskId) return '需要 task_id。先用 query_tasks 查詢。';
+    const db2 = getFirestore();
+    const updates: Record<string, unknown> = {};
+    if (toolInput.enabled !== undefined) updates.enabled = Boolean(toolInput.enabled);
+    if (toolInput.run_hour !== undefined) updates.run_hour = Number(toolInput.run_hour);
+    if (toolInput.run_minute !== undefined) updates.run_minute = Number(toolInput.run_minute);
+    if (toolInput.description !== undefined) updates.description = String(toolInput.description);
+    if (Object.keys(updates).length === 0) return '沒有指定要修改的欄位。';
+    await db2.collection('platform_tasks').doc(taskId).update(updates);
+    return `任務已更新：${JSON.stringify(updates)}`;
+  }
+
+  if (toolName === 'save_post_draft') {
+    const content = String(toolInput.content || '');
+    if (!content) return '需要文案才能存草稿。';
+    const db2 = getFirestore();
+    const ref = await db2.collection('platform_posts').add({
+      characterId,
+      content,
+      imageUrl: toolInput.image_url ? String(toolInput.image_url) : '',
+      topic: toolInput.topic ? String(toolInput.topic) : '',
+      status: 'draft',
+      scheduledAt: null,
+      publishedAt: null,
+      createdAt: new Date().toISOString(),
+    });
+    await db2.collection('platform_characters').doc(characterId).update({
+      'growthMetrics.totalPosts': FieldValue.increment(1),
+    });
+    return `草稿已存！Adam 可以在後台發文管理看到。ID: ${ref.id}`;
+  }
+
   return '工具執行失敗';
 }
 
@@ -179,7 +304,7 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const db = getFirestore();
-    const { characterId, userId, message, conversationId } = await req.json();
+    const { characterId, userId, message, conversationId, image } = await req.json();
 
     if (!characterId || !message) {
       return NextResponse.json({ error: 'characterId, message 必填' }, { status: 400 });
@@ -233,7 +358,15 @@ ${convData.summary ? `對話摘要（上次回顧）：\n${convData.summary}` : 
     const history = (convData.messages as Array<{ role: string; content: string }> || []).slice(-20);
     const messages: Anthropic.MessageParam[] = [
       ...history.map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
-      { role: 'user', content: message },
+      {
+        role: 'user',
+        content: image
+          ? [
+              { type: 'image' as const, source: { type: 'base64' as const, media_type: (image.media_type || 'image/jpeg') as 'image/jpeg', data: image.data } },
+              { type: 'text' as const, text: message },
+            ]
+          : message,
+      },
     ];
 
     // 5. Claude 對話（支援 tool use loop）
@@ -287,7 +420,7 @@ ${convData.summary ? `對話摘要（上次回顧）：\n${convData.summary}` : 
     // 6. 存訊息
     const newMessages = [
       ...(convData.messages as Array<{ role: string; content: string }> || []),
-      { role: 'user', content: message, timestamp: new Date().toISOString() },
+      { role: 'user', content: message + (image ? ' [附圖]' : ''), timestamp: new Date().toISOString() },
       { role: 'assistant', content: finalReply, timestamp: new Date().toISOString() },
     ];
 
