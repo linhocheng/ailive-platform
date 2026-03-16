@@ -1,30 +1,191 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { CharNav } from '../page';
 
-interface VisualIdentity { characterSheet: string; imagePromptPrefix: string; styleGuide: string; negativePrompt: string; }
+interface RefImage {
+  url: string;
+  name: string;
+  angle: string;
+  framing: string;
+  expression: string;
+}
+
+interface VisualIdentity {
+  characterSheet: string;
+  imagePromptPrefix: string;
+  styleGuide: string;
+  negativePrompt: string;
+  fixedElements: string[];
+  referenceImages: string[];
+  refs: RefImage[];
+}
+
+// 從檔名解析角度/比例/表情（對齊 Emily hub 邏輯）
+function parseRefMeta(filename: string): { angle: string; framing: string; expression: string } {
+  const name = filename.replace(/\.[^.]+$/, '');
+  const parts = name.split(/[_\-\s]/);
+
+  const FRAMING: Record<string, string> = {
+    '全身': 'full', '半身': 'half', '7分身': '7/10', '七分身': '7/10',
+    '特寫': 'closeup', full: 'full', half: 'half', closeup: 'closeup',
+  };
+  const ANGLE: Record<string, string> = {
+    '正面': 'front', '側臉': 'side', '側面': 'side', '側身': 'side',
+    '側45度': '3/4', '45度': '3/4', '斜角': '3/4', '背面': 'back', '背影': 'back',
+    front: 'front', side: 'side', back: 'back', profile: 'side', '3/4': '3/4',
+  };
+  const EXPRESSION: Record<string, string> = {
+    '微笑': 'smile', '開心': 'happy', '笑': 'smile', '撒嬌': 'coquettish',
+    '生氣': 'angry', '憤怒': 'angry', '穩定': 'calm', '冷靜': 'calm',
+    smile: 'smile', happy: 'happy', angry: 'angry', calm: 'calm',
+  };
+
+  let framing = 'half', angle = 'front', expression = 'calm';
+  for (const p of parts) {
+    if (FRAMING[p]) framing = FRAMING[p];
+    if (ANGLE[p]) angle = ANGLE[p];
+    if (EXPRESSION[p]) expression = EXPRESSION[p];
+  }
+  return { angle, framing, expression };
+}
 
 export default function IdentityPage() {
   const { id } = useParams<{ id: string }>();
+  const fileRef = useRef<HTMLInputElement>(null);
   const [char, setChar] = useState<Record<string, unknown> | null>(null);
-  const [vi, setVi] = useState<VisualIdentity>({ characterSheet: '', imagePromptPrefix: '', styleGuide: '', negativePrompt: 'different face, inconsistent features' });
+  const [vi, setVi] = useState<VisualIdentity>({
+    characterSheet: '', imagePromptPrefix: '', styleGuide: 'realistic',
+    negativePrompt: 'different face, inconsistent features',
+    fixedElements: [], referenceImages: [], refs: [],
+  });
   const [mission, setMission] = useState('');
+  const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState('');
+  const [newElement, setNewElement] = useState('');
 
-  useEffect(() => {
+  const load = () => {
     fetch(`/api/characters/${id}`).then(r => r.json()).then(d => {
       const c = d.character;
       setChar(c);
       setMission(c?.mission || '');
-      setVi(c?.visualIdentity || { characterSheet: '', imagePromptPrefix: '', styleGuide: '', negativePrompt: 'different face, inconsistent features' });
+      const v = c?.visualIdentity as VisualIdentity | undefined;
+      setVi({
+        characterSheet: v?.characterSheet || '',
+        imagePromptPrefix: v?.imagePromptPrefix || '',
+        styleGuide: v?.styleGuide || 'realistic',
+        negativePrompt: v?.negativePrompt || 'different face, inconsistent features',
+        fixedElements: v?.fixedElements || [],
+        referenceImages: v?.referenceImages || [],
+        refs: v?.refs || [],
+      });
     });
-  }, [id]);
+  };
+
+  useEffect(() => { load(); }, [id]);
+
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    e.target.value = '';
+    try {
+      const reader = new FileReader();
+      reader.onload = async (ev) => {
+        const base64 = (ev.target?.result as string).split(',')[1];
+        const ext = file.name.split('.').pop() || 'jpg';
+        const meta = parseRefMeta(file.name);
+        const filename = `${meta.angle}-${Date.now()}.${ext}`;
+
+        const res = await fetch('/api/image/upload', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ base64, contentType: file.type, characterId: id, filename }),
+        });
+        const d = await res.json();
+
+        if (d.url) {
+          const newRefs = [...vi.referenceImages, d.url];
+          const newStructured: RefImage[] = [...vi.refs, {
+            url: d.url,
+            name: file.name.replace(/\.[^.]+$/, ''),
+            angle: meta.angle,
+            framing: meta.framing,
+            expression: meta.expression,
+          }];
+          const newCharacterSheet = vi.characterSheet || d.url;
+
+          const newVi = { ...vi, referenceImages: newRefs, refs: newStructured, characterSheet: newCharacterSheet };
+          setVi(newVi);
+
+          // 立即寫入
+          await fetch(`/api/characters/${id}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ visualIdentity: newVi }),
+          });
+          setMsg('✅ 上傳成功');
+          setTimeout(() => setMsg(''), 2000);
+        } else {
+          setMsg(`❌ ${d.error}`);
+        }
+        setUploading(false);
+      };
+      reader.readAsDataURL(file);
+    } catch (err) {
+      setMsg(`❌ ${String(err)}`);
+      setUploading(false);
+    }
+  };
+
+  const deleteRef = async (url: string) => {
+    const newRefs = vi.referenceImages.filter(r => r !== url);
+    const newStructured = vi.refs.filter(r => r.url !== url);
+    const newPrimary = vi.characterSheet === url ? (newRefs[0] || '') : vi.characterSheet;
+    const newVi = { ...vi, referenceImages: newRefs, refs: newStructured, characterSheet: newPrimary };
+    setVi(newVi);
+    await fetch(`/api/characters/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ visualIdentity: newVi }),
+    });
+  };
+
+  const setPrimary = async (url: string) => {
+    const newVi = { ...vi, characterSheet: url };
+    setVi(newVi);
+    await fetch(`/api/characters/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ visualIdentity: newVi }),
+    });
+    setMsg('✅ 主要參考圖已更新');
+    setTimeout(() => setMsg(''), 2000);
+  };
+
+  const addElement = () => {
+    if (!newElement.trim()) return;
+    setVi({ ...vi, fixedElements: [...vi.fixedElements, newElement.trim()] });
+    setNewElement('');
+  };
+
+  const removeElement = (i: number) => {
+    setVi({ ...vi, fixedElements: vi.fixedElements.filter((_, idx) => idx !== i) });
+  };
 
   const save = async () => {
     setSaving(true);
-    await fetch(`/api/characters/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mission, visualIdentity: vi }) });
+    const autoPrefix = vi.fixedElements.length > 0
+      ? vi.fixedElements.join(', ') + ','
+      : vi.imagePromptPrefix;
+    const finalVi = { ...vi, imagePromptPrefix: vi.imagePromptPrefix || autoPrefix };
+    await fetch(`/api/characters/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mission, visualIdentity: finalVi }),
+    });
+    setVi(finalVi);
     setSaving(false);
     setMsg('✅ 已儲存');
     setTimeout(() => setMsg(''), 2000);
@@ -32,57 +193,146 @@ export default function IdentityPage() {
 
   if (!char) return <div style={{ padding: 40, textAlign: 'center', color: '#666' }}>載入中...</div>;
 
+  const charName = char.name as string;
+  const hasChinese = /[\u4e00-\u9fff]/.test(vi.imagePromptPrefix);
+
   return (
     <div>
       <div style={{ marginBottom: 16, fontSize: 13, color: '#999' }}>
-        <a href="/dashboard" style={{ color: '#999', textDecoration: 'none' }}>所有角色</a> › <a href={`/dashboard/${id}`} style={{ color: '#999', textDecoration: 'none' }}>{char.name as string}</a> › 身份設定
+        <a href="/dashboard" style={{ color: '#999', textDecoration: 'none' }}>所有角色</a> ›{' '}
+        <a href={`/dashboard/${id}`} style={{ color: '#999', textDecoration: 'none' }}>{charName}</a> › 身份設定
       </div>
       <CharNav id={id} active="/identity" />
-      <div style={{ background: '#fff', border: '1px solid #e0e0e0', borderRadius: 12, padding: 24 }}>
-        <h3 style={{ margin: '0 0 20px' }}>身份與視覺設定</h3>
-        <div style={{ marginBottom: 16 }}>
-          <label style={{ display: 'block', fontSize: 13, color: '#666', marginBottom: 6 }}>使命宣言（第七咒律）</label>
-          <input value={mission} onChange={e => setMission(e.target.value)}
-            style={{ width: '100%', border: '1px solid #e0e0e0', borderRadius: 6, padding: '10px 12px', fontSize: 14, boxSizing: 'border-box' }} />
-        </div>
-        <div style={{ marginBottom: 16 }}>
-          <label style={{ display: 'block', fontSize: 13, color: '#666', marginBottom: 6 }}>角色參考照 URL（characterSheet）</label>
-          <input value={vi.characterSheet} onChange={e => setVi({ ...vi, characterSheet: e.target.value })}
-            style={{ width: '100%', border: '1px solid #e0e0e0', borderRadius: 6, padding: '10px 12px', fontSize: 14, boxSizing: 'border-box' }}
-            placeholder="Firebase Storage URL（正面清晰照）" />
-          {vi.characterSheet && <img src={vi.characterSheet} alt="ref" style={{ marginTop: 8, maxWidth: 160, borderRadius: 8, border: '1px solid #e0e0e0' }} />}
-        </div>
-        <div style={{ marginBottom: 16 }}>
-          <label style={{ display: 'block', fontSize: 13, color: '#666', marginBottom: 6 }}>
-            imagePromptPrefix <span style={{ color: '#c00' }}>（必須英文）</span>
-          </label>
-          <input value={vi.imagePromptPrefix} onChange={e => setVi({ ...vi, imagePromptPrefix: e.target.value })}
-            style={{ width: '100%', border: `1px solid ${/[\u4e00-\u9fff]/.test(vi.imagePromptPrefix) ? '#c00' : '#e0e0e0'}`, borderRadius: 6, padding: '10px 12px', fontSize: 14, boxSizing: 'border-box' }}
-            placeholder="e.g. A young woman with short brown hair, round glasses," />
-          {/[\u4e00-\u9fff]/.test(vi.imagePromptPrefix) && <div style={{ color: '#c00', fontSize: 12, marginTop: 4 }}>⚠️ 含有中文，生圖時會跑臉。請改成英文描述。</div>}
-        </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
-          <div>
-            <label style={{ display: 'block', fontSize: 13, color: '#666', marginBottom: 6 }}>風格</label>
-            <select value={vi.styleGuide} onChange={e => setVi({ ...vi, styleGuide: e.target.value })}
-              style={{ width: '100%', border: '1px solid #e0e0e0', borderRadius: 6, padding: '10px 12px', fontSize: 14 }}>
-              <option value="">選擇風格</option>
-              <option value="anime">Anime</option>
-              <option value="realistic">Realistic</option>
-              <option value="illustration">Illustration</option>
-            </select>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+
+        {/* 左欄：REFERENCE PHOTOS */}
+        <div style={{ background: '#fff', border: '1px solid #e7e5e4', padding: 28 }}>
+          <p style={{ fontSize: 10, letterSpacing: '0.2em', color: '#a8a29e', fontWeight: 700, margin: '0 0 6px' }}>REFERENCE PHOTOS</p>
+          <p style={{ fontSize: 11, color: '#a8a29e', margin: '0 0 20px', lineHeight: 1.7 }}>
+            上傳各角度的照片，生圖時會以此維持臉孔一致性。點擊任一張設為主要參考。
+          </p>
+
+          {/* 圖片 grid */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 12 }}>
+            {vi.referenceImages.map((url, i) => {
+              const isPrimary = url === vi.characterSheet;
+              const structuredRef = vi.refs.find(r => r.url === url);
+              const angle = structuredRef?.angle || null;
+              return (
+                <div key={i} style={{ position: 'relative', cursor: 'pointer' }}
+                  onMouseEnter={e => { const b = e.currentTarget.querySelector<HTMLElement>('.del-btn'); if (b) b.style.opacity = '1'; }}
+                  onMouseLeave={e => { const b = e.currentTarget.querySelector<HTMLElement>('.del-btn'); if (b) b.style.opacity = '0'; }}
+                >
+                  <div onClick={() => setPrimary(url)}>
+                    <img src={url} alt="" style={{
+                      width: '100%', aspectRatio: '1/1', objectFit: 'cover', display: 'block',
+                      border: isPrimary ? '3px solid #292524' : '3px solid transparent',
+                    }} />
+                    {/* PRIMARY badge */}
+                    {isPrimary && (
+                      <div style={{ position: 'absolute', bottom: 4, left: 4, background: '#292524', color: '#fff', fontSize: 9, fontWeight: 700, letterSpacing: '0.1em', padding: '2px 6px' }}>
+                        PRIMARY
+                      </div>
+                    )}
+                    {/* 角度 label */}
+                    {angle && !isPrimary && (
+                      <div style={{ position: 'absolute', bottom: 4, left: 4, background: 'rgba(0,0,0,0.55)', color: '#fff', fontSize: 9, fontWeight: 700, letterSpacing: '0.1em', padding: '2px 6px', textTransform: 'uppercase' }}>
+                        {angle}
+                      </div>
+                    )}
+                  </div>
+                  {/* 刪除按鈕 */}
+                  <button className="del-btn" onClick={e => { e.stopPropagation(); deleteRef(url); }}
+                    style={{ opacity: 0, transition: 'opacity 0.15s', position: 'absolute', top: 4, right: 4, width: 22, height: 22, background: 'rgba(0,0,0,0.65)', color: '#fff', border: 'none', cursor: 'pointer', fontSize: 14, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    ×
+                  </button>
+                </div>
+              );
+            })}
+
+            {/* 上傳按鈕格 */}
+            <div onClick={() => !uploading && fileRef.current?.click()}
+              style={{ aspectRatio: '1/1', border: '2px dashed #e7e5e4', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: uploading ? 'wait' : 'pointer', gap: 4, background: uploading ? '#f9f9f7' : 'transparent' }}>
+              <span style={{ fontSize: 22, color: '#a8a29e' }}>{uploading ? '⋯' : '+'}</span>
+              <span style={{ fontSize: 9, color: '#a8a29e', letterSpacing: '0.1em' }}>{uploading ? 'UPLOADING' : 'UPLOAD'}</span>
+            </div>
           </div>
-          <div>
-            <label style={{ display: 'block', fontSize: 13, color: '#666', marginBottom: 6 }}>negativePrompt</label>
-            <input value={vi.negativePrompt} onChange={e => setVi({ ...vi, negativePrompt: e.target.value })}
-              style={{ width: '100%', border: '1px solid #e0e0e0', borderRadius: 6, padding: '10px 12px', fontSize: 14, boxSizing: 'border-box' }} />
-          </div>
+
+          <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={handleUpload} />
+
+          {vi.characterSheet ? (
+            <p style={{ fontSize: 11, color: '#10b981', letterSpacing: '0.05em', margin: 0 }}>✓ 主要參考圖已設定，生圖時會維持臉孔一致性</p>
+          ) : (
+            <p style={{ fontSize: 11, color: '#a8a29e', margin: 0 }}>尚未上傳。上傳第一張後自動設為 PRIMARY。</p>
+          )}
         </div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <button onClick={save} disabled={saving} style={{ background: '#1a1a2e', color: '#fff', border: 'none', borderRadius: 6, padding: '10px 24px', cursor: 'pointer', fontSize: 14 }}>
-            {saving ? '儲存中...' : '儲存'}
-          </button>
-          {msg && <span style={{ fontSize: 13, color: '#2e7d32' }}>{msg}</span>}
+
+        {/* 右欄：FIXED ELEMENTS + 其他設定 */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+
+          {/* 使命 */}
+          <div style={{ background: '#fff', border: '1px solid #e7e5e4', padding: 20 }}>
+            <p style={{ fontSize: 10, letterSpacing: '0.2em', color: '#a8a29e', fontWeight: 700, margin: '0 0 10px' }}>MISSION</p>
+            <input value={mission} onChange={e => setMission(e.target.value)}
+              style={{ width: '100%', border: '1px solid #e0e0e0', borderRadius: 6, padding: '9px 11px', fontSize: 14, boxSizing: 'border-box' }}
+              placeholder="這個角色存在是為了什麼" />
+          </div>
+
+          {/* FIXED ELEMENTS */}
+          <div style={{ background: '#fff', border: '1px solid #e7e5e4', padding: 20 }}>
+            <p style={{ fontSize: 10, letterSpacing: '0.2em', color: '#a8a29e', fontWeight: 700, margin: '0 0 6px' }}>FIXED ELEMENTS</p>
+            <p style={{ fontSize: 11, color: '#a8a29e', margin: '0 0 14px', lineHeight: 1.6 }}>每次生圖都會保留的外觀特徵，自動注入 prompt。</p>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
+              {vi.fixedElements.map((el, i) => (
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 5, background: '#f5f5f4', padding: '5px 10px' }}>
+                  <span style={{ fontSize: 12, color: '#444' }}>{el}</span>
+                  <button onClick={() => removeElement(i)} style={{ background: 'none', border: 'none', color: '#a8a29e', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: 0 }}>×</button>
+                </div>
+              ))}
+            </div>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <input value={newElement} onChange={e => setNewElement(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && addElement()}
+                style={{ flex: 1, border: '1px solid #e0e0e0', borderRadius: 6, padding: '7px 10px', fontSize: 13, boxSizing: 'border-box' }}
+                placeholder="新增特徵（如：short brown hair）" />
+              <button onClick={addElement} style={{ background: '#1a1a2e', color: '#fff', border: 'none', borderRadius: 6, padding: '7px 14px', cursor: 'pointer', fontSize: 13 }}>+</button>
+            </div>
+          </div>
+
+          {/* imagePromptPrefix */}
+          <div style={{ background: '#fff', border: '1px solid #e7e5e4', padding: 20 }}>
+            <p style={{ fontSize: 10, letterSpacing: '0.2em', color: '#a8a29e', fontWeight: 700, margin: '0 0 6px' }}>IMAGE PROMPT PREFIX <span style={{ color: '#c00' }}>（必須英文）</span></p>
+            <input value={vi.imagePromptPrefix} onChange={e => setVi({ ...vi, imagePromptPrefix: e.target.value })}
+              style={{ width: '100%', border: `1px solid ${hasChinese ? '#c00' : '#e0e0e0'}`, borderRadius: 6, padding: '9px 11px', fontSize: 13, boxSizing: 'border-box' }}
+              placeholder="e.g. A young woman with short brown hair, warm eyes," />
+            {hasChinese && <p style={{ color: '#c00', fontSize: 11, margin: '4px 0 0' }}>⚠️ 含中文會導致生圖跑臉，請改成英文描述</p>}
+            <div style={{ display: 'flex', gap: 10, marginTop: 10 }}>
+              <div style={{ flex: 1 }}>
+                <label style={{ display: 'block', fontSize: 11, color: '#a8a29e', marginBottom: 4 }}>風格</label>
+                <select value={vi.styleGuide} onChange={e => setVi({ ...vi, styleGuide: e.target.value })}
+                  style={{ width: '100%', border: '1px solid #e0e0e0', borderRadius: 6, padding: '7px 10px', fontSize: 13 }}>
+                  <option value="realistic">Realistic</option>
+                  <option value="anime">Anime</option>
+                  <option value="illustration">Illustration</option>
+                </select>
+              </div>
+              <div style={{ flex: 1 }}>
+                <label style={{ display: 'block', fontSize: 11, color: '#a8a29e', marginBottom: 4 }}>Negative Prompt</label>
+                <input value={vi.negativePrompt} onChange={e => setVi({ ...vi, negativePrompt: e.target.value })}
+                  style={{ width: '100%', border: '1px solid #e0e0e0', borderRadius: 6, padding: '7px 10px', fontSize: 13, boxSizing: 'border-box' }} />
+              </div>
+            </div>
+          </div>
+
+          {/* 儲存 */}
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+            <button onClick={save} disabled={saving}
+              style={{ background: saving ? '#ccc' : '#1a1a2e', color: '#fff', border: 'none', borderRadius: 6, padding: '10px 28px', cursor: saving ? 'default' : 'pointer', fontSize: 14, fontWeight: 600 }}>
+              {saving ? '儲存中...' : '儲存'}
+            </button>
+            {msg && <span style={{ fontSize: 13, color: msg.includes('❌') ? '#c00' : '#2e7d32' }}>{msg}</span>}
+          </div>
         </div>
       </div>
     </div>
