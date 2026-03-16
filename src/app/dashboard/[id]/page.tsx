@@ -86,6 +86,10 @@ export default function CharacterPage() {
             <span style={{ background: '#e8eaf6', color: '#3949ab', padding: '4px 12px', borderRadius: 20, fontSize: 13 }}>
               靈魂 v{char.soulVersion}
             </span>
+            <a href={`/chat/${id}`} target="_blank" rel="noopener noreferrer"
+              style={{ background: '#6c63ff', color: '#fff', padding: '4px 14px', borderRadius: 20, fontSize: 13, textDecoration: 'none', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 5 }}>
+              💬 對話窗
+            </a>
           </div>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginTop: 20 }}>
@@ -108,6 +112,7 @@ export default function CharacterPage() {
       {/* 快速操作 */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 12 }}>
         {[
+          { href: `/chat/${id}`, label: '💬 對話窗', desc: '開啟對話，可分享給用戶', external: true },
           { href: `/dashboard/${id}/soul`, label: '✏️ 管理靈魂', desc: '查看/編輯 enhancedSoul' },
           { href: `/dashboard/${id}/knowledge`, label: '📚 知識庫', desc: '新增/刪除知識' },
           { href: `/dashboard/${id}/memory`, label: '🧠 記憶', desc: 'insights 管理' },
@@ -115,7 +120,7 @@ export default function CharacterPage() {
           { href: `/dashboard/${id}/tasks`, label: '⏰ 排程', desc: '設定任務時間' },
           { href: `/dashboard/${id}/proposals`, label: '💡 靈魂提案', desc: '審核靈魂修改' },
         ].map(item => (
-          <a key={item.href} href={item.href} style={{ textDecoration: 'none' }}>
+          <a key={item.href} href={item.href} target={(item as {external?: boolean}).external ? '_blank' : undefined} rel={(item as {external?: boolean}).external ? 'noopener noreferrer' : undefined} style={{ textDecoration: 'none' }}>
             <div style={{ background: '#fff', border: '1px solid #e0e0e0', borderRadius: 10, padding: 16,
               transition: 'box-shadow 0.2s', cursor: 'pointer' }}
               onMouseEnter={e => (e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.08)')}
