@@ -100,3 +100,18 @@ export function docToText(data: Record<string, unknown>): string {
 export const memoryToText = docToText;
 
 export const EMBEDDING_DIMENSION = DIMENSION;
+
+/**
+ * 計算兩個向量的餘弦相似度
+ */
+export function cosineSimilarity(a: number[], b: number[]): number {
+  if (!a || !b || a.length !== b.length) return 0;
+  let dot = 0, normA = 0, normB = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
+  }
+  const denom = Math.sqrt(normA) * Math.sqrt(normB);
+  return denom === 0 ? 0 : dot / denom;
+}
