@@ -125,11 +125,17 @@ export default function ChatPage() {
         localStorage.setItem(`conv-${characterId}`, d.conversationId);
       }
 
-      // 解析生圖 URL（格式：IMAGE_URL:https://...）
+      // 解析生圖 URL（支援兩種格式）
+      // 格式1: IMAGE_URL:https://...
+      // 格式2: ![...](https://...) markdown
       const replyText = d.reply || '';
-      const imageUrlMatch = replyText.match(/IMAGE_URL:(https?:\/\/[^\s]+)/);
-      const extractedImageUrl = imageUrlMatch ? imageUrlMatch[1] : undefined;
-      const cleanReply = replyText.replace(/IMAGE_URL:https?:\/\/[^\s]+/g, '').trim();
+      const urlMatch1 = replyText.match(/IMAGE_URL:(https?:\/\/[^\s]+)/);
+      const urlMatch2 = replyText.match(/!\[.*?\]\((https?:\/\/[^)]+)\)/);
+      const extractedImageUrl = urlMatch1 ? urlMatch1[1] : urlMatch2 ? urlMatch2[1] : undefined;
+      const cleanReply = replyText
+        .replace(/IMAGE_URL:https?:\/\/[^\s]+/g, '')
+        .replace(/!\[.*?\]\(https?:\/\/[^)]+\)/g, '')
+        .trim();
 
       setMessages(prev => [...prev, {
         role: 'assistant',
