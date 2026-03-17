@@ -83,12 +83,37 @@ export async function POST(req: NextRequest) {
     const embedding = await generateEmbedding(`${title || ''} ${content}`);
     const now = new Date().toISOString();
 
+    // 自動生成 summary（15字以內，常駐注入用）
+    // 天命不是說明書，一句話說清楚核心觀點
+    let summary = title || content.slice(0, 15);
+    try {
+      const Anthropic = (await import('@anthropic-ai/sdk')).default;
+      const apiKey = process.env.ANTHROPIC_API_KEY || '';
+      const client = new Anthropic({ apiKey });
+      const res = await client.messages.create({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 40,
+        messages: [{
+          role: 'user',
+          content: `用15字以內總結以下知識的核心觀點，用第一人稱，像角色自己說的一句話：
+
+標題：${title}
+內容：${content.slice(0,200)}
+
+只輸出那句話，不要其他文字。`,
+        }],
+      });
+      summary = (res.content[0] as { text: string }).text.trim().slice(0, 30);
+    } catch { /* 生成失敗用 title 代替 */ }
+
     const docRef = await db.collection('platform_knowledge').add({
       characterId,
       title: title || '',
       content,
+      summary,                    // 15字核心觀點，常駐注入用
       category: category || 'general',
-      hitCount: 0,
+      hitCount: 100,              // 天命初始值高，永遠優先於後天 insights
+      tier: 'native',             // 原生天命，不參與升降級，不被蒸餾
       embedding,
       createdAt: now,
     });

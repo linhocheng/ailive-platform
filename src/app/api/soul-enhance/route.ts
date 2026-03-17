@@ -70,6 +70,20 @@ const SOUL_FORGE_PROMPT = `你是 AILIVE 的鑄魂師。
 
 直接輸出完整靈魂文字。不要 JSON，不要 code block，不要解釋。直接寫靈魂。`;
 
+// 精煉提示：從完整靈魂提煉 soul_core（300字以內，常駐注入用）
+const SOUL_CORE_PROMPT = `你是靈魂精煉師。
+
+從以下完整靈魂中，提煉出最核心的部分。
+
+要求：
+- 300字以內（嚴格）
+- 保留：角色的名字、聲音特質、說話方式、最核心的世界觀
+- 去掉：詳細說明、舉例、功能描述
+- 格式：純文字，第一人稱，讀完讓人立刻知道「這個人是誰」
+- 最後一句：角色自己的聲音收尾
+
+直接輸出，不要解釋，不要標題。`;
+
 export async function POST(req: NextRequest) {
   try {
     const db = getFirestore();
@@ -109,15 +123,29 @@ export async function POST(req: NextRequest) {
       }],
     });
 
-    const enhancedSoul = response.content
+    const soul_full = response.content
       .filter(c => c.type === 'text')
       .map(c => (c as Anthropic.TextBlock).text)
       .join('');
 
+    // 精煉 soul_core（300字以內，常駐注入用）
+    const coreResponse = await client.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 600,
+      system: SOUL_CORE_PROMPT,
+      messages: [{ role: 'user', content: soul_full }],
+    });
+    const soul_core = coreResponse.content
+      .filter(c => c.type === 'text')
+      .map(c => (c as Anthropic.TextBlock).text)
+      .join('').trim();
+
     const newVersion = (char.soulVersion || 0) + 1;
 
     await db.collection('platform_characters').doc(characterId).update({
-      enhancedSoul,
+      enhancedSoul: soul_full,   // 保留相容性
+      soul_full,                  // 完整版（需要時調用）
+      soul_core,                  // 精煉版（常駐注入，300字以內）
       soulVersion: newVersion,
       updatedAt: new Date().toISOString(),
     });
@@ -126,7 +154,9 @@ export async function POST(req: NextRequest) {
       success: true,
       characterId,
       soulVersion: newVersion,
-      enhancedSoul,
+      soul_core,
+      soul_full,
+      enhancedSoul: soul_full,   // 相容舊欄位
     });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);

@@ -197,8 +197,12 @@ async function executeTool(
         if (diffDays <= 7) return `（${diffDays}天前）`;
         return `（${d.eventDate}）`;
       })();
-      const tag = d._type === 'knowledge' ? `[知識・${d.category || '一般'}]` : `[記憶${timeLabel}]`;
-      return `${tag} ${d.title || ''}：${String(d.content || '').slice(0, 150)} (相似度${(score * 100).toFixed(0)}%)`;
+      const tag = d._type === 'knowledge' ? `[天命・${d.category || '一般'}]` : `[記憶${timeLabel}]`;
+      // 知識庫用 summary（精煉），insights 用 content
+      const body = d._type === 'knowledge'
+        ? String(d.summary || d.title || '').slice(0, 50)
+        : String(d.content || '').slice(0, 150);
+      return `${tag} ${d.title || ''}：${body} (相似度${(score * 100).toFixed(0)}%)`;
     }).join('\n\n');
   }
 
@@ -440,7 +444,9 @@ export async function POST(req: NextRequest) {
       }
     } catch { /* 查不到不阻斷 */ }
 
-    const systemPrompt = `${char.enhancedSoul}${episodicBlock}
+    // soul_core 優先（精煉版，300字），沒有才 fallback 到 enhancedSoul
+    const soulText = (char.soul_core as string) || (char.enhancedSoul as string) || '';
+    const systemPrompt = `${soulText}${episodicBlock}
 
 ---
 現在時間（台北）：${taipeiTime}

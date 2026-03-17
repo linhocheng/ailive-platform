@@ -24,8 +24,9 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     const db = getFirestore();
     const body = await req.json();
 
-    const allowed = ['name', 'type', 'rawSoul', 'enhancedSoul', 'mission', 'status',
-      'lineChannelToken', 'lineChannelSecret', 'igAccessToken', 'igUserId', 'visualIdentity'];
+    const allowed = ['name', 'type', 'rawSoul', 'enhancedSoul', 'soul_core', 'soul_full',
+      'mission', 'status', 'lineChannelToken', 'lineChannelSecret',
+      'igAccessToken', 'igUserId', 'visualIdentity'];
     const updates: Record<string, unknown> = { updatedAt: new Date().toISOString() };
     for (const key of allowed) {
       if (body[key] !== undefined) updates[key] = body[key];
