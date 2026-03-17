@@ -48,6 +48,7 @@ export function CharNav({ id, active }: { id: string; active: string }) {
 export default function CharacterPage() {
   const { id } = useParams<{ id: string }>();
   const [char, setChar] = useState<Character | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -59,6 +60,25 @@ export default function CharacterPage() {
   }, [id]);
 
   if (loading) return <div style={{ padding: 40, textAlign: 'center', color: '#666' }}>載入中...</div>;
+  const handleDelete = async () => {
+    if (!confirm(`確定要刪除「${char?.name}」嗎？\n\n這會永久刪除：\n• 角色本體\n• 所有記憶（insights）\n• 所有對話記錄\n• 所有排程任務\n• 所有草稿\n• 知識庫\n\n此操作無法復原。`)) return;
+    setDeleting(true);
+    try {
+      const r = await fetch(`/api/characters/${id}`, { method: 'DELETE' });
+      const d = await r.json();
+      if (d.success) {
+        alert('角色已刪除');
+        window.location.href = '/dashboard';
+      } else {
+        alert('刪除失敗：' + d.error);
+        setDeleting(false);
+      }
+    } catch {
+      alert('刪除失敗');
+      setDeleting(false);
+    }
+  };
+
   if (!char) return <div style={{ padding: 40, color: '#c00' }}>角色不存在</div>;
 
   const metrics = char.growthMetrics || { totalConversations: 0, totalInsights: 0, totalPosts: 0 };
@@ -130,6 +150,19 @@ export default function CharacterPage() {
             </div>
           </a>
         ))}
+      </div>
+      {/* 危險區 */}
+      <div style={{ marginTop: 40, padding: 20, border: '1px solid #ffcdd2', borderRadius: 10, background: '#fff8f8' }}>
+        <div style={{ fontSize: 14, fontWeight: 600, color: '#c62828', marginBottom: 8 }}>⚠️ 危險區域</div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ fontSize: 13, color: '#666' }}>永久刪除此角色及所有關聯資料（記憶、對話、任務、草稿）。此操作無法復原。</div>
+          <button
+            onClick={handleDelete}
+            disabled={deleting}
+            style={{ background: deleting ? '#ccc' : '#c62828', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 20px', fontSize: 13, fontWeight: 600, cursor: deleting ? 'default' : 'pointer', flexShrink: 0, marginLeft: 16 }}>
+            {deleting ? '刪除中...' : '🗑 刪除角色'}
+          </button>
+        </div>
       </div>
     </div>
   );

@@ -37,3 +37,41 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
   }
 }
+
+export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  try {
+    const { id } = await params;
+    const db = getFirestore();
+
+    // 確認角色存在
+    const doc = await db.collection('platform_characters').doc(id).get();
+    if (!doc.exists) return NextResponse.json({ error: '角色不存在' }, { status: 404 });
+
+    // 清除所有關聯資料（batch delete）
+    const collections = [
+      'platform_tasks',
+      'platform_insights',
+      'platform_posts',
+      'platform_conversations',
+      'platform_knowledge',
+      'platform_soul_proposals',
+    ];
+
+    for (const col of collections) {
+      const snap = await db.collection(col)
+        .where('characterId', '==', id)
+        .limit(500)
+        .get();
+      const batch = db.batch();
+      snap.docs.forEach(d => batch.delete(d.ref));
+      if (snap.size > 0) await batch.commit();
+    }
+
+    // 刪角色本體
+    await db.collection('platform_characters').doc(id).delete();
+
+    return NextResponse.json({ success: true, deleted: id });
+  } catch (e: unknown) {
+    return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
+  }
+}
