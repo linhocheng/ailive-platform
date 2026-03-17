@@ -325,6 +325,10 @@ export async function POST(req: NextRequest) {
             outcome = await runReflectTask(characterId, char, client, now.dateStr);
           } else if (task.type === 'post') {
             outcome = await runPostTask(characterId, char, client, now.dateStr, task);
+          } else if (task.type === 'engage') {
+            outcome = '（engage 任務：互動功能建置中）';
+          } else {
+            outcome = `（未知任務類型：${task.type}）`;
           }
 
           // 更新 last_run

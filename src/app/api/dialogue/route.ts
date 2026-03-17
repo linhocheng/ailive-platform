@@ -100,6 +100,21 @@ const PLATFORM_TOOLS: Anthropic.Tool[] = [
     },
   },
   {
+    name: 'create_task',
+    description: '幫自己新增一個排程任務。想定期做某件事（學習/發文/反思）就用這個建立。建完會自動加入你的排程。',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        type: { type: 'string', enum: ['learn', 'reflect', 'post', 'engage'], description: '任務類型：learn學習/reflect反思/post發文/engage互動' },
+        run_hour: { type: 'number', description: '幾點執行（台北時間 0-23）' },
+        run_minute: { type: 'number', description: '幾分執行（0-59），預設 0' },
+        days: { type: 'array', items: { type: 'string', enum: ['mon','tue','wed','thu','fri','sat','sun'] }, description: '哪幾天執行，預設週一三五' },
+        description: { type: 'string', description: '這個任務的說明，讓你記得為什麼設這個' },
+      },
+      required: ['type', 'run_hour'],
+    },
+  },
+  {
     name: 'save_post_draft',
     description: '把剛寫好的文案（和圖）存成 IG 草稿。寫完文案、或剛畫完圖覺得想發，就用這個存起來。Adam 可以在後台看到。',
     input_schema: {
@@ -240,6 +255,33 @@ async function executeTool(
     if (Object.keys(updates).length === 0) return '沒有指定要修改的欄位。';
     await db2.collection('platform_tasks').doc(taskId).update(updates);
     return `任務已更新：${JSON.stringify(updates)}`;
+  }
+
+  if (toolName === 'create_task') {
+    const type = String(toolInput.type || 'learn');
+    const run_hour = Number(toolInput.run_hour ?? 9);
+    const run_minute = Number(toolInput.run_minute ?? 0);
+    const days = (toolInput.days as string[]) || ['mon', 'wed', 'fri'];
+    const description = String(toolInput.description || '');
+
+    const db2 = getFirestore();
+    const ref = await db2.collection('platform_tasks').add({
+      characterId,
+      type,
+      run_hour,
+      run_minute,
+      days,
+      enabled: true,
+      description,
+      last_run: null,
+      createdAt: new Date().toISOString(),
+    });
+
+    const DAY_LABELS: Record<string, string> = { sun:'日', mon:'一', tue:'二', wed:'三', thu:'四', fri:'五', sat:'六' };
+    const daysStr = days.map(d => DAY_LABELS[d] || d).join('');
+    const hourStr = String(run_hour).padStart(2, '0');
+    const minStr = String(run_minute).padStart(2, '0');
+    return `任務已建立！每週${daysStr} ${hourStr}:${minStr} 會自動執行 ${type} 任務。ID: ${ref.id}${description ? '\n說明：' + description : ''}`;
   }
 
   if (toolName === 'save_post_draft') {
