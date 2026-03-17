@@ -378,6 +378,7 @@ ${convData.summary ? `對話摘要（上次回顧）：\n${convData.summary}` : 
     const client = new Anthropic({ apiKey });
     let finalReply = '';
     let toolsUsed: string[] = [];
+    let generatedImageUrl = '';
     let currentMessages = [...messages];
 
     for (let turn = 0; turn < 10; turn++) {
@@ -408,7 +409,18 @@ ${convData.summary ? `對話摘要（上次回顧）：\n${convData.summary}` : 
             // web_search 由 Anthropic 伺服器端處理，不需要手動 executeTool
             if (block.name === 'web_search') continue;
             const result = await executeTool(block.name, block.input as Record<string, unknown>, characterId);
-            toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: result });
+            // generate_image 回傳 IMAGE_URL:xxx，解析出來讓 Claude 能在回覆裡帶出
+            if (result.startsWith('IMAGE_URL:')) {
+              const url = result.replace('IMAGE_URL:', '').trim();
+              generatedImageUrl = url;
+              toolResults.push({
+                type: 'tool_result',
+                tool_use_id: block.id,
+                content: `圖片已生成完成。URL: ${url}\n請在你的回覆裡直接用 markdown 格式帶出這張圖：![圖片](${url})\n然後用幾句話描述這張圖或說說你的感受。`,
+              });
+            } else {
+              toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: result });
+            }
           }
         }
         currentMessages.push({ role: 'user', content: toolResults });
@@ -495,6 +507,7 @@ ${recentMessages}`,
       conversationId: convRef.id,
       toolsUsed,
       messageCount: newCount,
+      imageUrl: generatedImageUrl || undefined,
     });
 
   } catch (e: unknown) {

@@ -144,7 +144,11 @@ export async function generateImageForCharacter(
   // 2. 組合最終 prompt
   const hasChineseInPrefix = /[\u4e00-\u9fff]/.test(imagePromptPrefix);
   const prefix = hasChineseInPrefix ? '' : imagePromptPrefix;
-  const finalPrompt = [prefix, englishPrompt, `Negative: ${negativePrompt}`]
+  const faceLock = characterSheet
+    ? "Keep the subject's face, hair, skin tone, and facial features identical to the reference photo. Do not alter the face."
+    : '';
+
+  const finalPrompt = [prefix, englishPrompt, faceLock, `Negative: ${negativePrompt}`]
     .filter(Boolean).join('. ');
 
   const storagePath = `platform-images/${characterId}`;
