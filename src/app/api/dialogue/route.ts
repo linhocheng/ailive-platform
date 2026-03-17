@@ -16,7 +16,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { getFirestore } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 import { generateEmbedding, cosineSimilarity } from '@/lib/embeddings';
-import { generateImageForCharacter } from '@/lib/generate-image';
+import { generateImageForCharacter, buildGenerateImageDescription } from '@/lib/generate-image';
 
 export const maxDuration = 60;
 
@@ -316,6 +316,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: '角色尚未完成鑄魂，請先呼叫 /api/soul-enhance' }, { status: 400 });
     }
 
+    // 動態組 generate_image description（注入角色 refs 清單）
+    const charRefs = (char.visualIdentity as { refs?: Array<{url:string;angle:string;framing?:string;expression?:string;name?:string}> })?.refs || [];
+    const dynamicTools = PLATFORM_TOOLS.map(t =>
+      t.name === 'generate_image'
+        ? { ...t, description: buildGenerateImageDescription(charRefs) }
+        : t
+    );
+
     // 2. 讀/建 conversation
     let convRef;
     let convData: Record<string, unknown> = { messages: [], messageCount: 0 };
@@ -377,7 +385,7 @@ ${convData.summary ? `對話摘要（上次回顧）：\n${convData.summary}` : 
         model: 'claude-sonnet-4-6',
         max_tokens: 1500,
         system: systemPrompt,
-        tools: [WEB_SEARCH_TOOL, ...PLATFORM_TOOLS],
+        tools: [WEB_SEARCH_TOOL, ...dynamicTools],
         tool_choice: { type: 'auto' }, // auto：讓 Claude 自己判斷要不要查網路/記憶
         messages: currentMessages,
       });
