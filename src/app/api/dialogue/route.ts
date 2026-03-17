@@ -163,7 +163,7 @@ async function executeTool(
     const qEmb = await generateEmbedding(query);
     const scored = withEmb
       .map(d => ({ d, score: cosineSimilarity(qEmb, d.embedding as number[]) }))
-      .filter(s => s.score >= 0.5)
+      .filter(s => s.score >= 0.35)  // 256維低維向量，threshold 從 0.5 降到 0.35
       .sort((a, b) => b.score - a.score)
       .slice(0, limit);
 
