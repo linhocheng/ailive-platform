@@ -63,17 +63,15 @@ export async function POST(req: NextRequest) {
 
       if (tier === 'self' || tier === 'archive') continue; // self 不動，已歸檔不重複處理
 
-      if (!dryRun) {
-        if (hitCount >= 5 && tier === 'fresh') {
-          await db.collection('platform_insights').doc(ins.id as string).update({ tier: 'core' });
-          upgraded.push(ins.title as string);
-        } else if (tier === 'core' && daysSinceHit > 30) {
-          await db.collection('platform_insights').doc(ins.id as string).update({ tier: 'archive' });
-          archived.push(ins.title as string);
-        } else if (tier === 'fresh' && hitCount === 0 && ageDays > 14) {
-          await db.collection('platform_insights').doc(ins.id as string).update({ tier: 'archive' });
-          archived.push(ins.title as string);
-        }
+      if (hitCount >= 5 && tier === 'fresh') {
+        if (!dryRun) await db.collection('platform_insights').doc(ins.id as string).update({ tier: 'core' });
+        upgraded.push(ins.title as string);
+      } else if (tier === 'core' && daysSinceHit > 30) {
+        if (!dryRun) await db.collection('platform_insights').doc(ins.id as string).update({ tier: 'archive' });
+        archived.push(ins.title as string);
+      } else if (tier === 'fresh' && hitCount === 0 && ageDays > 14) {
+        if (!dryRun) await db.collection('platform_insights').doc(ins.id as string).update({ tier: 'archive' });
+        archived.push(ins.title as string);
       }
     }
 
