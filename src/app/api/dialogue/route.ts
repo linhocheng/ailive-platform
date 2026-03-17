@@ -153,7 +153,13 @@ async function executeTool(
     ];
 
     const withEmb = allDocs.filter(d => d.embedding && Array.isArray(d.embedding));
-    if (withEmb.length === 0) return '（記憶庫目前是空的）';
+    console.log(`[query_kb] allDocs=${allDocs.length} withEmb=${withEmb.length} knowledge=${knowledgeSnap.size} insights=${insightSnap.size}`);
+    if (withEmb.length === 0) {
+      // debug：看第一個 knowledge 的 embedding 格式
+      const first = knowledgeSnap.docs[0]?.data();
+      console.log('[query_kb] first knowledge embedding type:', typeof first?.embedding, Array.isArray(first?.embedding), JSON.stringify(first?.embedding)?.slice(0,80));
+      return '（記憶庫目前是空的）';
+    }
 
     const qEmb = await generateEmbedding(query);
     const scored = withEmb
