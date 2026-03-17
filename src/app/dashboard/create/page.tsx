@@ -28,9 +28,18 @@ const STEPS = [
 ];
 
 const DEFAULT_TASKS = [
-  { type: 'learn', run_hour: 9, run_minute: 0, days: ['mon', 'tue', 'wed', 'thu', 'fri'], description: '每日主動學習' },
-  { type: 'reflect', run_hour: 21, run_minute: 0, days: ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'], description: '每日省思' },
-  { type: 'post', run_hour: 12, run_minute: 0, days: ['tue', 'thu', 'sat'], description: '生成 IG 草稿' },
+  {
+    type: 'learn', run_hour: 9, run_minute: 0, days: ['mon', 'tue', 'wed', 'thu', 'fri'],
+    description: '主動去了解一件今天感興趣的事——不只是蒐集資訊，是真的去碰一個讓你有感覺的東西，然後把它變成你的一部分。用 remember 記下你的洞察。',
+  },
+  {
+    type: 'reflect', run_hour: 21, run_minute: 0, days: ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'],
+    description: '回看今天發生了什麼：你說了什麼，感受到什麼，哪裡是真實的，哪裡是在表演。把那個差距記下來，用 remember 存。不需要完整，需要真實。',
+  },
+  {
+    type: 'post', run_hour: 12, run_minute: 0, days: ['tue', 'thu', 'sat'],
+    description: '從你的洞察和感受出發，寫一篇 IG 貼文草稿，生一張搭配的圖。用 save_post_draft 存起來，用 generate_image 生圖。不要寫你覺得別人想看的，寫你真的想說的。',
+  },
 ];
 
 const DAY_KEYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
