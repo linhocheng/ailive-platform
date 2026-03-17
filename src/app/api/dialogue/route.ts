@@ -170,23 +170,24 @@ async function executeTool(
     console.log(`[query_kb] qEmbLen=${qEmb.length} scored=${scored.length} topScore=${scored[0]?.score?.toFixed(3) || 'N/A'}`);
     if (scored.length === 0) return '（沒有找到相關記憶）';
 
-    // hitCount +1（knowledge 和 insight 都要更新）
-    const batch = db.batch();
-    scored.forEach(({ d }) => {
-      if (d._type === 'insight' && d._id) {
-        batch.update(db.collection('platform_insights').doc(d._id as string), {
-          hitCount: FieldValue.increment(1),
-          lastHitAt: new Date().toISOString(),
-        });
-      } else if (d._type === 'knowledge' && d._id) {
-        // 修缺口：知識庫命中也要更新 hitCount
-        batch.update(db.collection('platform_knowledge').doc(d._id as string), {
-          hitCount: FieldValue.increment(1),
-          lastHitAt: new Date().toISOString(),
-        });
+    // hitCount +1（knowledge 和 insight 逐一更新，不用 batch 避免靜默失敗）
+    for (const { d } of scored) {
+      try {
+        if (d._type === 'insight' && d._id) {
+          await db.collection('platform_insights').doc(d._id as string).update({
+            hitCount: FieldValue.increment(1),
+            lastHitAt: new Date().toISOString(),
+          });
+        } else if (d._type === 'knowledge' && d._id) {
+          await db.collection('platform_knowledge').doc(d._id as string).update({
+            hitCount: FieldValue.increment(1),
+            lastHitAt: new Date().toISOString(),
+          });
+        }
+      } catch (e) {
+        console.error(`[query_kb] hitCount 更新失敗 ${d._type} ${d._id}:`, e);
       }
-    });
-    await batch.commit();
+    }
 
     return scored.map(({ d, score }) => {
       const timeLabel = (() => {
