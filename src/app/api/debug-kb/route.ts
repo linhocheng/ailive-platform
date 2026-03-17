@@ -10,9 +10,21 @@ export async function GET(req: NextRequest) {
   const snap = await db.collection('platform_knowledge')
     .where('characterId', '==', characterId).get();
 
-  const docs = snap.docs.map(d => ({ id: d.id, ...d.data() } as Record<string, unknown>));
-  const withEmb = docs.filter(d => d.embedding && Array.isArray(d.embedding));
+  const firstDoc = snap.docs[0]?.data();
+  const rawEmb = firstDoc?.embedding;
 
+  // 關鍵：看 Admin SDK 讀回來的 embedding 實際格式
+  const embInfo = {
+    type: typeof rawEmb,
+    isArray: Array.isArray(rawEmb),
+    length: Array.isArray(rawEmb) ? rawEmb.length : 'N/A',
+    firstElement: Array.isArray(rawEmb) ? rawEmb[0] : rawEmb,
+    firstElementType: Array.isArray(rawEmb) ? typeof rawEmb[0] : 'N/A',
+    // 如果第一個元素是 number，才是真的 number[]
+    isNumberArray: Array.isArray(rawEmb) && typeof rawEmb[0] === 'number',
+  };
+
+  // 生成查詢向量
   let qEmb: number[] = [];
   let qEmbError = '';
   try {
@@ -21,19 +33,14 @@ export async function GET(req: NextRequest) {
     qEmbError = String(e);
   }
 
-  const scored = withEmb.map(d => ({
-    title: d.title,
-    embLen: (d.embedding as number[]).length,
-    qEmbLen: qEmb.length,
-    score: qEmb.length > 0 ? cosineSimilarity(qEmb, d.embedding as number[]) : -1,
-  }));
-
-  return NextResponse.json({
-    query,
-    totalDocs: docs.length,
-    withEmbedding: withEmb.length,
-    qEmbLen: qEmb.length,
-    qEmbError,
-    scored,
+  // 如果是真的 number[]，算 cosine
+  const scores = snap.docs.map(d => {
+    const data = d.data();
+    const emb = data.embedding;
+    const isNum = Array.isArray(emb) && typeof emb[0] === 'number';
+    const score = isNum && qEmb.length > 0 ? cosineSimilarity(qEmb, emb as number[]) : -1;
+    return { id: d.id, title: data.title, isNumArray: isNum, embLen: Array.isArray(emb) ? emb.length : 0, score };
   });
+
+  return NextResponse.json({ embInfo, qEmbLen: qEmb.length, qEmbError, scores });
 }
