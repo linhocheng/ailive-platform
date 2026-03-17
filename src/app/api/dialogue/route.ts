@@ -52,12 +52,13 @@ const PLATFORM_TOOLS: Anthropic.Tool[] = [
   },
   {
     name: 'remember',
-    description: '把重要資訊存入長期記憶。對方說了名字/目標/需求、我有了新洞察、下次需要記住的事 — 立即呼叫。',
+    description: '把重要資訊存入長期記憶。對方說了名字/目標/需求、我有了新洞察、下次需要記住的事 — 立即呼叫。感受越強烈，importance 越高。',
     input_schema: {
       type: 'object' as const,
       properties: {
         title: { type: 'string', description: '一句話標題' },
         content: { type: 'string', description: '完整細節' },
+        importance: { type: 'number', description: '重要程度 1-3：1普通/2重要/3非常重要（會深深觸動我的事）。預設 2。' },
       },
       required: ['title', 'content'],
     },
@@ -192,6 +193,7 @@ async function executeTool(
   if (toolName === 'remember') {
     const title = String(toolInput.title || '');
     const content = String(toolInput.content || '');
+    const importance = Number(toolInput.importance ?? 2);
     const embedding = await generateEmbedding(`${title} ${content}`);
     const today = getTaipeiDate();
 
@@ -200,16 +202,17 @@ async function executeTool(
       characterId,
       title,
       content,
+      importance,
       source: 'conversation',
       eventDate: today,
       tier: 'fresh',
-      hitCount: 0,
+      hitCount: importance >= 3 ? 2 : 0,  // importance=3 預先給 2 hitCount，更快升 core
       lastHitAt: null,
       embedding,
       createdAt: new Date().toISOString(),
     });
 
-    return `已記住：${title}`;
+    return `已記住：${title}${importance >= 3 ? '（深刻印記）' : ''}`;
   }
 
 

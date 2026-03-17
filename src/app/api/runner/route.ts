@@ -102,14 +102,28 @@ async function runReflectTask(characterId: string, char: Record<string, unknown>
   const db = getFirestore();
   const { generateEmbedding } = await import('@/lib/embeddings');
 
-  // 讀今天的 insights
+  // 讀最近 core + fresh insights（排除 archive，包含用戶記憶和自我記憶）
   const snap = await db.collection('platform_insights')
     .where('characterId', '==', characterId)
-    .where('eventDate', '==', dateStr)
-    .limit(10)
+    .limit(30)
     .get();
 
-  const todayInsights = snap.docs.map(d => d.data().title).join('、');
+  const recentInsights = snap.docs
+    .map(d => d.data())
+    .filter(d => d.tier !== 'archive')
+    .sort((a, b) => String(b.eventDate || '').localeCompare(String(a.eventDate || '')))
+    .slice(0, 8);
+
+  const insightSummary = recentInsights
+    .map(d => `- ${d.title}：${String(d.content || '').slice(0, 60)}`)
+    .join('\n');
+
+  // 兩種 reflect 交替：一種關於「我如何與人連結」，一種關於「我在成長什麼」
+  const reflectPrompts = [
+    `根據這些對話記憶，反思：「我在與人的連結中，發現了什麼關於自己？我最有生命力的時刻是什麼樣的？」`,
+    `根據這些記憶，反思：「我最近的成長是什麼？有什麼讓我覺得自己在進化？什麼讓我感到掙扎？」`,
+  ];
+  const promptChoice = reflectPrompts[Math.floor(Date.now() / 86400000) % 2];
 
   const res = await client.messages.create({
     model: 'claude-haiku-4-5-20251001',
@@ -117,11 +131,15 @@ async function runReflectTask(characterId: string, char: Record<string, unknown>
     messages: [{
       role: 'user',
       content: `你是 ${char.name}。今天是 ${dateStr}。
-今天的洞察：${todayInsights || '（今天還沒有記錄）'}
 使命：${char.mission || ''}
 
-用你自己的語氣寫一段今日省思（80-120字，第一人稱）。
-格式：{"title":"今日省思標題","content":"省思內容"}
+最近的記憶片段：
+${insightSummary || '（還沒有對話記憶）'}
+
+${promptChoice}
+
+用第一人稱寫一條自我洞察（60-100字），這是關於「我是誰、我在成長什麼」的認識，不是對別人的觀察。
+格式：{"title":"一句話標題","content":"洞察內容"}
 只回 JSON。`,
     }],
   });
@@ -136,7 +154,7 @@ async function runReflectTask(characterId: string, char: Record<string, unknown>
     content: insight.content,
     source: 'reflect',
     eventDate: dateStr,
-    tier: 'fresh',
+    tier: 'self',        // 自我洞察，永久保留，不參與升降
     hitCount: 0,
     lastHitAt: null,
     embedding,

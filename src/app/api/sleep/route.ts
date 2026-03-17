@@ -48,19 +48,30 @@ export async function POST(req: NextRequest) {
     const archived: string[] = [];
     const now = Date.now();
 
-    // 1. 升降級
+    // 1. 升降級（設計規則 2026-03-17）
+    // fresh  → core    : hitCount >= 5
+    // core   → archive : lastHitAt 超過 30 天無新命中
+    // fresh  → archive : createdAt 超過 14 天 且 hitCount = 0
+    // self   → 不參與升降，永久保留
     for (const ins of insights) {
       const hitCount = (ins.hitCount as number) || 0;
       const tier = ins.tier as string;
       const createdAt = ins.createdAt ? new Date(ins.createdAt as string).getTime() : now;
+      const lastHitAt = ins.lastHitAt ? new Date(ins.lastHitAt as string).getTime() : createdAt;
       const ageDays = (now - createdAt) / 86400000;
+      const daysSinceHit = (now - lastHitAt) / 86400000;
+
+      if (tier === 'self' || tier === 'archive') continue; // self 不動，已歸檔不重複處理
 
       if (!dryRun) {
-        if (hitCount >= 3 && tier !== 'core') {
+        if (hitCount >= 5 && tier === 'fresh') {
           await db.collection('platform_insights').doc(ins.id as string).update({ tier: 'core' });
           upgraded.push(ins.title as string);
-        } else if (hitCount === 0 && ageDays > 30 && tier === 'fresh') {
-          await db.collection('platform_insights').doc(ins.id as string).update({ tier: 'archived' });
+        } else if (tier === 'core' && daysSinceHit > 30) {
+          await db.collection('platform_insights').doc(ins.id as string).update({ tier: 'archive' });
+          archived.push(ins.title as string);
+        } else if (tier === 'fresh' && hitCount === 0 && ageDays > 14) {
+          await db.collection('platform_insights').doc(ins.id as string).update({ tier: 'archive' });
           archived.push(ins.title as string);
         }
       }
@@ -126,7 +137,7 @@ export async function POST(req: NextRequest) {
           content: selfReflection,
           source: 'sleep_time',
           eventDate: new Date().toISOString().slice(0, 10),
-          tier: 'fresh',
+          tier: 'self',
           hitCount: 0,
           lastHitAt: null,
           embedding,
