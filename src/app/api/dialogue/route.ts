@@ -389,7 +389,43 @@ export async function POST(req: NextRequest) {
 
     // 3. 組 system prompt
     const taipeiTime = getTaipeiTime();
-    const systemPrompt = `${char.enhancedSoul}
+
+    // 3a. 抓最近 episodic insights（時間感注入）
+    let episodicBlock = '';
+    try {
+      const recentSnap = await db.collection('platform_insights')
+        .where('characterId', '==', characterId)
+        .limit(20)
+        .get();
+
+      const recentInsights = recentSnap.docs
+        .map(d => ({ ...d.data(), id: d.id }))
+        .filter((d: Record<string, unknown>) => d.tier !== 'archive')
+        .sort((a: Record<string, unknown>, b: Record<string, unknown>) =>
+          String(b.eventDate || '').localeCompare(String(a.eventDate || ''))
+        )
+        .slice(0, 3);
+
+      if (recentInsights.length > 0) {
+        const today = getTaipeiDate();
+        const lines = recentInsights.map((ins: Record<string, unknown>) => {
+          const eventDate = String(ins.eventDate || '');
+          const diffDays = eventDate
+            ? Math.floor((new Date(today).getTime() - new Date(eventDate).getTime()) / 86400000)
+            : null;
+          const timeLabel = diffDays === null ? '' :
+            diffDays === 0 ? '（今天）' :
+            diffDays === 1 ? '（昨天）' :
+            diffDays <= 7 ? `（${diffDays}天前）` :
+            `（${eventDate}）`;
+          const tier = ins.tier === 'self' ? '[關於我自己]' : '[記憶]';
+          return `- ${tier}${timeLabel} ${String(ins.title || '')}：${String(ins.content || '').slice(0, 80)}`;
+        });
+        episodicBlock = `\n\n【最近的事】\n${lines.join('\n')}\n這些是我心裡還留著的片段，自然地帶進對話，不要每句都提。`;
+      }
+    } catch { /* 查不到不阻斷 */ }
+
+    const systemPrompt = `${char.enhancedSoul}${episodicBlock}
 
 ---
 現在時間（台北）：${taipeiTime}
