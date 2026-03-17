@@ -518,10 +518,23 @@ ${convData.summary ? `對話摘要（上次回顧）：\n${convData.summary}` : 
     }
 
     // 6. 存訊息
+    // imageUrl 必須存進 messages，這樣歷史載入時圖片才能顯示
+    const userEntry: Record<string, unknown> = {
+      role: 'user',
+      content: message + (image ? ' [附圖]' : ''),
+      timestamp: new Date().toISOString(),
+    };
+    const assistantEntry: Record<string, unknown> = {
+      role: 'assistant',
+      content: finalReply,
+      timestamp: new Date().toISOString(),
+    };
+    if (generatedImageUrl) assistantEntry.imageUrl = generatedImageUrl;
+
     const newMessages = [
-      ...(convData.messages as Array<{ role: string; content: string }> || []),
-      { role: 'user', content: message + (image ? ' [附圖]' : ''), timestamp: new Date().toISOString() },
-      { role: 'assistant', content: finalReply, timestamp: new Date().toISOString() },
+      ...(convData.messages as Array<Record<string, unknown>> || []),
+      userEntry,
+      assistantEntry,
     ];
 
     const newCount = (convData.messageCount as number || 0) + 2;

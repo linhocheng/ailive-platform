@@ -61,7 +61,10 @@ export default function ChatPage() {
       const d = await r.json();
       if (d.messages?.length > 0) {
         setMessages(d.messages.map((m: Message) => ({
-          role: m.role, content: m.content, timestamp: m.timestamp || new Date().toISOString(),
+          role: m.role,
+          content: m.content,
+          timestamp: m.timestamp || new Date().toISOString(),
+          imageUrl: m.imageUrl,  // 歷史載入時帶出 imageUrl，圖片才能正確顯示
         })));
       }
     } catch { /* ignore */ }
