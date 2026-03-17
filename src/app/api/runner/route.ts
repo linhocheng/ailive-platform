@@ -150,72 +150,130 @@ async function runPostTask(
   task: Record<string, unknown>,
 ) {
   const db = getFirestore();
+  const { FieldValue } = await import('firebase-admin/firestore');
+  const { generateImageForCharacter } = await import('@/lib/generate-image');
 
-  // 關鍵設計：有 postId → 直接發佈（不重新生成）
+  // === 有 postId（已有草稿）→ 意識確認流程 ===
   const postId = task.postConfig as string | undefined;
   if (postId) {
     const postDoc = await db.collection('platform_posts').doc(postId).get();
-    if (postDoc.exists && postDoc.data()?.status === 'scheduled') {
-      // 有 IG token 就發，沒有就標記 published（待接 IG）
-      await db.collection('platform_posts').doc(postId).update({
-        status: 'published',
-        publishedAt: new Date().toISOString(),
+    if (!postDoc.exists) return `草稿 ${postId} 不存在`;
+    const postData = postDoc.data()!;
+    if (postData.status !== 'scheduled') return `草稿狀態不是 scheduled（目前：${postData.status}）`;
+
+    // Step 1：叫醒角色，讓她有意識地確認這篇草稿
+    const awakenRes = await client.messages.create({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 300,
+      messages: [{
+        role: 'user',
+        content: `你是 ${char.name}。你有一篇 IG 草稿今天排程要發出去了。
+
+主題：${postData.topic || '（未命名）'}
+草稿內容：
+${postData.content}
+
+讀一遍自己的文字，說說你此刻的感受——這篇文今天發出去對嗎？用你自己的聲音說，不要表演。
+（50-80字）`,
+      }],
+    });
+    const confirmation = (awakenRes.content[0] as { type: string; text?: string }).text?.trim() || '';
+
+    // Step 2：確認感受存進 insights
+    if (confirmation) {
+      const { generateEmbedding } = await import('@/lib/embeddings');
+      const embedding = await generateEmbedding(confirmation).catch(() => []);
+      await db.collection('platform_insights').add({
+        characterId,
+        title: `發文前的意識確認：${postData.topic || postId.slice(0, 8)}`,
+        content: confirmation,
+        source: 'pre_publish_reflection',
+        eventDate: dateStr,
+        tier: 'fresh',
+        hitCount: 0,
+        lastHitAt: null,
+        embedding,
+        createdAt: new Date().toISOString(),
       });
-      return `published post ${postId}`;
     }
+
+    // Step 3：草稿標記 published（IG API 接上後這裡改為真正發出去）
+    await db.collection('platform_posts').doc(postId).update({
+      status: 'published',
+      publishedAt: new Date().toISOString(),
+      prePublishReflection: confirmation.slice(0, 300),
+    });
+
+    return `${char.name} 已確認，草稿 ${postId} 標記 published`;
   }
 
-  // 沒有 postId → 生成草稿，等 Adam 審核
+  // === 沒有 postId → 生成新草稿（文案 + 生圖）===
+
+  // Step 1：讀近期 insights 作為靈感來源
   const insightSnap = await db.collection('platform_insights')
     .where('characterId', '==', characterId)
-    .limit(5)
+    .limit(20)
     .get();
 
   const recentInsights = insightSnap.docs
     .map(d => d.data())
     .sort((a, b) => (b.hitCount || 0) - (a.hitCount || 0))
     .slice(0, 3)
-    .map(d => d.content)
+    .map(d => `${d.title}：${String(d.content).slice(0, 80)}`)
     .join('\n');
 
+  // Step 2：用靈魂寫文案
   const res = await client.messages.create({
     model: 'claude-haiku-4-5-20251001',
-    max_tokens: 400,
+    max_tokens: 500,
     messages: [{
       role: 'user',
-      content: `你是 ${char.name}，要寫一篇 IG 貼文草稿。
+      content: `你是 ${char.name}，要為 IG 寫一篇今天的貼文草稿。
+
 使命：${char.mission || ''}
-靈魂片段：${(char.enhancedSoul as string || '').slice(0, 200)}
-近期洞察：${recentInsights || '暫無'}
+靈魂片段：${(char.enhancedSoul as string || '').slice(0, 300)}
+近期洞察：${recentInsights || '（暫無）'}
 今天日期：${dateStr}
 
-寫一篇 120-160 字的 IG 貼文（含 hashtag，符合你的說話方式）。
-格式：{"topic":"主題","content":"完整貼文內容"}
-只回 JSON。`,
+寫一篇 120-160 字的 IG 貼文草稿（含 hashtag，符合你的說話方式）。
+然後用一句英文描述這篇文適合搭配的圖片畫面（給生圖用，不超過 30 個英文字）。
+
+格式（只回 JSON）：
+{"topic":"主題","content":"完整貼文內容","imagePrompt":"適合搭配的圖片畫面（英文）"}`,
     }],
   });
 
   const raw = stripJson((res.content[0] as Anthropic.TextBlock).text.trim());
   const post = JSON.parse(raw);
 
+  // Step 3：生圖（用角色的 ref 照鎖臉）
+  let imageUrl = '';
+  try {
+    const imgResult = await generateImageForCharacter(characterId, post.imagePrompt || post.topic);
+    imageUrl = imgResult.imageUrl;
+  } catch (imgErr) {
+    console.error('[runner] 生圖失敗，草稿無圖：', imgErr);
+    // 生圖失敗不阻斷草稿建立
+  }
+
+  // Step 4：存草稿（文案 + 圖片）
   const postRef = await db.collection('platform_posts').add({
     characterId,
     content: post.content,
-    imageUrl: '',
+    imageUrl,
     topic: post.topic,
+    imagePrompt: post.imagePrompt || '',
     status: 'draft',
     scheduledAt: null,
     publishedAt: null,
     createdAt: new Date().toISOString(),
   });
 
-  // 更新 growthMetrics
-  const { FieldValue } = await import('firebase-admin/firestore');
   await db.collection('platform_characters').doc(characterId).update({
     'growthMetrics.totalPosts': FieldValue.increment(1),
   });
 
-  return `draft created: ${postRef.id}`;
+  return `草稿建立：${postRef.id}${imageUrl ? '（含圖）' : '（無圖）'}`;
 }
 
 export async function POST(req: NextRequest) {
