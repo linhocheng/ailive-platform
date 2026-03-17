@@ -153,11 +153,10 @@ async function executeTool(
     ];
 
     const withEmb = allDocs.filter(d => d.embedding && Array.isArray(d.embedding));
-    console.log(`[query_kb] allDocs=${allDocs.length} withEmb=${withEmb.length} knowledge=${knowledgeSnap.size} insights=${insightSnap.size}`);
+    const firstKnowledge = knowledgeSnap.docs[0]?.data();
+    const firstEmb = firstKnowledge?.embedding;
+    console.log(`[query_kb] allDocs=${allDocs.length} withEmb=${withEmb.length} firstEmbType=${typeof firstEmb} isArray=${Array.isArray(firstEmb)} firstEmbLen=${Array.isArray(firstEmb) ? (firstEmb as number[]).length : 'N/A'}`);
     if (withEmb.length === 0) {
-      // debug：看第一個 knowledge 的 embedding 格式
-      const first = knowledgeSnap.docs[0]?.data();
-      console.log('[query_kb] first knowledge embedding type:', typeof first?.embedding, Array.isArray(first?.embedding), JSON.stringify(first?.embedding)?.slice(0,80));
       return '（記憶庫目前是空的）';
     }
 
@@ -168,6 +167,7 @@ async function executeTool(
       .sort((a, b) => b.score - a.score)
       .slice(0, limit);
 
+    console.log(`[query_kb] qEmbLen=${qEmb.length} scored=${scored.length} topScore=${scored[0]?.score?.toFixed(3) || 'N/A'}`);
     if (scored.length === 0) return '（沒有找到相關記憶）';
 
     // hitCount +1（knowledge 和 insight 都要更新）
