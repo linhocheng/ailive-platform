@@ -164,11 +164,17 @@ async function executeTool(
 
     if (scored.length === 0) return '（沒有找到相關記憶）';
 
-    // hitCount +1
+    // hitCount +1（knowledge 和 insight 都要更新）
     const batch = db.batch();
     scored.forEach(({ d }) => {
       if (d._type === 'insight' && d._id) {
         batch.update(db.collection('platform_insights').doc(d._id as string), {
+          hitCount: FieldValue.increment(1),
+          lastHitAt: new Date().toISOString(),
+        });
+      } else if (d._type === 'knowledge' && d._id) {
+        // 修缺口：知識庫命中也要更新 hitCount
+        batch.update(db.collection('platform_knowledge').doc(d._id as string), {
           hitCount: FieldValue.increment(1),
           lastHitAt: new Date().toISOString(),
         });
