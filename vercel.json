@@ -1,1 +1,8 @@
-{}
+{
+  "crons": [
+    {
+      "path": "/api/runner",
+      "schedule": "0 * * * *"
+    }
+  ]
+}

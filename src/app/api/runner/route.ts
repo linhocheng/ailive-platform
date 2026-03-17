@@ -98,6 +98,122 @@ async function runLearnTask(characterId: string, char: Record<string, unknown>, 
   return insight.title;
 }
 
+
+async function runSleepTask(characterId: string, char: Record<string, unknown>, db: ReturnType<typeof getFirestore>) {
+  // 直接呼叫 sleep 邏輯（不走 HTTP，直接 import lib）
+  // 讀 insights，跑升降級 + 合併 + 自我洞察
+  const { generateEmbedding, cosineSimilarity } = await import('@/lib/embeddings');
+  const Anthropic = (await import('@anthropic-ai/sdk')).default;
+  const { FieldValue } = await import('firebase-admin/firestore');
+
+  const apiKey = process.env.ANTHROPIC_API_KEY || '';
+  const client = new Anthropic({ apiKey });
+
+  const snap = await db.collection('platform_insights')
+    .where('characterId', '==', characterId)
+    .limit(200)
+    .get();
+
+  const insights = snap.docs.map(d => ({ id: d.id, ...d.data() })) as Record<string, unknown>[];
+  const now = Date.now();
+  const upgraded: string[] = [];
+  const archived: string[] = [];
+
+  // 升降級
+  for (const ins of insights) {
+    const hitCount = (ins.hitCount as number) || 0;
+    const tier = ins.tier as string;
+    const createdAt = ins.createdAt ? new Date(ins.createdAt as string).getTime() : now;
+    const lastHitAt = ins.lastHitAt ? new Date(ins.lastHitAt as string).getTime() : createdAt;
+    const ageDays = (now - createdAt) / 86400000;
+    const daysSinceHit = (now - lastHitAt) / 86400000;
+
+    if (tier === 'self' || tier === 'archive') continue;
+
+    if (hitCount >= 5 && tier === 'fresh') {
+      await db.collection('platform_insights').doc(ins.id as string).update({ tier: 'core' });
+      upgraded.push(ins.title as string);
+    } else if (tier === 'core' && daysSinceHit > 30) {
+      await db.collection('platform_insights').doc(ins.id as string).update({ tier: 'archive' });
+      archived.push(ins.title as string);
+    } else if (tier === 'fresh' && hitCount === 0 && ageDays > 14) {
+      await db.collection('platform_insights').doc(ins.id as string).update({ tier: 'archive' });
+      archived.push(ins.title as string);
+    }
+  }
+
+  // 合併相似（cosine > 0.88）
+  const withEmb = insights.filter(i => i.embedding && Array.isArray(i.embedding) && i.tier !== 'archive');
+  const mergedSet = new Set<string>();
+  let mergedCount = 0;
+  for (let i = 0; i < withEmb.length; i++) {
+    if (mergedSet.has(withEmb[i].id as string)) continue;
+    for (let j = i + 1; j < withEmb.length; j++) {
+      if (mergedSet.has(withEmb[j].id as string)) continue;
+      const score = cosineSimilarity(withEmb[i].embedding as number[], withEmb[j].embedding as number[]);
+      if (score > 0.88) {
+        const maxHit = Math.max((withEmb[i].hitCount as number)||0, (withEmb[j].hitCount as number)||0);
+        await db.collection('platform_insights').doc(withEmb[i].id as string).update({ hitCount: maxHit });
+        await db.collection('platform_insights').doc(withEmb[j].id as string).delete();
+        mergedSet.add(withEmb[j].id as string);
+        mergedCount++;
+      }
+    }
+  }
+
+  // 自我洞察
+  const coreInsights = insights
+    .filter(i => i.tier === 'core' || (i.hitCount as number) >= 2)
+    .slice(0, 5)
+    .map(i => String(i.content || '')).join('\n');
+
+  let selfReflection = '';
+  if (coreInsights) {
+    const res = await client.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 300,
+      messages: [{ role: 'user', content: `你是 ${char.name}。以下是你的核心記憶：\n${coreInsights}\n\n用第一人稱寫一段自我洞察（60-80字），感受你最近的成長或變化。直接寫，不要標題。` }],
+    });
+    selfReflection = ((res.content[0] as { text: string }).text || '').trim();
+
+    if (selfReflection) {
+      const embedding = await generateEmbedding(selfReflection);
+      const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Taipei' });
+      await db.collection('platform_insights').add({
+        characterId, title: '夢境自我洞察', content: selfReflection,
+        source: 'sleep_time', eventDate: today, tier: 'self',
+        hitCount: 0, lastHitAt: null, embedding, createdAt: new Date().toISOString(),
+      });
+    }
+  }
+
+  // soul_proposal（core >= 5）
+  const coreCount = insights.filter(i => i.tier === 'core').length + upgraded.length;
+  if (coreCount >= 5) {
+    const topCore = insights.filter(i => i.tier === 'core').slice(0, 5)
+      .map(i => `${i.title}：${String(i.content).slice(0, 80)}`).join('\n');
+    const propRes = await client.messages.create({
+      model: 'claude-haiku-4-5-20251001', max_tokens: 400,
+      messages: [{ role: 'user', content: `你是 ${char.name}。根據這些核心記憶，提出一個靈魂進化建議：\n${topCore}\n\n格式：{"proposedChange":"...","reason":"..."}\n只回 JSON。` }],
+    });
+    try {
+      const raw = ((propRes.content[0] as { text: string }).text || '').replace(/^```[\w]*\n?/m,'').replace(/\n?```$/m,'').trim();
+      const proposal = JSON.parse(raw);
+      await db.collection('platform_soul_proposals').add({
+        characterId, proposedChange: proposal.proposedChange, reason: proposal.reason,
+        status: 'pending', createdAt: new Date().toISOString(),
+      });
+    } catch { /* 解析失敗不中斷 */ }
+  }
+
+  // 更新 growthMetrics
+  await db.collection('platform_characters').doc(characterId).update({
+    'growthMetrics.totalInsights': FieldValue.increment(upgraded.length),
+  });
+
+  return `sleep完成：升級${upgraded.length}條，合併${mergedCount}條，archive${archived.length}條${selfReflection ? '，自我洞察已寫入' : ''}`;
+}
+
 async function runReflectTask(characterId: string, char: Record<string, unknown>, client: Anthropic, dateStr: string) {
   const db = getFirestore();
   const { generateEmbedding } = await import('@/lib/embeddings');
@@ -343,6 +459,8 @@ export async function POST(req: NextRequest) {
             outcome = await runReflectTask(characterId, char, client, now.dateStr);
           } else if (task.type === 'post') {
             outcome = await runPostTask(characterId, char, client, now.dateStr, task);
+          } else if (task.type === 'sleep') {
+            outcome = await runSleepTask(characterId, char, db);
           } else if (task.type === 'engage') {
             outcome = '（engage 任務：互動功能建置中）';
           } else {
