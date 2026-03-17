@@ -1,7 +1,11 @@
 /**
- * /api/runner — Vercel Cron 觸發點
+ * /api/runner — 排程執行引擎
  *
- * POST（由 Vercel Cron 每小時呼叫）
+ * 注意：Vercel Cron 已移除（2026-03-17）
+ * 排程改由 Firebase Functions ailiveScheduler 接管（每 30 分鐘，asia-east1）
+ * 這個 route 保留給手動測試用
+ *
+ * POST（手動觸發測試）
  * 1. 掃描所有 active 角色
  * 2. 找到當前台北時間符合的 enabled 任務
  * 3. 執行任務：learn / reflect / post
