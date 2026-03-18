@@ -11,8 +11,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getFirebaseAdmin } from '@/lib/firebase-admin';
 import mammoth from 'mammoth';
-// @ts-expect-error pdf-parse 無型別宣告
-import pdfParse from 'pdf-parse';
+
 
 export const maxDuration = 120;
 
@@ -83,6 +82,8 @@ export async function POST(req: NextRequest) {
       const result = await mammoth.extractRawText({ buffer: Buffer.from(buffer) });
       text = result.value;
     } else if (ext === 'pdf') {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const pdfParse = require('pdf-parse');
       const data = await pdfParse(Buffer.from(buffer));
       text = data.text;
     } else {
