@@ -310,16 +310,41 @@ async function executeTool(
     const content = String(toolInput.content || '');
     if (!content) return '需要文案才能存草稿。';
     const db2 = getFirestore();
+    const today = getTaipeiDate();
+    const topic = toolInput.topic ? String(toolInput.topic) : '';
+
     const ref = await db2.collection('platform_posts').add({
       characterId,
       content,
       imageUrl: toolInput.image_url ? String(toolInput.image_url) : '',
-      topic: toolInput.topic ? String(toolInput.topic) : '',
+      topic,
       status: 'draft',
       scheduledAt: null,
       publishedAt: null,
       createdAt: new Date().toISOString(),
     });
+
+    // 發文記憶：存一條 insight，讓蓉兒記得自己說過什麼
+    try {
+      const summary = content.slice(0, 100).replace(/\n/g, ' ');
+      const insightTitle = topic ? `發文：${topic}` : `發文 ${today}`;
+      const insightContent = `${today} 寫了一篇草稿。主題：${topic || '（未命名）'}。內容摘要：${summary}${content.length > 100 ? '...' : ''}`;
+      const embedding = await generateEmbedding(`${insightTitle} ${insightContent}`);
+      await db2.collection('platform_insights').add({
+        characterId,
+        title: insightTitle,
+        content: insightContent,
+        source: 'post_memory',
+        eventDate: today,
+        tier: 'fresh',
+        hitCount: 0,
+        lastHitAt: null,
+        postId: ref.id,
+        embedding,
+        createdAt: new Date().toISOString(),
+      });
+    } catch { /* 記憶存失敗不阻斷草稿儲存 */ }
+
     await db2.collection('platform_characters').doc(characterId).update({
       'growthMetrics.totalPosts': FieldValue.increment(1),
     });
