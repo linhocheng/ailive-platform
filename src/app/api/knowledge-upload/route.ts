@@ -17,6 +17,14 @@ import Anthropic from '@anthropic-ai/sdk';
 
 export const maxDuration = 120;
 
+// 解除 Vercel 4.5MB 預設限制，允許最大 20MB 文件
+export const config = {
+  api: {
+    bodyParser: false,
+    responseLimit: '20mb',
+  },
+};
+
 // ===== 工具函式 =====
 
 function chunkMarkdown(md: string, filename: string): Array<{ title: string; content: string }> {

@@ -4,5 +4,10 @@
       "path": "/api/runner",
       "schedule": "0 1 * * *"
     }
-  ]
+  ],
+  "functions": {
+    "src/app/api/knowledge-upload/route.ts": {
+      "maxDuration": 120
+    }
+  }
 }
