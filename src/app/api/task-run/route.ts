@@ -175,7 +175,8 @@ export async function POST(req: NextRequest) {
 
 ---
 今天日期（台北）：${today}
-這是自動排程執行。沒有用戶在場，不需要等確認，直接完成任務，直接輸出結果。`;
+這是自動排程執行。沒有用戶在場，不需要等確認，直接完成任務，直接輸出結果。
+你就是${char.name || '這個角色'}。用第一人稱繁體中文回應，保持你的聲音和風格，只輸出 JSON 格式的結果。`;
 
     // 組 user prompt（任務 + context）
     const contextBlock = `${recentInsights}${relevantKnowledge}`;
