@@ -16,9 +16,8 @@ export default function KnowledgePage() {
   const [charName, setCharName] = useState('');
 
   // 上傳文件狀態
-  const [uploading, setUploading] = useState(false);
-  const [uploadResult, setUploadResult] = useState<{ saved: number; failed: number; filename: string } | null>(null);
-  const [uploadError, setUploadError] = useState('');
+  const [uploadStatus, setUploadStatus] = useState<'idle' | 'uploading' | 'parsing' | 'done' | 'error'>('idle');
+  const [uploadMsg, setUploadMsg] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const load = () => {
@@ -46,28 +45,56 @@ export default function KnowledgePage() {
   };
 
   const uploadFile = async (file: File) => {
-    setUploading(true);
-    setUploadResult(null);
-    setUploadError('');
-
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('characterId', id);
-    formData.append('category', 'document');
+    setUploadStatus('uploading');
+    setUploadMsg('正在取得上傳憑證...');
 
     try {
-      const res = await fetch('/api/knowledge-upload', { method: 'POST', body: formData });
-      const data = await res.json();
-      if (data.success) {
-        setUploadResult({ saved: data.saved, failed: data.failed, filename: data.filename });
-        load();
-      } else {
-        setUploadError(data.error || '上傳失敗');
-      }
-    } catch {
-      setUploadError('網路錯誤，請再試一次');
+      // Step 1：拿 signed upload URL
+      const urlRes = await fetch('/api/knowledge-upload-url', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          filename: file.name,
+          contentType: file.type || 'application/octet-stream',
+          characterId: id,
+        }),
+      });
+      const urlData = await urlRes.json();
+      if (!urlData.uploadUrl) throw new Error(urlData.error || '取得上傳 URL 失敗');
+
+      // Step 2：直接 PUT 文件到 Firebase Storage（不走 Vercel，無大小限制）
+      setUploadMsg(`上傳中... (${(file.size / 1024 / 1024).toFixed(1)} MB)`);
+      const putRes = await fetch(urlData.uploadUrl, {
+        method: 'PUT',
+        headers: { 'Content-Type': file.type || 'application/octet-stream' },
+        body: file,
+      });
+      if (!putRes.ok) throw new Error(`上傳到 Storage 失敗 (HTTP ${putRes.status})`);
+
+      // Step 3：通知 API 解析
+      setUploadStatus('parsing');
+      setUploadMsg('解析文件，拆分成知識條目...');
+      const parseRes = await fetch('/api/knowledge-parse', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          storagePath: urlData.storagePath,
+          characterId: id,
+          filename: file.name,
+          category: 'document',
+        }),
+      });
+      const parseData = await parseRes.json();
+      if (!parseData.success) throw new Error(parseData.error || '解析失敗');
+
+      setUploadStatus('done');
+      setUploadMsg(`✅ ${file.name} 解析完成，新增 ${parseData.saved} 條知識${parseData.failed > 0 ? `（${parseData.failed} 條失敗）` : ''}`);
+      load();
+
+    } catch (e: unknown) {
+      setUploadStatus('error');
+      setUploadMsg(`❌ ${e instanceof Error ? e.message : String(e)}`);
     } finally {
-      setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
@@ -79,6 +106,8 @@ export default function KnowledgePage() {
 
   const inputStyle = { width: '100%', border: '1px solid #e0e0e0', borderRadius: 6, padding: '8px 10px', marginBottom: 8, fontSize: 14, boxSizing: 'border-box' as const };
 
+  const isUploading = uploadStatus === 'uploading' || uploadStatus === 'parsing';
+
   return (
     <div>
       <div style={{ marginBottom: 16, fontSize: 13, color: '#999' }}>
@@ -86,13 +115,14 @@ export default function KnowledgePage() {
       </div>
       <CharNav id={id} active="/knowledge" />
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 20 }}>
-        {/* 左側：新增 */}
+
+        {/* 左側 */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
 
           {/* 上傳文件 */}
           <div style={{ background: '#fff', border: '1px solid #e0e0e0', borderRadius: 12, padding: 20 }}>
-            <h3 style={{ margin: '0 0 8px', fontSize: 15 }}>📄 上傳文件</h3>
-            <p style={{ margin: '0 0 12px', fontSize: 12, color: '#888' }}>支援 .docx 和 .pdf，圖片會自動轉成文字描述</p>
+            <h3 style={{ margin: '0 0 6px', fontSize: 15 }}>📄 上傳文件</h3>
+            <p style={{ margin: '0 0 12px', fontSize: 12, color: '#888' }}>支援 .docx 和 .pdf，自動拆成知識條目</p>
 
             <input
               ref={fileInputRef}
@@ -103,27 +133,29 @@ export default function KnowledgePage() {
             />
 
             <button
-              onClick={() => fileInputRef.current?.click()}
-              disabled={uploading}
+              onClick={() => { setUploadStatus('idle'); setUploadMsg(''); fileInputRef.current?.click(); }}
+              disabled={isUploading}
               style={{
-                width: '100%', background: uploading ? '#f0f0f0' : '#f8f9ff',
-                border: '2px dashed #c0c8ff', borderRadius: 8, padding: '14px 10px',
-                cursor: uploading ? 'default' : 'pointer', fontSize: 14, color: '#5560cc',
+                width: '100%',
+                background: isUploading ? '#f5f5f5' : '#f8f9ff',
+                border: `2px dashed ${isUploading ? '#ddd' : '#c0c8ff'}`,
+                borderRadius: 8, padding: '14px 10px',
+                cursor: isUploading ? 'default' : 'pointer',
+                fontSize: 14, color: isUploading ? '#999' : '#5560cc',
                 fontWeight: 600,
               }}
             >
-              {uploading ? '⏳ 解析中，請稍候...' : '＋ 選擇 .docx 或 .pdf'}
+              {isUploading ? '⏳ ' + uploadMsg : '＋ 選擇 .docx 或 .pdf'}
             </button>
 
-            {uploadResult && (
-              <div style={{ marginTop: 10, padding: '10px 12px', background: '#e8f5e9', borderRadius: 8, fontSize: 13 }}>
-                ✅ <strong>{uploadResult.filename}</strong> 解析完成<br />
-                新增 {uploadResult.saved} 條知識{uploadResult.failed > 0 ? `，${uploadResult.failed} 條失敗` : ''}
+            {uploadStatus === 'done' && (
+              <div style={{ marginTop: 10, padding: '10px 12px', background: '#e8f5e9', borderRadius: 8, fontSize: 13, color: '#2e7d32' }}>
+                {uploadMsg}
               </div>
             )}
-            {uploadError && (
+            {uploadStatus === 'error' && (
               <div style={{ marginTop: 10, padding: '10px 12px', background: '#ffebee', borderRadius: 8, fontSize: 13, color: '#c00' }}>
-                ❌ {uploadError}
+                {uploadMsg}
               </div>
             )}
           </div>
