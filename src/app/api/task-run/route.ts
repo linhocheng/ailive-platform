@@ -16,6 +16,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getFirestore } from '@/lib/firebase-admin';
 import { generateEmbedding, cosineSimilarity } from '@/lib/embeddings';
+import { generateImageForCharacter } from '@/lib/generate-image';
 import Anthropic from '@anthropic-ai/sdk';
 
 export const maxDuration = 120;
@@ -101,16 +102,28 @@ async function saveInsight(
   } catch { /* 不阻斷 */ }
 }
 
-// 存草稿
+// 存草稿（含生圖）
 async function savePostDraft(
   db: ReturnType<typeof getFirestore>,
   characterId: string,
   content: string,
   topic: string,
   date: string,
+  imagePrompt?: string,
 ): Promise<string> {
+  // 生圖（有 imagePrompt 才生）
+  let imageUrl = '';
+  if (imagePrompt) {
+    try {
+      const imgResult = await generateImageForCharacter(characterId, imagePrompt);
+      imageUrl = imgResult.imageUrl || '';
+    } catch (e) {
+      console.warn('[task-run] 生圖失敗，草稿無圖：', e);
+    }
+  }
+
   const ref = await db.collection('platform_posts').add({
-    characterId, content, imageUrl: '', topic,
+    characterId, content, imageUrl, topic,
     status: 'draft', scheduledAt: null, publishedAt: null,
     createdAt: new Date().toISOString(),
   });
@@ -252,7 +265,7 @@ ${outputFormat}`;
     // 根據 taskType 決定怎麼存
     let savedId = '';
     if (taskType === 'post') {
-      savedId = await savePostDraft(db, characterId, result.content || '', result.topic || '', today);
+      savedId = await savePostDraft(db, characterId, result.content || '', result.topic || '', today, result.imagePrompt);
     } else {
       await saveInsight(db, characterId,
         result.title || `${taskType} ${today}`,
