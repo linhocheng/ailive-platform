@@ -96,6 +96,7 @@ const PLATFORM_TOOLS: Anthropic.Tool[] = [
         run_hour: { type: 'number', description: '幾點執行（台北時間 0-23）' },
         run_minute: { type: 'number', description: '幾分執行（0-59）' },
         description: { type: 'string', description: '任務說明' },
+        intent: { type: 'string', description: '任務意義——這個任務存在的原因，一句話說清楚。蓉兒執行時會根據這個 + 記憶決定怎麼做。' },
       },
       required: ['task_id'],
     },
@@ -272,6 +273,7 @@ async function executeTool(
     if (toolInput.run_hour !== undefined) updates.run_hour = Number(toolInput.run_hour);
     if (toolInput.run_minute !== undefined) updates.run_minute = Number(toolInput.run_minute);
     if (toolInput.description !== undefined) updates.description = String(toolInput.description);
+    if (toolInput.intent !== undefined) updates.intent = String(toolInput.intent);
     if (Object.keys(updates).length === 0) return '沒有指定要修改的欄位。';
     await db2.collection('platform_tasks').doc(taskId).update(updates);
     return `任務已更新：${JSON.stringify(updates)}`;
