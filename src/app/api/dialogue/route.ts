@@ -393,7 +393,20 @@ export async function POST(req: NextRequest) {
     if (conversationId) {
       convRef = db.collection('platform_conversations').doc(conversationId);
       const convDoc = await convRef.get();
-      if (convDoc.exists) convData = convDoc.data()!;
+      if (convDoc.exists) {
+        convData = convDoc.data()!;
+      } else {
+        // doc 不存在（例如 scheduler 首次使用固定 conversationId）→ 自動建立
+        await convRef.set({
+          characterId,
+          userId: userId || 'scheduler',
+          messages: [],
+          summary: '',
+          messageCount: 0,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        });
+      }
     } else {
       convRef = db.collection('platform_conversations').doc();
       await convRef.set({
