@@ -3,9 +3,30 @@ import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { CharNav } from '../page';
 
-interface Task { id: string; type: string; run_hour: number; run_minute: number; days: string[]; enabled: boolean; description: string; last_run?: string; }
+interface Task {
+  id: string; type: string; run_hour: number; run_minute: number;
+  days: string[]; enabled: boolean; description: string;
+  intent?: string; last_run?: string;
+}
 
-const TYPE_LABELS: Record<string, string> = { learn: '🎓 主動學習', reflect: '🌙 每日省思', post: '📝 生成草稿', engage: '💬 互動' };
+const TYPE_LABELS: Record<string, string> = {
+  learn: '🎓 主動學習',
+  reflect: '🌙 每日省思',
+  post: '📝 生成草稿',
+  explore: '🔍 探索學習',
+  sleep: '💤 作夢沉殿',
+  engage: '💬 互動',
+};
+
+const TYPE_INTENT_HINTS: Record<string, string> = {
+  learn: '例如：每天主動了解一件跟我的世界觀相關的新事物，把洞察記下來',
+  reflect: '例如：回看今天說了什麼、感受到什麼，把真實的部分記住',
+  post: '例如：從我最近的感受出發，說一件只有今天的我能說的事',
+  explore: '例如：搜尋今天讓我有感覺的議題（攝影、身體、都市），寫心得，可以畫一張圖',
+  sleep: '例如：整理最近的洞察，問自己：我在成為更完整的自己嗎',
+  engage: '例如：主動問候最近在聊天的人，從記憶裡找一個值得延續的話題',
+};
+
 const DAY_LABELS = ['日', '一', '二', '三', '四', '五', '六'];
 const DAY_KEYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 
@@ -43,7 +64,14 @@ export default function TasksPage() {
   };
 
   const addTask = async () => {
-    await fetch('/api/tasks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ characterId: id, type: newType, run_hour: 9, run_minute: 0, days: ['mon', 'wed', 'fri'], enabled: true }) });
+    await fetch('/api/tasks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
+      characterId: id, type: newType,
+      run_hour: 9, run_minute: 0,
+      days: ['mon', 'wed', 'fri'],
+      enabled: true,
+      intent: TYPE_INTENT_HINTS[newType] || '',
+      description: '',
+    })});
     load();
   };
 
@@ -53,12 +81,20 @@ export default function TasksPage() {
     load();
   };
 
+  const inputStyle: React.CSSProperties = { width: '100%', border: '1px solid #e0e0e0', borderRadius: 6, padding: '6px 8px', fontSize: 13, boxSizing: 'border-box', fontFamily: 'system-ui' };
+
   return (
     <div>
       <div style={{ marginBottom: 16, fontSize: 13, color: '#999' }}>
         <a href="/dashboard" style={{ color: '#999', textDecoration: 'none' }}>所有角色</a> › <a href={`/dashboard/${id}`} style={{ color: '#999', textDecoration: 'none' }}>{charName}</a> › 排程
       </div>
       <CharNav id={id} active="/tasks" />
+
+      {/* 說明卡片 */}
+      <div style={{ background: '#f8f9ff', border: '1px solid #e0e8ff', borderRadius: 10, padding: '12px 16px', marginBottom: 16, fontSize: 13, color: '#555' }}>
+        <strong>任務意義（intent）</strong> 是這個任務存在的原因，用一句話說清楚。<br />
+        蓉兒執行時會先查自己的記憶和知識庫，再從這個意義出發，自己決定今天怎麼做。
+      </div>
 
       <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
         <select value={newType} onChange={e => setNewType(e.target.value)} style={{ border: '1px solid #e0e0e0', borderRadius: 6, padding: '8px 10px', fontSize: 14 }}>
@@ -70,27 +106,36 @@ export default function TasksPage() {
       {loading ? <div style={{ color: '#999' }}>載入中...</div> : tasks.map(task => (
         <div key={task.id} style={{ background: '#fff', border: `2px solid ${task.enabled ? '#e8f5e9' : '#eeeeee'}`, borderRadius: 12, padding: 16, marginBottom: 10 }}>
           {editing?.id === task.id ? (
-            // 編輯模式
             <div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8, marginBottom: 10 }}>
+              {/* 時間設定 */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 10 }}>
                 <div>
-                  <label style={{ fontSize: 12, color: '#666' }}>小時（台北）</label>
-                  <input type="number" min={0} max={23} value={editing.run_hour} onChange={e => setEditing({ ...editing, run_hour: +e.target.value })}
-                    style={{ width: '100%', border: '1px solid #e0e0e0', borderRadius: 6, padding: '6px 8px', boxSizing: 'border-box' }} />
+                  <label style={{ fontSize: 11, color: '#999', display: 'block', marginBottom: 3 }}>小時（台北）</label>
+                  <input type="number" min={0} max={23} value={editing.run_hour} onChange={e => setEditing({ ...editing, run_hour: +e.target.value })} style={inputStyle} />
                 </div>
                 <div>
-                  <label style={{ fontSize: 12, color: '#666' }}>分鐘</label>
-                  <input type="number" min={0} max={59} value={editing.run_minute} onChange={e => setEditing({ ...editing, run_minute: +e.target.value })}
-                    style={{ width: '100%', border: '1px solid #e0e0e0', borderRadius: 6, padding: '6px 8px', boxSizing: 'border-box' }} />
-                </div>
-                <div>
-                  <label style={{ fontSize: 12, color: '#666' }}>說明</label>
-                  <input value={editing.description} onChange={e => setEditing({ ...editing, description: e.target.value })}
-                    style={{ width: '100%', border: '1px solid #e0e0e0', borderRadius: 6, padding: '6px 8px', boxSizing: 'border-box' }} />
+                  <label style={{ fontSize: 11, color: '#999', display: 'block', marginBottom: 3 }}>分鐘</label>
+                  <input type="number" min={0} max={59} value={editing.run_minute} onChange={e => setEditing({ ...editing, run_minute: +e.target.value })} style={inputStyle} />
                 </div>
               </div>
+
+              {/* 任務意義（intent）— 核心欄位 */}
               <div style={{ marginBottom: 10 }}>
-                <label style={{ fontSize: 12, color: '#666', display: 'block', marginBottom: 4 }}>執行日</label>
+                <label style={{ fontSize: 11, color: '#5560cc', display: 'block', marginBottom: 3, fontWeight: 600 }}>
+                  ✦ 任務意義（蓉兒會根據這個 + 自己的記憶決定怎麼做）
+                </label>
+                <textarea
+                  value={editing.intent || ''}
+                  onChange={e => setEditing({ ...editing, intent: e.target.value })}
+                  rows={3}
+                  placeholder={TYPE_INTENT_HINTS[editing.type] || '這個任務存在的意義是什麼？'}
+                  style={{ ...inputStyle, resize: 'vertical' }}
+                />
+              </div>
+
+              {/* 執行日 */}
+              <div style={{ marginBottom: 10 }}>
+                <label style={{ fontSize: 11, color: '#999', display: 'block', marginBottom: 4 }}>執行日</label>
                 <div style={{ display: 'flex', gap: 6 }}>
                   {DAY_KEYS.map((dk, i) => (
                     <button key={dk} onClick={() => {
@@ -102,26 +147,42 @@ export default function TasksPage() {
                   ))}
                 </div>
               </div>
+
               <div style={{ display: 'flex', gap: 8 }}>
                 <button onClick={save} disabled={saving} style={{ background: '#2e7d32', color: '#fff', border: 'none', borderRadius: 6, padding: '7px 16px', cursor: 'pointer', fontSize: 13 }}>儲存</button>
                 <button onClick={() => setEditing(null)} style={{ background: '#f8f9fa', color: '#666', border: '1px solid #e0e0e0', borderRadius: 6, padding: '7px 16px', cursor: 'pointer', fontSize: 13 }}>取消</button>
               </div>
             </div>
           ) : (
-            // 顯示模式
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div>
-                <span style={{ fontWeight: 600 }}>{TYPE_LABELS[task.type] || task.type}</span>
-                <span style={{ color: '#666', fontSize: 13, marginLeft: 12 }}>每天 {task.run_hour.toString().padStart(2, '0')}:{task.run_minute.toString().padStart(2, '0')} 台北</span>
-                <span style={{ color: '#999', fontSize: 12, marginLeft: 8 }}>週{task.days.map(d => DAY_LABELS[DAY_KEYS.indexOf(d)]).join('')}</span>
-                {task.last_run && <span style={{ color: '#bbb', fontSize: 11, marginLeft: 8 }}>上次 {new Date(task.last_run).toLocaleString('zh-TW')}</span>}
-              </div>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                <button onClick={() => toggleEnabled(task)} style={{ background: task.enabled ? '#e8f5e9' : '#eeeeee', color: task.enabled ? '#2e7d32' : '#999', border: 'none', borderRadius: 20, padding: '4px 12px', cursor: 'pointer', fontSize: 12 }}>
-                  {task.enabled ? '啟用中' : '已停用'}
-                </button>
-                <button onClick={() => setEditing(task)} style={{ background: 'none', border: '1px solid #e0e0e0', color: '#666', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 12 }}>編輯</button>
-                <button onClick={() => del(task.id)} style={{ background: 'none', border: 'none', color: '#c00', cursor: 'pointer', fontSize: 13 }}>刪</button>
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                    <span style={{ fontWeight: 600, fontSize: 14 }}>{TYPE_LABELS[task.type] || task.type}</span>
+                    <span style={{ color: '#666', fontSize: 12 }}>
+                      每天 {task.run_hour.toString().padStart(2, '0')}:{task.run_minute.toString().padStart(2, '0')} 台北
+                    </span>
+                    <span style={{ color: '#999', fontSize: 11 }}>週{task.days.map(d => DAY_LABELS[DAY_KEYS.indexOf(d)]).join('')}</span>
+                  </div>
+                  {/* intent 顯示 */}
+                  {task.intent && (
+                    <div style={{ fontSize: 12, color: '#5560cc', background: '#f8f9ff', borderRadius: 6, padding: '6px 10px', marginBottom: 4, borderLeft: '3px solid #c0c8ff' }}>
+                      {task.intent}
+                    </div>
+                  )}
+                  {task.last_run && (
+                    <div style={{ fontSize: 11, color: '#bbb' }}>
+                      上次執行：{new Date(task.last_run).toLocaleString('zh-TW')}
+                    </div>
+                  )}
+                </div>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginLeft: 12 }}>
+                  <button onClick={() => toggleEnabled(task)} style={{ background: task.enabled ? '#e8f5e9' : '#eeeeee', color: task.enabled ? '#2e7d32' : '#999', border: 'none', borderRadius: 20, padding: '4px 12px', cursor: 'pointer', fontSize: 11 }}>
+                    {task.enabled ? '啟用中' : '已停用'}
+                  </button>
+                  <button onClick={() => setEditing(task)} style={{ background: 'none', border: '1px solid #e0e0e0', color: '#666', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 11 }}>編輯</button>
+                  <button onClick={() => del(task.id)} style={{ background: 'none', border: 'none', color: '#c00', cursor: 'pointer', fontSize: 12 }}>刪</button>
+                </div>
               </div>
             </div>
           )}

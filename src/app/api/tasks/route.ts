@@ -32,7 +32,7 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const db = getFirestore();
-    const { characterId, type, run_hour, run_minute, days, enabled, description } = await req.json();
+    const { characterId, type, run_hour, run_minute, days, enabled, description, intent } = await req.json();
 
     if (!characterId || !type) {
       return NextResponse.json({ error: 'characterId, type 必填' }, { status: 400 });
@@ -46,6 +46,7 @@ export async function POST(req: NextRequest) {
       days: days ?? ['mon', 'wed', 'fri'],
       enabled: enabled ?? true,
       description: description || '',
+      intent: intent || '',
       last_run: null,
       createdAt: new Date().toISOString(),
     });
@@ -62,7 +63,7 @@ export async function PATCH(req: NextRequest) {
     const { id, ...fields } = await req.json();
     if (!id) return NextResponse.json({ error: 'id 必填' }, { status: 400 });
 
-    const allowed = ['run_hour', 'run_minute', 'days', 'enabled', 'description', 'last_run'];
+    const allowed = ['run_hour', 'run_minute', 'days', 'enabled', 'description', 'intent', 'last_run'];
     const updates: Record<string, unknown> = { updatedAt: new Date().toISOString() };
     for (const key of allowed) {
       if (fields[key] !== undefined) updates[key] = fields[key];
