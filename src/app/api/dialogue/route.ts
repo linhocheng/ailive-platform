@@ -18,7 +18,7 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { generateEmbedding, cosineSimilarity } from '@/lib/embeddings';
 import { generateImageForCharacter, buildGenerateImageDescription } from '@/lib/generate-image';
 
-export const maxDuration = 60;
+export const maxDuration = 120;
 
 // ===== 台北時間 =====
 function getTaipeiTime(): string {
