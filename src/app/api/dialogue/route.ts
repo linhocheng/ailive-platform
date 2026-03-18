@@ -201,7 +201,7 @@ async function executeTool(
       const tag = d._type === 'knowledge' ? `[天命・${d.category || '一般'}]` : `[記憶${timeLabel}]`;
       // 知識庫用 summary（精煉），insights 用 content
       const body = d._type === 'knowledge'
-        ? String(d.summary || d.title || '').slice(0, 50)
+        ? String(d.content || d.summary || '').slice(0, 300)  // 完整內容，讓蓉兒真正讀到
         : String(d.content || '').slice(0, 150);
       return `${tag} ${d.title || ''}：${body} (相似度${(score * 100).toFixed(0)}%)`;
     }).join('\n\n');
