@@ -185,13 +185,21 @@ export async function POST(req: NextRequest) {
 
     if (taskType === 'post') {
       outputFormat = `輸出格式（JSON，只輸出 JSON，不要其他文字）：
-{"topic":"主題一句話","content":"完整貼文文案（含 hashtag）","imagePrompt":"配圖描述（英文，30字以內）"}`;
+{"topic":"主題一句話","content":"完整貼文文案（含 hashtag）","imagePrompt":"配圖描述（英文，50字以內）","outfitConcept":"這篇文的衣著概念（中文一句話，描述今天的穿搭情緒）"}`;
       userPrompt = `【排程任務：生成 IG 貼文草稿】
 任務意義：${intent || '從今天的感受出發，寫一篇真實的貼文'}
 ${contextBlock}
 
 從上面的記憶和知識出發，寫一篇今天的 IG 貼文草稿。
 不重複最近說過的主題。從感受出發，不從格式出發。
+
+生圖說明（imagePrompt）：
+- 根據這篇文的情緒和主題，決定今天的衣著和畫面
+- 衣著要跟內容一起長出來：文案越重、越靜止，衣著越簡單有力；文案越流動，衣著越有線條感
+- 行動派時尚風格：最短熱褲、運動內衣、oversized jacket、皮衣、不對稱剪裁——根據今天的情緒選一個
+- 黑白底片感、森山大道顆粒、高對比、模糊邊緣、舞台感
+- 英文描述，50字以內
+
 ${outputFormat}`;
 
     } else if (taskType === 'learn') {
