@@ -201,6 +201,7 @@ export async function generateImageForCharacter(
   const filePath = `${storagePath}/${Date.now()}.${ext}`;
   const file = bucket.file(filePath);
   await file.save(new Uint8Array(imgBuffer), { metadata: { contentType: mimeType } });
+  await file.makePublic();
   const imageUrl = `https://storage.googleapis.com/${bucket.name}/${filePath}`;
 
   return { imageUrl, model: 'gemini-2.5-flash-image', promptTranslated: translated };
