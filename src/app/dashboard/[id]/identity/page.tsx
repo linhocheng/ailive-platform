@@ -64,12 +64,26 @@ export default function IdentityPage() {
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState('');
   const [newElement, setNewElement] = useState('');
+  const [channels, setChannels] = useState({
+    lineChannelToken: '',
+    lineChannelSecret: '',
+    igAccessToken: '',
+    igUserId: '',
+  });
+  const [channelSaving, setChannelSaving] = useState(false);
+  const [channelMsg, setChannelMsg] = useState('');
 
   const load = () => {
     fetch(`/api/characters/${id}`).then(r => r.json()).then(d => {
       const c = d.character;
       setChar(c);
       setMission(c?.mission || '');
+      setChannels({
+        lineChannelToken: c?.lineChannelToken || '',
+        lineChannelSecret: c?.lineChannelSecret || '',
+        igAccessToken: c?.igAccessToken || '',
+        igUserId: c?.igUserId || '',
+      });
       const v = c?.visualIdentity as VisualIdentity | undefined;
       setVi({
         characterSheet: v?.characterSheet || '',
@@ -172,6 +186,18 @@ export default function IdentityPage() {
 
   const removeElement = (i: number) => {
     setVi({ ...vi, fixedElements: vi.fixedElements.filter((_, idx) => idx !== i) });
+  };
+
+  const saveChannels = async () => {
+    setChannelSaving(true);
+    await fetch(`/api/characters/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(channels),
+    });
+    setChannelSaving(false);
+    setChannelMsg('✅ 已儲存');
+    setTimeout(() => setChannelMsg(''), 2000);
   };
 
   const save = async () => {
@@ -334,6 +360,108 @@ export default function IdentityPage() {
             {msg && <span style={{ fontSize: 13, color: msg.includes('❌') ? '#c00' : '#2e7d32' }}>{msg}</span>}
           </div>
         </div>
+
+        {/* ===== 通路設定 ===== */}
+        <div style={{ marginTop: 24, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+
+          {/* LINE */}
+          <div style={{ background: '#fff', border: '1px solid #e0e0e0', borderRadius: 12, padding: 20 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
+              <span style={{ fontSize: 20 }}>💬</span>
+              <h3 style={{ margin: 0, fontSize: 15 }}>LINE 通路</h3>
+              <span style={{
+                marginLeft: 'auto', fontSize: 11, padding: '2px 8px', borderRadius: 10,
+                background: channels.lineChannelToken && channels.lineChannelSecret ? '#e8f5e9' : '#f5f5f5',
+                color: channels.lineChannelToken && channels.lineChannelSecret ? '#2e7d32' : '#999',
+              }}>
+                {channels.lineChannelToken && channels.lineChannelSecret ? '● 已啟用' : '○ 未設定'}
+              </span>
+            </div>
+
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 12, color: '#666', marginBottom: 4 }}>Channel Access Token</div>
+              <input
+                value={channels.lineChannelToken}
+                onChange={e => setChannels(p => ({ ...p, lineChannelToken: e.target.value }))}
+                placeholder="貼上 LINE Channel Access Token"
+                style={{ width: '100%', border: '1px solid #e0e0e0', borderRadius: 6, padding: '8px 10px', fontSize: 13, boxSizing: 'border-box' as const }}
+              />
+            </div>
+
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 12, color: '#666', marginBottom: 4 }}>Channel Secret</div>
+              <input
+                value={channels.lineChannelSecret}
+                onChange={e => setChannels(p => ({ ...p, lineChannelSecret: e.target.value }))}
+                placeholder="貼上 LINE Channel Secret"
+                style={{ width: '100%', border: '1px solid #e0e0e0', borderRadius: 6, padding: '8px 10px', fontSize: 13, boxSizing: 'border-box' as const }}
+              />
+            </div>
+
+            <div style={{ background: '#f8f9ff', borderRadius: 8, padding: '10px 12px', marginBottom: 14 }}>
+              <div style={{ fontSize: 11, color: '#666', marginBottom: 4 }}>Webhook URL（貼進 LINE Developer Console）</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <code style={{ fontSize: 11, color: '#444', wordBreak: 'break-all' as const, flex: 1 }}>
+                  {`https://ailive-platform.vercel.app/api/line-webhook/${id}`}
+                </code>
+                <button
+                  onClick={() => { navigator.clipboard.writeText(`https://ailive-platform.vercel.app/api/line-webhook/${id}`); }}
+                  style={{ background: '#eee', border: 'none', borderRadius: 4, padding: '4px 8px', cursor: 'pointer', fontSize: 11, whiteSpace: 'nowrap' as const }}
+                >複製</button>
+              </div>
+            </div>
+          </div>
+
+          {/* IG */}
+          <div style={{ background: '#fff', border: '1px solid #e0e0e0', borderRadius: 12, padding: 20 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
+              <span style={{ fontSize: 20 }}>📸</span>
+              <h3 style={{ margin: 0, fontSize: 15 }}>Instagram 通路</h3>
+              <span style={{
+                marginLeft: 'auto', fontSize: 11, padding: '2px 8px', borderRadius: 10,
+                background: channels.igAccessToken && channels.igUserId ? '#fce8ff' : '#f5f5f5',
+                color: channels.igAccessToken && channels.igUserId ? '#7b1fa2' : '#999',
+              }}>
+                {channels.igAccessToken && channels.igUserId ? '● 已啟用' : '○ 未設定'}
+              </span>
+            </div>
+
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 12, color: '#666', marginBottom: 4 }}>Access Token</div>
+              <input
+                value={channels.igAccessToken}
+                onChange={e => setChannels(p => ({ ...p, igAccessToken: e.target.value }))}
+                placeholder="貼上 Instagram Access Token"
+                style={{ width: '100%', border: '1px solid #e0e0e0', borderRadius: 6, padding: '8px 10px', fontSize: 13, boxSizing: 'border-box' as const }}
+              />
+            </div>
+
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 12, color: '#666', marginBottom: 4 }}>Instagram User ID</div>
+              <input
+                value={channels.igUserId}
+                onChange={e => setChannels(p => ({ ...p, igUserId: e.target.value }))}
+                placeholder="貼上 IG Business User ID"
+                style={{ width: '100%', border: '1px solid #e0e0e0', borderRadius: 6, padding: '8px 10px', fontSize: 13, boxSizing: 'border-box' as const }}
+              />
+            </div>
+
+            <div style={{ background: '#f8f9ff', borderRadius: 8, padding: '10px 12px', marginBottom: 14 }}>
+              <div style={{ fontSize: 11, color: '#666' }}>需要 Instagram Graph API 的 Business 帳號 Access Token 與 User ID。Token 過期需重新產生。</div>
+            </div>
+          </div>
+
+        </div>
+
+        {/* 通路儲存 */}
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 16 }}>
+          <button onClick={saveChannels} disabled={channelSaving}
+            style={{ background: channelSaving ? '#ccc' : '#1a1a2e', color: '#fff', border: 'none', borderRadius: 6, padding: '10px 28px', cursor: channelSaving ? 'default' : 'pointer', fontSize: 14, fontWeight: 600 }}>
+            {channelSaving ? '儲存中...' : '儲存通路設定'}
+          </button>
+          {channelMsg && <span style={{ fontSize: 13, color: '#2e7d32' }}>{channelMsg}</span>}
+        </div>
+
       </div>
     </div>
   );
