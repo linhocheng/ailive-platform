@@ -9,15 +9,16 @@
  * 流程：
  *   .docx → mammoth（文字 + 圖片 base64）
  *   .pdf  → pdf-parse（文字）
- *   圖片  → Claude Haiku 描述成繁中文字
+ *   圖片  → 上傳 Firebase Storage（永久 URL）+ Claude Haiku 描述
+ *           → 圖片獨立存成 knowledge 條目（category='image'）
  *   文字  → 按 H1/H2 分塊 → 批次存 platform_knowledge
  */
 import { NextRequest, NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
+import { getFirebaseAdmin } from '@/lib/firebase-admin';
 
 export const maxDuration = 120;
 
-// 解除 Vercel 4.5MB 預設限制，允許最大 20MB 文件
 export const config = {
   api: {
     bodyParser: false,
@@ -56,15 +57,39 @@ function chunkMarkdown(md: string, filename: string): Array<{ title: string; con
   return chunks;
 }
 
+/**
+ * 上傳圖片 base64 到 Firebase Storage → 永久 URL
+ */
+async function uploadImageToStorage(
+  base64Data: string,
+  contentType: string,
+  characterId: string,
+  index: number,
+): Promise<string> {
+  const admin = getFirebaseAdmin();
+  const bucket = admin.storage().bucket();
+  const ext = contentType.includes('png') ? 'png' : contentType.includes('gif') ? 'gif' : contentType.includes('webp') ? 'webp' : 'jpg';
+  const date = new Date().toISOString().slice(0, 10);
+  const path = `knowledge-images/${characterId}/${date}/img_${index}_${Math.random().toString(36).slice(2, 8)}.${ext}`;
+  const buffer = Buffer.from(base64Data, 'base64');
+  const file = bucket.file(path);
+  await file.save(buffer, { metadata: { contentType } });
+  await file.makePublic();
+  return `https://storage.googleapis.com/${bucket.name}/${path}`;
+}
+
+/**
+ * Claude Haiku 描述圖片（繁中）
+ */
 async function describeImage(
   client: Anthropic,
   base64Data: string,
-  contentType: string
+  contentType: string,
 ): Promise<string> {
   try {
     const res = await client.messages.create({
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: 200,
+      max_tokens: 300,
       messages: [{
         role: 'user',
         content: [
@@ -78,15 +103,41 @@ async function describeImage(
           },
           {
             type: 'text',
-            text: '請用繁體中文描述這張圖片的內容，包括文字、圖表、圖示等重要資訊。100字以內。',
+            text: '請用繁體中文詳細描述這張圖片的內容，包括：產品外觀、文字、顏色、圖表數據、圖示等所有重要資訊。150字以內。',
           },
         ],
       }],
     });
-    const desc = (res.content[0] as Anthropic.TextBlock).text.trim();
-    return `\n[圖片說明：${desc}]\n`;
-  } catch (e) {
-    return '\n[圖片：無法描述]\n';
+    return (res.content[0] as Anthropic.TextBlock).text.trim();
+  } catch {
+    return '圖片內容無法識別';
+  }
+}
+
+/**
+ * 儲存一筆 knowledge 條目（呼叫 /api/knowledge POST）
+ */
+async function saveKnowledge(
+  baseUrl: string,
+  characterId: string,
+  title: string,
+  content: string,
+  category: string,
+  imageUrl?: string,
+): Promise<string | null> {
+  try {
+    const body: Record<string, string> = { characterId, title, content, category };
+    if (imageUrl) body.imageUrl = imageUrl;
+
+    const res = await fetch(`${baseUrl}/api/knowledge`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    return data.id || null;
+  } catch {
+    return null;
   }
 }
 
@@ -111,37 +162,50 @@ export async function POST(req: NextRequest) {
     const apiKey = process.env.ANTHROPIC_API_KEY || '';
     const client = new Anthropic({ apiKey });
     const buffer = Buffer.from(await file.arrayBuffer());
+    const baseUrl = req.nextUrl.origin;
+
     let markdown = '';
+    const imageIds: string[] = [];
+    let imageFailed = 0;
 
     if (ext === 'docx') {
-      // ===== DOCX：mammoth + 圖片 Claude 描述 =====
+      // ===== DOCX：文字 + 圖片獨立建檔 =====
       const mammoth = await import('mammoth');
-      const imageDescriptions: string[] = [];
+      let imgIndex = 0;
 
-      const result = await mammoth.convertToHtml(
+      // 先拿純文字
+      const rawResult = await mammoth.extractRawText({ buffer });
+      markdown = rawResult.value;
+
+      // 再跑一次專門抽圖片
+      await mammoth.convertToHtml(
         { buffer },
         {
           convertImage: mammoth.images.imgElement(async (image) => {
-            const base64 = await image.readAsBase64String();
-            const ct = image.contentType || 'image/png';
-            const desc = await describeImage(client, base64, ct);
-            imageDescriptions.push(desc);
-            // 在 HTML 裡插入佔位文字（後面從 rawText 重組）
-            return { src: '' }; // 圖不顯示，內容在 rawText 裡補
+            imgIndex++;
+            try {
+              const base64 = await image.readAsBase64String();
+              const ct = image.contentType || 'image/png';
+
+              // 並行：上傳圖片 + Haiku 描述
+              const [imageUrl, description] = await Promise.all([
+                uploadImageToStorage(base64, ct, characterId, imgIndex),
+                describeImage(client, base64, ct),
+              ]);
+
+              // 圖片獨立存成 knowledge 條目
+              const title = `${file.name} — 圖片 ${imgIndex}`;
+              const content = `${description}\n\n圖片網址：${imageUrl}`;
+              const id = await saveKnowledge(baseUrl, characterId, title, content, 'image', imageUrl);
+              if (id) imageIds.push(id);
+              else imageFailed++;
+            } catch {
+              imageFailed++;
+            }
+            return { src: '' };
           }),
         }
       );
-
-      // 同時拿純文字（不含圖片）
-      const rawResult = await mammoth.extractRawText({ buffer });
-      let rawText = rawResult.value;
-
-      // 把圖片描述插在文字末尾（簡化處理，不精確定位）
-      if (imageDescriptions.length > 0) {
-        rawText += '\n\n## 文件圖片內容\n' + imageDescriptions.join('\n');
-      }
-
-      markdown = rawText;
 
     } else {
       // ===== PDF：pdf-parse（純文字）=====
@@ -151,39 +215,23 @@ export async function POST(req: NextRequest) {
       markdown = data.text;
     }
 
-    if (!markdown.trim()) {
-      return NextResponse.json({ error: '文件解析後內容為空' }, { status: 400 });
-    }
+    // ===== 文字分塊存知識庫 =====
+    const textIds: string[] = [];
+    let textFailed = 0;
 
-    // 分塊
-    const chunks = chunkMarkdown(markdown, file.name);
-    if (chunks.length === 0) {
-      return NextResponse.json({ error: '找不到有效內容' }, { status: 400 });
-    }
-
-    // 批次存進知識庫
-    const baseUrl = req.nextUrl.origin;
-    const ids: string[] = [];
-    const failed: number[] = [];
-
-    for (let i = 0; i < chunks.length; i++) {
-      const chunk = chunks[i];
-      try {
-        const res = await fetch(`${baseUrl}/api/knowledge`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            characterId,
-            title: chunk.title || `${file.name} — 段落 ${i + 1}`,
-            content: chunk.content,
-            category,
-          }),
-        });
-        const data = await res.json();
-        if (data.id) ids.push(data.id);
-        else failed.push(i);
-      } catch {
-        failed.push(i);
+    if (markdown.trim()) {
+      const chunks = chunkMarkdown(markdown, file.name);
+      for (let i = 0; i < chunks.length; i++) {
+        const chunk = chunks[i];
+        const id = await saveKnowledge(
+          baseUrl,
+          characterId,
+          chunk.title || `${file.name} — 段落 ${i + 1}`,
+          chunk.content,
+          category,
+        );
+        if (id) textIds.push(id);
+        else textFailed++;
       }
     }
 
@@ -191,10 +239,8 @@ export async function POST(req: NextRequest) {
       success: true,
       filename: file.name,
       format: ext,
-      totalChunks: chunks.length,
-      saved: ids.length,
-      failed: failed.length,
-      ids,
+      text: { chunks: textIds.length, failed: textFailed, ids: textIds },
+      images: { chunks: imageIds.length, failed: imageFailed, ids: imageIds },
     });
 
   } catch (e: unknown) {
