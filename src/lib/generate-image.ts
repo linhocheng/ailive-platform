@@ -12,7 +12,7 @@
  * - 所有 route 直接 import，不走 HTTP 呼叫（Vercel server-to-server 禁忌）
  */
 import { getFirestore, getFirebaseAdmin } from '@/lib/firebase-admin';
-import { generateWithGemini } from '@/lib/gemini-imagen';
+import { generateWithGrok } from '@/lib/grok-imagen';
 
 export interface GenerateImageResult {
   imageUrl: string;
@@ -135,8 +135,7 @@ export async function generateImageForCharacter(
   const refs = vi?.refs || [];
 
   const apiKey = process.env.ANTHROPIC_API_KEY || '';
-  const geminiKey = process.env.GEMINI_API_KEY;
-  if (!geminiKey) throw new Error('GEMINI_API_KEY 未設定');
+  // Grok: XAI_API_KEY via grok-imagen
 
   // 1. 翻譯中文 prompt
   const { text: englishPrompt, translated } = await translateToEnglish(rawPrompt, apiKey);
@@ -159,7 +158,7 @@ export async function generateImageForCharacter(
     const usedRef = refs.find(r => r.url === selectedRef);
 
     // 4. Gemini multimodal 鎖臉
-    const result = await generateWithGemini(finalPrompt, selectedRef, storagePath);
+    const result = await generateWithGrok(finalPrompt, selectedRef, storagePath);
     return {
       imageUrl: result.imageUrl,
       model: result.model,
@@ -169,42 +168,9 @@ export async function generateImageForCharacter(
     };
   }
 
-  // 5. 沒有 ref → Gemini text-only
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key=${geminiKey}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: finalPrompt }] }],
-        generationConfig: { responseModalities: ['IMAGE', 'TEXT'] },
-      }),
-    }
-  );
-
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`Gemini 生圖失敗：${err.slice(0, 200)}`);
-  }
-
-  const data = await res.json();
-  const imgPart = data.candidates?.[0]?.content?.parts?.find(
-    (p: { inlineData?: { mimeType: string; data: string } }) => p.inlineData
-  );
-  if (!imgPart?.inlineData?.data) throw new Error('Gemini 沒有回傳圖片');
-
-  const admin = getFirebaseAdmin();
-  const bucket = admin.storage().bucket();
-  const imgBuffer = Buffer.from(imgPart.inlineData.data, 'base64');
-  const mimeType = imgPart.inlineData.mimeType || 'image/jpeg';
-  const ext = mimeType.split('/')[1] || 'jpg';
-  const filePath = `${storagePath}/${Date.now()}.${ext}`;
-  const file = bucket.file(filePath);
-  await file.save(new Uint8Array(imgBuffer), { metadata: { contentType: mimeType } });
-  await file.makePublic();
-  const imageUrl = `https://storage.googleapis.com/${bucket.name}/${filePath}`;
-
-  return { imageUrl, model: 'gemini-2.5-flash-image', promptTranslated: translated };
+  // 5. 沒有 ref → Grok text-only
+  const result = await generateWithGrok(finalPrompt, null, storagePath);
+  return { imageUrl: result.imageUrl, model: result.model, promptTranslated: translated };
 }
 
 /**
