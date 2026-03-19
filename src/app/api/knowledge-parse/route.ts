@@ -78,12 +78,12 @@ async function describeImage(client: Anthropic, base64Data: string, contentType:
   try {
     const res = await client.messages.create({
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: 300,
+      max_tokens: 60,
       messages: [{
         role: 'user',
         content: [
           { type: 'image', source: { type: 'base64', media_type: contentType as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp', data: base64Data } },
-          { type: 'text', text: '請用繁體中文詳細描述這張圖片的內容，包括：產品外觀、文字、顏色、圖表數據、圖示等所有重要資訊。150字以內。' },
+          { type: 'text', text: '這張圖片是什麼產品？只輸出商品名稱，不超過20字，不要其他說明。' },
         ],
       }],
     });
