@@ -177,6 +177,35 @@ export async function POST(req: NextRequest) {
       proposalCreated = true;
     }
 
+    // 5. knowledge 去重（cosine > 0.85，合併同義知識條目）
+    const kSnap = await db.collection('platform_knowledge')
+      .where('characterId', '==', characterId)
+      .limit(200)
+      .get();
+
+    const kDocs = kSnap.docs.map(d => ({ id: d.id, ...d.data() })) as Record<string, unknown>[];
+    const kWithEmb = kDocs.filter(k => k.embedding && Array.isArray(k.embedding) && k.category !== 'image');
+    const kMerged: string[] = [];
+    const kMergedSet = new Set<string>();
+
+    for (let i = 0; i < kWithEmb.length; i++) {
+      if (kMergedSet.has(kWithEmb[i].id as string)) continue;
+      for (let j = i + 1; j < kWithEmb.length; j++) {
+        if (kMergedSet.has(kWithEmb[j].id as string)) continue;
+        const score = cosineSimilarity(kWithEmb[i].embedding as number[], kWithEmb[j].embedding as number[]);
+        if (score > 0.85) {
+          kMergedSet.add(kWithEmb[j].id as string);
+          if (!dryRun) {
+            // hitCount 取最大，保留第一條，刪除重複
+            const keepHit = Math.max((kWithEmb[i].hitCount as number) || 0, (kWithEmb[j].hitCount as number) || 0);
+            await db.collection('platform_knowledge').doc(kWithEmb[i].id as string).update({ hitCount: keepHit });
+            await db.collection('platform_knowledge').doc(kWithEmb[j].id as string).delete();
+            kMerged.push(String(kWithEmb[j].title || kWithEmb[j].id));
+          }
+        }
+      }
+    }
+
     return NextResponse.json({
       success: true,
       dryRun: !!dryRun,
@@ -188,6 +217,7 @@ export async function POST(req: NextRequest) {
         selfReflection: selfReflection.slice(0, 100),
         proposalCreated,
         coreCount,
+        knowledgeMerged: kMerged.length,
       },
     });
   } catch (e: unknown) {

@@ -142,7 +142,7 @@ async function executeTool(
 
   if (toolName === 'query_knowledge_base') {
     const query = String(toolInput.query || '');
-    const limit = Number(toolInput.limit || 5);
+    const limit = Number(toolInput.limit || 15);
 
     const [knowledgeSnap, insightSnap] = await Promise.all([
       db.collection('platform_knowledge').where('characterId', '==', characterId).limit(100).get(),
@@ -191,7 +191,8 @@ async function executeTool(
       }
     }
 
-    return scored.map(({ d, score }) => {
+    // 組原始 context 字串
+    const rawContext = scored.map(({ d, score }) => {
       const timeLabel = (() => {
         if (!d.eventDate) return '';
         const diffDays = Math.floor((Date.now() - new Date(d.eventDate as string).getTime()) / 86400000);
@@ -201,15 +202,44 @@ async function executeTool(
         return `（${d.eventDate}）`;
       })();
       const tag = d._type === 'knowledge' ? `[天命・${d.category || '一般'}]` : `[記憶${timeLabel}]`;
-      // 知識庫用 summary（精煉），insights 用 content
       const body = d._type === 'knowledge'
-        ? String(d.content || d.summary || '').slice(0, 300)  // 完整內容，讓蓉兒真正讀到
+        ? String(d.content || d.summary || '').slice(0, 300)
         : String(d.content || '').slice(0, 150);
       const imgLine = (d._type === 'knowledge' && d.imageUrl)
-        ? `\n[產品圖 imageUrl: ${d.imageUrl}]（生圖時把這個 URL 填入 reference_image_url，讓繪圖師照著真實產品畫）`
+        ? `\n[產品圖 imageUrl: ${d.imageUrl}]（生圖時把這個 URL 填入 reference_image_url）`
         : '';
       return `${tag} ${d.title || ''}：${body}${imgLine} (相似度${(score * 100).toFixed(0)}%)`;
     }).join('\n\n');
+
+    // Haiku 推理：從搜尋結果抽關係，回傳結構化 context
+    if (scored.length >= 2) {
+      try {
+        const Anthropic2 = (await import('@anthropic-ai/sdk')).default;
+        const haikuClient = new Anthropic2({ apiKey: process.env.ANTHROPIC_API_KEY || '' });
+        const reasonRes = await haikuClient.messages.create({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 400,
+          messages: [{
+            role: 'user',
+            content: `以下是知識庫搜尋結果，問題是「${query}」：
+
+${rawContext}
+
+請用2-3句話整理：這些條目裡有哪些關鍵資訊？它們之間有什麼關係？有沒有可以直接用的圖片URL？直接輸出整理結果，不要標題不要列點。`,
+          }],
+        });
+        const reasoned = (reasonRes.content[0] as { text: string }).text.trim();
+        return `${reasoned}
+
+---
+${rawContext}`;
+      } catch {
+        // 推理失敗 fallback 原始結果
+        return rawContext;
+      }
+    }
+
+    return rawContext;
   }
 
   if (toolName === 'remember') {
