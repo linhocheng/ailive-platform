@@ -2,19 +2,19 @@
  * /api/knowledge-parse — 從 Firebase Storage 下載文件，解析存入知識庫
  *
  * POST { storagePath, characterId, filename, category? }
- * → { success, saved, failed, totalChunks }
+ * → { success, text: { chunks, failed }, images: { chunks, failed } }
  *
- * 解析方式（純 Node.js，Vercel 相容）：
- *   .docx → mammoth（extractRawText）
- *   .pdf  → pdf-parse
+ * .docx → mammoth 抽文字 + 圖片各自獨立建檔
+ * .pdf  → pdf-parse（純文字）
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getFirebaseAdmin } from '@/lib/firebase-admin';
+import Anthropic from '@anthropic-ai/sdk';
 import mammoth from 'mammoth';
-
 
 export const maxDuration = 120;
 
+// ===== 文字分塊 =====
 function chunkText(text: string, filename: string): Array<{ title: string; content: string }> {
   const lines = text.split('\n');
   const chunks: Array<{ title: string; content: string }> = [];
@@ -31,26 +31,20 @@ function chunkText(text: string, filename: string): Array<{ title: string; conte
   };
 
   for (const line of lines) {
-    // 偵測標題行（全大寫短行、或 markdown # 開頭）
     if (line.startsWith('# ') || line.startsWith('## ')) {
       flush();
       currentTitle = line.replace(/^#+\s+/, '').trim();
     } else if (line.trim().length > 0 && line.trim().length < 60 && line === line.toUpperCase() && /[A-Z\u4e00-\u9fff]/.test(line)) {
-      // 全大寫短行視為標題
       flush();
       currentTitle = line.trim();
     } else {
       currentContent.push(line);
-      // 每 800 字自動切塊（避免 embedding 超長）
-      if (currentContent.join('\n').length > 800) {
-        flush();
-      }
+      if (currentContent.join('\n').length > 800) flush();
     }
   }
   flush();
 
   if (chunks.length === 0 && text.trim().length > 0) {
-    // 整份文件當一個 chunk（超長則切段）
     const words = text.trim();
     for (let i = 0; i < words.length; i += 800) {
       chunks.push({ title: `${filename} — 段落 ${chunks.length + 1}`, content: words.slice(i, i + 800) });
@@ -60,27 +54,119 @@ function chunkText(text: string, filename: string): Array<{ title: string; conte
   return chunks;
 }
 
+// ===== 圖片上傳 Firebase Storage =====
+async function uploadImageToStorage(
+  base64Data: string,
+  contentType: string,
+  characterId: string,
+  index: number,
+): Promise<string> {
+  const admin = getFirebaseAdmin();
+  const bucket = admin.storage().bucket();
+  const ext = contentType.includes('png') ? 'png' : contentType.includes('gif') ? 'gif' : contentType.includes('webp') ? 'webp' : 'jpg';
+  const date = new Date().toISOString().slice(0, 10);
+  const path = `knowledge-images/${characterId}/${date}/img_${index}_${Math.random().toString(36).slice(2, 8)}.${ext}`;
+  const buffer = Buffer.from(base64Data, 'base64');
+  const file = bucket.file(path);
+  await file.save(buffer, { metadata: { contentType } });
+  await file.makePublic();
+  return `https://storage.googleapis.com/${bucket.name}/${path}`;
+}
+
+// ===== Haiku 描述圖片 =====
+async function describeImage(client: Anthropic, base64Data: string, contentType: string): Promise<string> {
+  try {
+    const res = await client.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 300,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'image', source: { type: 'base64', media_type: contentType as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp', data: base64Data } },
+          { type: 'text', text: '請用繁體中文詳細描述這張圖片的內容，包括：產品外觀、文字、顏色、圖表數據、圖示等所有重要資訊。150字以內。' },
+        ],
+      }],
+    });
+    return (res.content[0] as Anthropic.TextBlock).text.trim();
+  } catch {
+    return '圖片內容無法識別';
+  }
+}
+
+// ===== 儲存 knowledge 條目 =====
+async function saveKnowledge(
+  baseUrl: string, characterId: string, title: string,
+  content: string, category: string, imageUrl?: string,
+): Promise<string | null> {
+  try {
+    const body: Record<string, string> = { characterId, title, content, category };
+    if (imageUrl) body.imageUrl = imageUrl;
+    const res = await fetch(`${baseUrl}/api/knowledge`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    return data.id || null;
+  } catch {
+    return null;
+  }
+}
+
+// ===== 主流程 =====
 export async function POST(req: NextRequest) {
   try {
     const { storagePath, characterId, filename, category } = await req.json();
-
     if (!storagePath || !characterId || !filename) {
       return NextResponse.json({ error: 'storagePath, characterId, filename 必填' }, { status: 400 });
     }
 
     const ext = filename.split('.').pop()?.toLowerCase();
-
-    // 從 Firebase Storage 下載文件
     const admin = getFirebaseAdmin();
     const bucket = admin.storage().bucket();
     const file = bucket.file(storagePath);
     const [buffer] = await file.download();
+    const baseUrl = req.nextUrl.origin;
+    const apiKey = process.env.ANTHROPIC_API_KEY || '';
+    const client = new Anthropic({ apiKey });
 
-    // 解析文字
     let text = '';
+    const imageIds: string[] = [];
+    let imageFailed = 0;
+
     if (ext === 'docx') {
-      const result = await mammoth.extractRawText({ buffer: Buffer.from(buffer) });
-      text = result.value;
+      // 純文字
+      const rawResult = await mammoth.extractRawText({ buffer: Buffer.from(buffer) });
+      text = rawResult.value;
+
+      // 抽圖片 — 獨立建檔
+      let imgIndex = 0;
+      await mammoth.convertToHtml(
+        { buffer: Buffer.from(buffer) },
+        {
+          convertImage: mammoth.images.imgElement(async (image) => {
+            imgIndex++;
+            try {
+              const base64 = await image.readAsBase64String();
+              const ct = image.contentType || 'image/png';
+              const [imageUrl, description] = await Promise.all([
+                uploadImageToStorage(base64, ct, characterId, imgIndex),
+                describeImage(client, base64, ct),
+              ]);
+              const id = await saveKnowledge(
+                baseUrl, characterId,
+                `${filename} — 圖片 ${imgIndex}`,
+                `${description}\n\n圖片網址：${imageUrl}`,
+                'image', imageUrl,
+              );
+              if (id) imageIds.push(id);
+              else imageFailed++;
+            } catch { imageFailed++; }
+            return { src: '' };
+          }),
+        }
+      );
+
     } else if (ext === 'pdf') {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const pdfParse = require('pdf-parse');
@@ -90,52 +176,25 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: '只支援 .pdf 和 .docx' }, { status: 400 });
     }
 
-    if (!text.trim()) {
-      return NextResponse.json({ error: '文件解析後內容為空' }, { status: 400 });
-    }
-
-    // 分塊
-    const chunks = chunkText(text, filename);
-    if (chunks.length === 0) {
-      return NextResponse.json({ error: '找不到有效內容' }, { status: 400 });
-    }
-
-    // 批次存入知識庫
-    const baseUrl = req.nextUrl.origin;
-    const ids: string[] = [];
-    const failed: number[] = [];
-
-    for (let i = 0; i < chunks.length; i++) {
-      const chunk = chunks[i];
-      try {
-        const res = await fetch(`${baseUrl}/api/knowledge`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            characterId,
-            title: chunk.title,
-            content: chunk.content,
-            category: category || 'document',
-          }),
-        });
-        const data = await res.json();
-        if (data.id) ids.push(data.id);
-        else failed.push(i);
-      } catch {
-        failed.push(i);
+    // 文字分塊存入
+    const textIds: string[] = [];
+    let textFailed = 0;
+    if (text.trim()) {
+      const chunks = chunkText(text, filename);
+      for (let i = 0; i < chunks.length; i++) {
+        const id = await saveKnowledge(baseUrl, characterId, chunks[i].title, chunks[i].content, category || 'document');
+        if (id) textIds.push(id);
+        else textFailed++;
       }
     }
 
-    // 清理 Storage 暫存文件
     await file.delete().catch(() => {});
 
     return NextResponse.json({
       success: true,
       filename,
-      totalChunks: chunks.length,
-      saved: ids.length,
-      failed: failed.length,
-      ids,
+      text: { chunks: textIds.length, failed: textFailed, ids: textIds },
+      images: { chunks: imageIds.length, failed: imageFailed, ids: imageIds },
     });
 
   } catch (e: unknown) {
