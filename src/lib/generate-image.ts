@@ -154,12 +154,12 @@ export async function generateImageForCharacter(
   const storagePath = `platform-images/${characterId}`;
 
   if (characterSheet) {
-    // 3. 選圖：外部產品圖優先，否則三維度評分選 ref
-    const selectedRef = overrideRefUrl || selectBestRef(refs, rawPrompt, characterSheet);
+    // 3. 臉的 ref：永遠從 visualIdentity refs 三維度選，不被產品圖覆蓋
+    const selectedRef = selectBestRef(refs, rawPrompt, characterSheet);
     const usedRef = refs.find(r => r.url === selectedRef);
 
-    // 4. Grok 鎖臉生圖
-    const result = await generateWithGrok(finalPrompt, selectedRef, storagePath);
+    // 4. Grok 生圖：臉 ref + 產品圖（若有）同時送入
+    const result = await generateWithGrok(finalPrompt, selectedRef, storagePath, overrideRefUrl);
     return {
       imageUrl: result.imageUrl,
       model: result.model,
@@ -169,7 +169,7 @@ export async function generateImageForCharacter(
     };
   }
 
-  // 沒有 characterSheet 但有外部 ref（產品圖）
+  // 沒有 characterSheet 但有產品圖：直接當 ref 畫
   if (overrideRefUrl) {
     const result = await generateWithGrok(finalPrompt, overrideRefUrl, storagePath);
     return { imageUrl: result.imageUrl, model: result.model, promptTranslated: translated };
