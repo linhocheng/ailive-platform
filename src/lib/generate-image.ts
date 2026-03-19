@@ -116,6 +116,7 @@ async function translateToEnglish(text: string, apiKey: string): Promise<{ text:
 export async function generateImageForCharacter(
   characterId: string,
   rawPrompt: string,
+  overrideRefUrl?: string,  // 從知識庫拿到的產品圖 URL，優先於 visualIdentity refs
 ): Promise<GenerateImageResult> {
   const db = getFirestore();
   const charDoc = await db.collection('platform_characters').doc(characterId).get();
@@ -153,11 +154,11 @@ export async function generateImageForCharacter(
   const storagePath = `platform-images/${characterId}`;
 
   if (characterSheet) {
-    // 3. 多維度選圖
-    const selectedRef = selectBestRef(refs, rawPrompt, characterSheet);
+    // 3. 選圖：外部產品圖優先，否則三維度評分選 ref
+    const selectedRef = overrideRefUrl || selectBestRef(refs, rawPrompt, characterSheet);
     const usedRef = refs.find(r => r.url === selectedRef);
 
-    // 4. Gemini multimodal 鎖臉
+    // 4. Grok 鎖臉生圖
     const result = await generateWithGrok(finalPrompt, selectedRef, storagePath);
     return {
       imageUrl: result.imageUrl,
@@ -166,6 +167,12 @@ export async function generateImageForCharacter(
       usedAngle: usedRef?.angle,
       promptTranslated: translated,
     };
+  }
+
+  // 沒有 characterSheet 但有外部 ref（產品圖）
+  if (overrideRefUrl) {
+    const result = await generateWithGrok(finalPrompt, overrideRefUrl, storagePath);
+    return { imageUrl: result.imageUrl, model: result.model, promptTranslated: translated };
   }
 
   // 5. 沒有 ref → Grok text-only

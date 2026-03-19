@@ -71,6 +71,7 @@ const PLATFORM_TOOLS: Anthropic.Tool[] = [
       properties: {
         prompt: { type: 'string', description: '圖像描述（英文更準）' },
         aspect_ratio: { type: 'string', enum: ['1:1', '16:9', '9:16', '4:3', '3:4'], description: '比例，預設 1:1' },
+        reference_image_url: { type: 'string', description: '產品參考圖 URL——從知識庫搜到產品圖時，把 imageUrl 填在這裡，讓繪圖師照著真實產品畫，而不是靠想像。' },
       },
       required: ['prompt'],
     },
@@ -204,7 +205,10 @@ async function executeTool(
       const body = d._type === 'knowledge'
         ? String(d.content || d.summary || '').slice(0, 300)  // 完整內容，讓蓉兒真正讀到
         : String(d.content || '').slice(0, 150);
-      return `${tag} ${d.title || ''}：${body} (相似度${(score * 100).toFixed(0)}%)`;
+      const imgLine = (d._type === 'knowledge' && d.imageUrl)
+        ? `\n[產品圖 imageUrl: ${d.imageUrl}]（生圖時把這個 URL 填入 reference_image_url，讓繪圖師照著真實產品畫）`
+        : '';
+      return `${tag} ${d.title || ''}：${body}${imgLine} (相似度${(score * 100).toFixed(0)}%)`;
     }).join('\n\n');
   }
 
@@ -237,8 +241,9 @@ async function executeTool(
   if (toolName === 'generate_image') {
     const prompt = String(toolInput.prompt || '');
     if (!prompt) return '需要圖像描述才能生成。';
+    const refUrl = toolInput.reference_image_url ? String(toolInput.reference_image_url) : undefined;
     try {
-      const result = await generateImageForCharacter(characterId, prompt);
+      const result = await generateImageForCharacter(characterId, prompt, refUrl);
       return `IMAGE_URL:${result.imageUrl}`;
     } catch (e: unknown) {
       return `⚠️ 生圖錯誤：${e instanceof Error ? e.message : String(e)}`;
