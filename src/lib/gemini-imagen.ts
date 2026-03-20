@@ -22,20 +22,11 @@ export interface GeminiImageResult {
 }
 
 /**
- * 圖片 URL → Gemini image part
- * Firebase Storage URL 直接用 fileUri，不需下載不需 base64，payload 最小
- * 其他 URL fallback 到下載 base64
+ * 圖片 URL → Gemini inlineData part（下載 base64）
  */
 async function toGeminiImagePart(url: string): Promise<unknown> {
-  // Firebase Storage URL → 轉 gs:// URI
-  const gsMatch = url.match(/https:\/\/storage\.googleapis\.com\/([^/]+)\/(.+)/);
-  if (gsMatch) {
-    const mimeType = url.endsWith('.png') ? 'image/png' : 'image/jpeg';
-    return { fileData: { mimeType, fileUri: `gs://${gsMatch[1]}/${gsMatch[2]}` } };
-  }
-  // fallback: 下載 base64
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 15000);
+  const timer = setTimeout(() => controller.abort(), 20000);
   const res = await fetch(url, { signal: controller.signal }).finally(() => clearTimeout(timer));
   if (!res.ok) throw new Error(`圖片下載失敗 ${res.status}: ${url}`);
   const buffer = Buffer.from(await res.arrayBuffer());

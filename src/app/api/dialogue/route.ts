@@ -273,8 +273,18 @@ ${rawContext}`;
     if (!prompt) return '需要圖像描述才能生成。';
     const refUrl = toolInput.reference_image_url ? String(toolInput.reference_image_url) : undefined;
     try {
-      const result = await generateImageForCharacter(characterId, prompt, refUrl);
-      return `IMAGE_URL:${result.imageUrl}`;
+      // 打獨立 route（maxDuration=300），避免 dialogue 120s 超時
+      const baseUrl = process.env.VERCEL_URL
+        ? `https://${process.env.VERCEL_URL}`
+        : 'https://ailive-platform.vercel.app';
+      const res = await fetch(`${baseUrl}/api/image/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ characterId, prompt, overrideRefUrl: refUrl }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || '生圖失敗');
+      return `IMAGE_URL:${data.imageUrl}`;
     } catch (e: unknown) {
       return `⚠️ 生圖錯誤：${e instanceof Error ? e.message : String(e)}`;
     }
