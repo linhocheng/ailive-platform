@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { CharNav } from '../page';
 
-interface Post { id: string; content: string; imageUrl: string; topic: string; status: string; createdAt: string; scheduledAt?: string; }
+interface Post { id: string; content: string; imageUrl: string; topic: string; status: string; createdAt: string; scheduledAt?: string; igPostId?: string; }
 
 const STATUS_COLORS: Record<string, { bg: string; color: string; label: string }> = {
   draft: { bg: '#fff3e0', color: '#e65100', label: '草稿' },
@@ -19,6 +19,7 @@ export default function PostsPage() {
   const [charName, setCharName] = useState('');
   const [filter, setFilter] = useState('draft');
   const [acting, setActing] = useState<string | null>(null);
+  const [igMsg, setIgMsg] = useState<Record<string, string>>({});
 
   const load = () => {
     setLoading(true);
@@ -51,6 +52,29 @@ export default function PostsPage() {
     if (!confirm('確定刪除？')) return;
     await fetch(`/api/posts?id=${postId}`, { method: 'DELETE' });
     load();
+  };
+
+  const publishToIG = async (postId: string) => {
+    if (!confirm('確定發佈到 Instagram？')) return;
+    setActing(postId);
+    setIgMsg(prev => ({ ...prev, [postId]: '發佈中...' }));
+    try {
+      const res = await fetch('/api/posts/publish-ig', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ postId }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setIgMsg(prev => ({ ...prev, [postId]: '✅ 已發到 IG！' }));
+        setTimeout(() => load(), 1200);
+      } else {
+        setIgMsg(prev => ({ ...prev, [postId]: `❌ ${data.error}` }));
+      }
+    } catch (err) {
+      setIgMsg(prev => ({ ...prev, [postId]: `❌ ${String(err)}` }));
+    }
+    setActing(null);
   };
 
   const filtered = filter === 'all' ? posts : posts.filter(p => p.status === filter);
@@ -87,6 +111,7 @@ export default function PostsPage() {
               <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                 <span style={{ background: sc.bg, color: sc.color, padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600 }}>{sc.label}</span>
                 {post.topic && <span style={{ color: '#666', fontSize: 13 }}>#{post.topic}</span>}
+                {post.igPostId && <span style={{ background: '#fce8ff', color: '#7b1fa2', padding: '2px 8px', borderRadius: 20, fontSize: 11 }}>📸 IG 已發佈</span>}
               </div>
               <span style={{ fontSize: 12, color: '#bbb' }}>{new Date(post.createdAt).toLocaleString('zh-TW')}</span>
             </div>
@@ -99,7 +124,7 @@ export default function PostsPage() {
               </div>
             )}
             {post.status === 'draft' && (
-              <div style={{ display: 'flex', gap: 8 }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                 <button onClick={() => approve(post.id)} disabled={acting === post.id}
                   style={{ background: '#2e7d32', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 20px', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
                   ✓ 核准
@@ -108,7 +133,14 @@ export default function PostsPage() {
                   style={{ background: '#c62828', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 20px', cursor: 'pointer', fontSize: 13 }}>
                   ✗ 拒絕
                 </button>
+                {post.imageUrl && (
+                  <button onClick={() => publishToIG(post.id)} disabled={acting === post.id}
+                    style={{ background: acting === post.id ? '#ccc' : 'linear-gradient(135deg, #833ab4, #fd1d1d, #fcb045)', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 20px', cursor: acting === post.id ? 'default' : 'pointer', fontSize: 13, fontWeight: 600 }}>
+                    📸 發到 IG
+                  </button>
+                )}
                 <button onClick={() => del(post.id)} style={{ background: 'none', border: '1px solid #e0e0e0', color: '#999', borderRadius: 6, padding: '8px 14px', cursor: 'pointer', fontSize: 13 }}>刪除</button>
+                {igMsg[post.id] && <span style={{ fontSize: 13, color: igMsg[post.id].startsWith('✅') ? '#2e7d32' : '#c62828' }}>{igMsg[post.id]}</span>}
               </div>
             )}
           </div>
