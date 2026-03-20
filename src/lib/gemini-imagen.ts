@@ -22,16 +22,17 @@ export interface GeminiImageResult {
 }
 
 /**
- * 圖片 URL → Gemini inlineData part（下載 base64）
+ * 下載圖片 URL → base64 + mimeType
  */
-async function toGeminiImagePart(url: string): Promise<unknown> {
+async function urlToBase64(url: string): Promise<{ data: string; mimeType: string }> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 20000);
+  const timer = setTimeout(() => controller.abort(), 15000); // 15s timeout
   const res = await fetch(url, { signal: controller.signal }).finally(() => clearTimeout(timer));
   if (!res.ok) throw new Error(`圖片下載失敗 ${res.status}: ${url}`);
-  const buffer = Buffer.from(await res.arrayBuffer());
+  const buffer = await res.arrayBuffer();
   const mimeType = res.headers.get('content-type') || 'image/jpeg';
-  return { inlineData: { mimeType, data: buffer.toString('base64') } };
+  const data = Buffer.from(buffer).toString('base64');
+  return { data, mimeType };
 }
 
 /**
@@ -61,20 +62,27 @@ export async function generateWithGemini(
 
   if (faceRefUrl && productImageUrl) {
     // ===== 多圖：臉 + 產品合成 =====
-    const [facePart, productPart] = await Promise.all([
-      toGeminiImagePart(faceRefUrl),
-      toGeminiImagePart(productImageUrl),
+    const [face, product] = await Promise.all([
+      urlToBase64(faceRefUrl),
+      urlToBase64(productImageUrl),
     ]);
 
     const multiPrompt = `${prompt}. The FIRST image shows the character's face — keep their face, hair, and skin tone identical. The SECOND image shows the product/clothing — replicate its exact appearance, color, and details on the character.`;
 
-    parts.push(facePart, productPart, { text: multiPrompt });
+    parts.push(
+      { inlineData: { mimeType: face.mimeType, data: face.data } },
+      { inlineData: { mimeType: product.mimeType, data: product.data } },
+      { text: multiPrompt },
+    );
 
   } else if (faceRefUrl) {
     // ===== 單圖：只鎖臉 =====
-    const facePart = await toGeminiImagePart(faceRefUrl);
+    const face = await urlToBase64(faceRefUrl);
     const faceLock = "Keep the subject's face, hair, skin tone, and facial features identical to the reference photo.";
-    parts.push(facePart, { text: `${prompt}. ${faceLock}` });
+    parts.push(
+      { inlineData: { mimeType: face.mimeType, data: face.data } },
+      { text: `${prompt}. ${faceLock}` },
+    );
 
   } else {
     // ===== 純文字生圖 =====
