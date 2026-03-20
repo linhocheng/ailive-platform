@@ -25,7 +25,9 @@ export interface GeminiImageResult {
  * 下載圖片 URL → base64 + mimeType
  */
 async function urlToBase64(url: string): Promise<{ data: string; mimeType: string }> {
-  const res = await fetch(url);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000); // 15s timeout
+  const res = await fetch(url, { signal: controller.signal }).finally(() => clearTimeout(timer));
   if (!res.ok) throw new Error(`圖片下載失敗 ${res.status}: ${url}`);
   const buffer = await res.arrayBuffer();
   const mimeType = res.headers.get('content-type') || 'image/jpeg';
@@ -92,11 +94,14 @@ export async function generateWithGemini(
     generationConfig: { responseModalities: ['IMAGE', 'TEXT'] },
   };
 
+  const geminiCtrl = new AbortController();
+  const geminiTimer = setTimeout(() => geminiCtrl.abort(), 90000); // 90s timeout
   const res = await fetch(`${GEMINI_ENDPOINT}?key=${apiKey}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
-  });
+    signal: geminiCtrl.signal,
+  }).finally(() => clearTimeout(geminiTimer));
 
   if (!res.ok) {
     const err = await res.text();
