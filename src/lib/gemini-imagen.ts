@@ -12,6 +12,7 @@
  */
 import { generateImagePath } from '@/lib/image-storage';
 import { getFirebaseAdmin } from '@/lib/firebase-admin';
+import sharp from 'sharp';
 
 const GEMINI_IMAGE_MODEL = 'gemini-2.5-flash-image';
 const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_IMAGE_MODEL}:generateContent`;
@@ -29,10 +30,27 @@ async function urlToBase64(url: string): Promise<{ data: string; mimeType: strin
   const timer = setTimeout(() => controller.abort(), 15000); // 15s timeout
   const res = await fetch(url, { signal: controller.signal }).finally(() => clearTimeout(timer));
   if (!res.ok) throw new Error(`圖片下載失敗 ${res.status}: ${url}`);
-  const buffer = await res.arrayBuffer();
+  const buffer = Buffer.from(await res.arrayBuffer());
   const mimeType = res.headers.get('content-type') || 'image/jpeg';
-  const data = Buffer.from(buffer).toString('base64');
-  return { data, mimeType };
+  // 壓縮到 512px 以內，減少 payload 大小
+  return resizeImageBuffer(buffer, mimeType);
+}
+
+/**
+ * 圖片壓縮：限制最大寬高 512px，JPEG 80 品質
+ * 大圖丟進 Gemini 會讓 payload 過大且生圖變慢
+ */
+async function resizeImageBuffer(buffer: Buffer, mimeType: string): Promise<{ data: string; mimeType: string }> {
+  try {
+    const resized = await sharp(buffer)
+      .resize({ width: 512, height: 512, fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: 80 })
+      .toBuffer();
+    return { data: resized.toString('base64'), mimeType: 'image/jpeg' };
+  } catch {
+    // 壓縮失敗 fallback 原始
+    return { data: buffer.toString('base64'), mimeType };
+  }
 }
 
 /**
