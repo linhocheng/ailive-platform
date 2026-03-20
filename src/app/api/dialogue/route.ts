@@ -424,6 +424,20 @@ export async function POST(req: NextRequest) {
     const db = getFirestore();
     const { characterId, userId, message, conversationId, image } = await req.json();
 
+  // 從 base64 header 偵測真實圖片格式，不信任前端傳的 media_type
+  if (image?.data) {
+    const header = image.data.slice(0, 16);
+    const bytes = Buffer.from(header, 'base64');
+    if (bytes[0] === 0x89 && bytes[1] === 0x50) image.media_type = 'image/png';
+    else if (bytes[0] === 0xFF && bytes[1] === 0xD8) image.media_type = 'image/jpeg';
+    else if (bytes[0] === 0x52 && bytes[1] === 0x49) image.media_type = 'image/webp';
+    else if (bytes[0] === 0x47 && bytes[1] === 0x49) image.media_type = 'image/gif';
+    // 確保只用 Claude 支援的格式
+    if (!['image/jpeg','image/png','image/gif','image/webp'].includes(image.media_type)) {
+      image.media_type = 'image/jpeg';
+    }
+  }
+
     if (!characterId || !message) {
       return NextResponse.json({ error: 'characterId, message 必填' }, { status: 400 });
     }
