@@ -8,12 +8,6 @@
   "functions": {
     "src/app/api/knowledge-upload/route.ts": {
       "maxDuration": 120
-    },
-    "src/app/api/dialogue/route.ts": {
-      "maxDuration": 300
-    },
-    "src/app/api/image/generate/route.ts": {
-      "maxDuration": 300
     }
   }
 }
