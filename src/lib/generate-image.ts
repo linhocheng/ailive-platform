@@ -12,7 +12,7 @@
  * - 所有 route 直接 import，不走 HTTP 呼叫（Vercel server-to-server 禁忌）
  */
 import { getFirestore, getFirebaseAdmin } from '@/lib/firebase-admin';
-import { generateWithGrok } from '@/lib/grok-imagen';
+import { generateWithGemini } from '@/lib/gemini-imagen';
 
 export interface GenerateImageResult {
   imageUrl: string;
@@ -159,7 +159,7 @@ export async function generateImageForCharacter(
     const usedRef = refs.find(r => r.url === selectedRef);
 
     // 4. Grok 生圖：臉 ref + 產品圖（若有）同時送入
-    const result = await generateWithGrok(finalPrompt, selectedRef, storagePath, overrideRefUrl);
+    const result = await generateWithGemini(finalPrompt, selectedRef, storagePath, overrideRefUrl);
     return {
       imageUrl: result.imageUrl,
       model: result.model,
@@ -171,12 +171,12 @@ export async function generateImageForCharacter(
 
   // 沒有 characterSheet 但有產品圖：直接當 ref 畫
   if (overrideRefUrl) {
-    const result = await generateWithGrok(finalPrompt, overrideRefUrl, storagePath);
+    const result = await generateWithGemini(finalPrompt, overrideRefUrl, storagePath);
     return { imageUrl: result.imageUrl, model: result.model, promptTranslated: translated };
   }
 
   // 5. 沒有 ref → Grok text-only
-  const result = await generateWithGrok(finalPrompt, null, storagePath);
+  const result = await generateWithGemini(finalPrompt, null, storagePath);
   return { imageUrl: result.imageUrl, model: result.model, promptTranslated: translated };
 }
 
