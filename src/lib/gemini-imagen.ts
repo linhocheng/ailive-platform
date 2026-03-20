@@ -12,7 +12,6 @@
  */
 import { generateImagePath } from '@/lib/image-storage';
 import { getFirebaseAdmin } from '@/lib/firebase-admin';
-import sharp from 'sharp';
 
 const GEMINI_IMAGE_MODEL = 'gemini-2.5-flash-image';
 const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_IMAGE_MODEL}:generateContent`;
@@ -23,34 +22,25 @@ export interface GeminiImageResult {
 }
 
 /**
- * 下載圖片 URL → base64 + mimeType
+ * 圖片 URL → Gemini image part
+ * Firebase Storage URL 直接用 fileUri，不需下載不需 base64，payload 最小
+ * 其他 URL fallback 到下載 base64
  */
-async function urlToBase64(url: string): Promise<{ data: string; mimeType: string }> {
+async function toGeminiImagePart(url: string): Promise<unknown> {
+  // Firebase Storage URL → 轉 gs:// URI
+  const gsMatch = url.match(/https:\/\/storage\.googleapis\.com\/([^/]+)\/(.+)/);
+  if (gsMatch) {
+    const mimeType = url.endsWith('.png') ? 'image/png' : 'image/jpeg';
+    return { fileData: { mimeType, fileUri: `gs://${gsMatch[1]}/${gsMatch[2]}` } };
+  }
+  // fallback: 下載 base64
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 15000); // 15s timeout
+  const timer = setTimeout(() => controller.abort(), 15000);
   const res = await fetch(url, { signal: controller.signal }).finally(() => clearTimeout(timer));
   if (!res.ok) throw new Error(`圖片下載失敗 ${res.status}: ${url}`);
   const buffer = Buffer.from(await res.arrayBuffer());
   const mimeType = res.headers.get('content-type') || 'image/jpeg';
-  // 壓縮到 512px 以內，減少 payload 大小
-  return resizeImageBuffer(buffer, mimeType);
-}
-
-/**
- * 圖片壓縮：限制最大寬高 512px，JPEG 80 品質
- * 大圖丟進 Gemini 會讓 payload 過大且生圖變慢
- */
-async function resizeImageBuffer(buffer: Buffer, mimeType: string): Promise<{ data: string; mimeType: string }> {
-  try {
-    const resized = await sharp(buffer)
-      .resize({ width: 512, height: 512, fit: 'inside', withoutEnlargement: true })
-      .jpeg({ quality: 80 })
-      .toBuffer();
-    return { data: resized.toString('base64'), mimeType: 'image/jpeg' };
-  } catch {
-    // 壓縮失敗 fallback 原始
-    return { data: buffer.toString('base64'), mimeType };
-  }
+  return { inlineData: { mimeType, data: buffer.toString('base64') } };
 }
 
 /**
@@ -80,27 +70,20 @@ export async function generateWithGemini(
 
   if (faceRefUrl && productImageUrl) {
     // ===== 多圖：臉 + 產品合成 =====
-    const [face, product] = await Promise.all([
-      urlToBase64(faceRefUrl),
-      urlToBase64(productImageUrl),
+    const [facePart, productPart] = await Promise.all([
+      toGeminiImagePart(faceRefUrl),
+      toGeminiImagePart(productImageUrl),
     ]);
 
     const multiPrompt = `${prompt}. The FIRST image shows the character's face — keep their face, hair, and skin tone identical. The SECOND image shows the product/clothing — replicate its exact appearance, color, and details on the character.`;
 
-    parts.push(
-      { inlineData: { mimeType: face.mimeType, data: face.data } },
-      { inlineData: { mimeType: product.mimeType, data: product.data } },
-      { text: multiPrompt },
-    );
+    parts.push(facePart, productPart, { text: multiPrompt });
 
   } else if (faceRefUrl) {
     // ===== 單圖：只鎖臉 =====
-    const face = await urlToBase64(faceRefUrl);
+    const facePart = await toGeminiImagePart(faceRefUrl);
     const faceLock = "Keep the subject's face, hair, skin tone, and facial features identical to the reference photo.";
-    parts.push(
-      { inlineData: { mimeType: face.mimeType, data: face.data } },
-      { text: `${prompt}. ${faceLock}` },
-    );
+    parts.push(facePart, { text: `${prompt}. ${faceLock}` });
 
   } else {
     // ===== 純文字生圖 =====
