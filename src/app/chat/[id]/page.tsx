@@ -31,7 +31,7 @@ export default function ChatPage() {
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
-  const [pendingImage, setPendingImage] = useState<{ base64: string; preview: string } | null>(null);
+  const [pendingImage, setPendingImage] = useState<{ base64: string; preview: string; mimeType?: string } | null>(null);
 
   // 載入角色資料
   useEffect(() => {
@@ -82,8 +82,12 @@ export default function ChatPage() {
     if (!file) return;
     const reader = new FileReader();
     reader.onload = () => {
-      const base64 = (reader.result as string).split(',')[1];
-      setPendingImage({ base64, preview: reader.result as string });
+      const dataUrl = reader.result as string;
+      const base64 = dataUrl.split(',')[1];
+      // 從實際檔案 MIME type 推斷，不寫死 jpeg
+      const mimeMatch = dataUrl.match(/^data:([^;]+);/);
+      const mimeType = mimeMatch ? mimeMatch[1] : (file.type || 'image/jpeg');
+      setPendingImage({ base64, preview: dataUrl, mimeType });
     };
     reader.readAsDataURL(file);
     e.target.value = '';
@@ -110,7 +114,7 @@ export default function ChatPage() {
         conversationId: conversationId || undefined,
       };
       if (currentImage) {
-        body.image = { type: 'base64', media_type: 'image/jpeg', data: currentImage.base64 };
+        body.image = { type: 'base64', media_type: currentImage.mimeType || 'image/jpeg', data: currentImage.base64 };
       }
 
       const r = await fetch('/api/dialogue', {

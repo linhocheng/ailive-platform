@@ -542,7 +542,7 @@ ${convData.summary ? `對話摘要（上次回顧）：\n${convData.summary}` : 
         role: 'user',
         content: image
           ? [
-              { type: 'image' as const, source: { type: 'base64' as const, media_type: (image.media_type || 'image/jpeg') as 'image/jpeg', data: image.data } },
+              { type: 'image' as const, source: { type: 'base64' as const, media_type: (['image/jpeg','image/png','image/gif','image/webp'].includes(image.media_type) ? image.media_type : 'image/jpeg') as 'image/jpeg', data: image.data } },
               { type: 'text' as const, text: message },
             ]
           : message,
