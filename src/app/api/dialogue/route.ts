@@ -17,6 +17,7 @@ import { getFirestore } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 import { generateEmbedding, cosineSimilarity } from '@/lib/embeddings';
 import { generateImageForCharacter, buildGenerateImageDescription } from '@/lib/generate-image';
+import { generateImagePath } from '@/lib/image-storage';
 
 export const maxDuration = 120;
 
@@ -627,11 +628,31 @@ ${convData.summary ? `對話摘要（上次回顧）：\n${convData.summary}` : 
 
     // 6. 存訊息
     // imageUrl 必須存進 messages，這樣歷史載入時圖片才能顯示
+    // LINE 傳來的 image 是 base64，存進 Storage 才能在網頁歷史中顯示
+    let userImageUrl: string | undefined;
+    if (image?.data) {
+      try {
+        const { getFirebaseAdmin } = await import('@/lib/firebase-admin');
+        const admin = getFirebaseAdmin();
+        const bucket = admin.storage().bucket();
+        const mimeType = image.media_type || 'image/jpeg';
+        const ext = mimeType.includes('png') ? 'png' : mimeType.includes('webp') ? 'webp' : 'jpg';
+        const imgBuffer = Buffer.from(image.data, 'base64');
+        const filePath = generateImagePath(`platform-user-images/${characterId}`).replace(/\.jpg$/, `.${ext}`);
+        const file = bucket.file(filePath);
+        await file.save(imgBuffer, { metadata: { contentType: mimeType } });
+        await file.makePublic();
+        userImageUrl = `https://storage.googleapis.com/${bucket.name}/${filePath}`;
+      } catch (e) {
+        console.warn('[dialogue] user image persist failed:', e);
+      }
+    }
     const userEntry: Record<string, unknown> = {
       role: 'user',
       content: message + (image ? ' [附圖]' : ''),
       timestamp: new Date().toISOString(),
     };
+    if (userImageUrl) userEntry.imageUrl = userImageUrl;
     const assistantEntry: Record<string, unknown> = {
       role: 'assistant',
       content: finalReply,
