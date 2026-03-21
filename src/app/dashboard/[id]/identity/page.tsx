@@ -71,6 +71,7 @@ export default function IdentityPage() {
     igUserId: '',
   });
   const [channelSaving, setChannelSaving] = useState(false);
+  const [lineUserId, setLineUserId] = useState('');
   const [channelMsg, setChannelMsg] = useState('');
 
   const load = () => {
@@ -409,6 +410,34 @@ export default function IdentityPage() {
                   style={{ background: '#eee', border: 'none', borderRadius: 4, padding: '4px 8px', cursor: 'pointer', fontSize: 11, whiteSpace: 'nowrap' as const }}
                 >複製</button>
               </div>
+            </div>
+
+            {/* LINE 共用對話連結 */}
+            <div style={{ background: '#f0f7ff', borderRadius: 8, padding: '10px 12px', marginBottom: 14 }}>
+              <div style={{ fontSize: 11, color: '#666', marginBottom: 6 }}>共用對話連結（網頁 + LINE 同一段記憶）</div>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                <input
+                  type="text"
+                  value={lineUserId}
+                  onChange={e => setLineUserId(e.target.value)}
+                  placeholder="填入 LINE 用戶 ID（Uxxxxxxxx）"
+                  style={{ flex: 1, border: '1px solid #c5d8f0', borderRadius: 6, padding: '6px 10px', fontSize: 12, boxSizing: 'border-box' as const }}
+                />
+              </div>
+              {lineUserId.trim() && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <code style={{ fontSize: 10, color: '#1a6fb5', wordBreak: 'break-all' as const, flex: 1, background: '#e3f0ff', borderRadius: 4, padding: '4px 6px' }}>
+                    {`https://ailive-platform.vercel.app/chat/${id}?cid=line_${id}_${lineUserId.trim()}`}
+                  </code>
+                  <button
+                    onClick={() => navigator.clipboard.writeText(`https://ailive-platform.vercel.app/chat/${id}?cid=line_${id}_${lineUserId.trim()}`)}
+                    style={{ background: '#1a6fb5', color: '#fff', border: 'none', borderRadius: 4, padding: '4px 8px', cursor: 'pointer', fontSize: 11, whiteSpace: 'nowrap' as const }}
+                  >複製</button>
+                </div>
+              )}
+              {!lineUserId.trim() && (
+                <div style={{ fontSize: 11, color: '#999' }}>填入 LINE 用戶 ID 後自動產生連結</div>
+              )}
             </div>
           </div>
 
