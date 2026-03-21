@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, useSearchParams } from 'next/navigation';
 
 interface Message {
   role: 'user' | 'assistant';
@@ -25,7 +25,9 @@ export default function ChatPage() {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
-  const [conversationId, setConversationId] = useState<string | null>(null);
+  const searchParams = useSearchParams();
+  const cidFromUrl = searchParams.get('cid');
+  const [conversationId, setConversationId] = useState<string | null>(cidFromUrl);
   const [userId] = useState(() => `web-${Math.random().toString(36).slice(2, 8)}`);
 
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -40,12 +42,18 @@ export default function ChatPage() {
       .then(d => setChar(d.character));
   }, [characterId]);
 
-  // 恢復 conversationId（localStorage）
+  // 恢復 conversationId：URL ?cid= 優先，其次 localStorage
   useEffect(() => {
-    const saved = localStorage.getItem(`conv-${characterId}`);
-    if (saved) {
-      setConversationId(saved);
-      loadHistory(saved);
+    if (cidFromUrl) {
+      // URL 帶了 cid（來自 LINE 共享連結）→ 存入 localStorage 並載入歷史
+      localStorage.setItem(`conv-${characterId}`, cidFromUrl);
+      loadHistory(cidFromUrl);
+    } else {
+      const saved = localStorage.getItem(`conv-${characterId}`);
+      if (saved) {
+        setConversationId(saved);
+        loadHistory(saved);
+      }
     }
   }, [characterId]);
 

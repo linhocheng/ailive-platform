@@ -77,10 +77,13 @@ async function processEvent(
 
   // 呼叫 dialogue
   const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'https://ailive-platform.vercel.app';
+  // 固定 conversationId：同一個 LINE 用戶 + 角色永遠對應同一段對話（跨 LINE/網頁共享記憶）
+  const fixedConversationId = `line_${characterId}_${userId}`;
   const body: Record<string, unknown> = {
     characterId,
     userId,
     message,
+    conversationId: fixedConversationId,
   };
   if (imagePayload) body.image = imagePayload;
 
