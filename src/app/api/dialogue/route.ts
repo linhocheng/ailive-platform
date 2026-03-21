@@ -549,10 +549,14 @@ export async function POST(req: NextRequest) {
 
 ${convData.summary ? `對話摘要（上次回顧）：\n${convData.summary}` : ''}`;
 
-    // 4. 組歷史訊息
-    const history = (convData.messages as Array<{ role: string; content: string }> || []).slice(-20);
+    // 4. 組歷史訊息（舊圖片不重傳 base64，只帶文字，避免 413）
+    const history = (convData.messages as Array<{ role: string; content: string; imageUrl?: string }> || []).slice(-20);
     const messages: Anthropic.MessageParam[] = [
-      ...history.map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
+      ...history.map(m => ({
+        role: m.role as 'user' | 'assistant',
+        // 舊訊息有 imageUrl 只帶提示文字，不重傳 base64
+        content: m.imageUrl ? `${m.content} [圖片：${m.imageUrl}]` : m.content,
+      })),
       {
         role: 'user',
         content: image
