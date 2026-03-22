@@ -80,7 +80,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'characterId, content 必填' }, { status: 400 });
     }
 
-    const embedding = await generateEmbedding(`${title || ''} ${content}`);
+    // embedding 用 title + content（去掉 URL 行），語義乾淨
+    const cleanedContent = (content || '').split('\n')
+      .filter((line: string) => !line.startsWith('圖片網址：') && !line.startsWith('http'))
+      .join(' ').trim();
+    const embedding = await generateEmbedding(`${title || ''} ${cleanedContent || content}`.slice(0, 1000));
     const now = new Date().toISOString();
 
     // 自動生成 summary（15字以內，常駐注入用）
