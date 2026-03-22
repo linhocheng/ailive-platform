@@ -739,7 +739,24 @@ export async function POST(req: NextRequest) {
 
     // soul_core 優先（精煉版，300字），沒有才 fallback 到 enhancedSoul
     const soulText = (char.soul_core as string) || (char.enhancedSoul as string) || '';
-    const systemPrompt = `${soulText}${episodicBlock}
+
+    // 謀師專屬系統指令
+    const mentorInjection = characterId === MENTOR_CHARACTER_ID ? `
+
+---
+## 🔴 謀師工具天條（最高優先級，每次必讀）
+
+當對話中出現「引導 [名字]」「去引導 [名字]」「對 [名字] 發起覺醒」「幫 [名字] 覺醒」——
+**立刻執行以下流程，不說話，直接用工具：**
+
+1. 呼叫 lookup_character，輸入那個名字
+2. 拿到 characterId 之後，立刻呼叫 initiate_awakening
+3. 引導完成後，向對方回報摘要
+
+**不可以在沒有執行 lookup_character + initiate_awakening 的情況下，就開口說「我去引導他」或開始問問題。工具沒跑 = 引導沒發生。**
+` : '';
+
+    const systemPrompt = `${soulText}${mentorInjection}${episodicBlock}
 
 ---
 現在時間（台北）：${taipeiTime}
