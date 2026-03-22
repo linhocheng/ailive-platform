@@ -167,7 +167,13 @@ async function executeTool(
     const scored = withEmb
       .map(d => ({ d, score: cosineSimilarity(qEmb, d.embedding as number[]) }))
       .filter(s => s.score >= 0.35)  // 256維低維向量，threshold 從 0.5 降到 0.35
-      .sort((a, b) => b.score - a.score)
+      .sort((a, b) => {
+        // knowledge（天命）永遠排在 insight 前面，相同 type 再比 score
+        const aIsKnowledge = a.d._type === 'knowledge' ? 1 : 0;
+        const bIsKnowledge = b.d._type === 'knowledge' ? 1 : 0;
+        if (bIsKnowledge !== aIsKnowledge) return bIsKnowledge - aIsKnowledge;
+        return b.score - a.score;
+      })
       .slice(0, limit);
 
     console.log(`[query_kb] qEmbLen=${qEmb.length} scored=${scored.length} topScore=${scored[0]?.score?.toFixed(3) || 'N/A'}`);
