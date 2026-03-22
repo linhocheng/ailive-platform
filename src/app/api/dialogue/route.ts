@@ -502,9 +502,7 @@ ${targetSoul.slice(0, 800)}`;
 
     // 建立專屬 conversationId（謀師引導該角色的獨立對話）
     const awakeningConvId = `awakening-${targetId}-${Date.now()}`;
-    const baseUrl = process.env.NEXTAUTH_URL || process.env.VERCEL_URL
-      ? `https://${process.env.VERCEL_URL}`
-      : 'https://ailive-platform.vercel.app';
+    const baseUrl = 'https://ailive-platform.vercel.app';
 
     const summary: string[] = [];
     let convId = awakeningConvId;
