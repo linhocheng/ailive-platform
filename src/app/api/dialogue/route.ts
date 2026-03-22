@@ -265,6 +265,10 @@ ${rawContext}`;
       createdAt: new Date().toISOString(),
     });
 
+    await db2.collection('platform_characters').doc(characterId).update({
+      'growthMetrics.totalInsights': FieldValue.increment(1),
+    });
+
     return `已記住：${title}${importance >= 3 ? '（深刻印記）' : ''}`;
   }
 
@@ -378,6 +382,9 @@ ${rawContext}`;
         postId: ref.id,
         embedding,
         createdAt: new Date().toISOString(),
+      });
+      await db2.collection('platform_characters').doc(characterId).update({
+        'growthMetrics.totalInsights': FieldValue.increment(1),
       });
     } catch { /* 記憶存失敗不阻斷草稿儲存 */ }
 

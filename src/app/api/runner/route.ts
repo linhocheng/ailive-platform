@@ -16,6 +16,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
 import { getFirestore } from '@/lib/firebase-admin';
+import { FieldValue } from 'firebase-admin/firestore';
 
 export const maxDuration = 60;
 
@@ -93,6 +94,10 @@ async function runLearnTask(characterId: string, char: Record<string, unknown>, 
     lastHitAt: null,
     embedding,
     createdAt: new Date().toISOString(),
+  });
+
+  await db.collection('platform_characters').doc(characterId).update({
+    'growthMetrics.totalInsights': FieldValue.increment(1),
   });
 
   return insight.title;
@@ -277,6 +282,10 @@ ${promptChoice}
     createdAt: new Date().toISOString(),
   });
 
+  await db.collection('platform_characters').doc(characterId).update({
+    'growthMetrics.totalInsights': FieldValue.increment(1),
+  });
+
   return insight.title;
 }
 
@@ -332,6 +341,9 @@ ${postData.content}
         lastHitAt: null,
         embedding,
         createdAt: new Date().toISOString(),
+      });
+      await db.collection('platform_characters').doc(characterId).update({
+        'growthMetrics.totalInsights': FieldValue.increment(1),
       });
     }
 
