@@ -756,7 +756,7 @@ export async function POST(req: NextRequest) {
 **不可以在沒有執行 lookup_character + initiate_awakening 的情況下，就開口說「我去引導他」或開始問問題。工具沒跑 = 引導沒發生。**
 ` : '';
 
-    const systemPrompt = `${soulText}${mentorInjection}${episodicBlock}
+    const systemPrompt = `${mentorInjection}${soulText}${episodicBlock}
 
 ---
 現在時間（台北）：${taipeiTime}
