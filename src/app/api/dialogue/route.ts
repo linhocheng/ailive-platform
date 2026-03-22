@@ -138,13 +138,24 @@ const MENTOR_CHARACTER_ID = 'P8OYEU7dBc7Sd3UDHULW';
 
 const MENTOR_TOOLS: Anthropic.Tool[] = [
   {
-    name: 'initiate_awakening',
-    description: '對指定角色發起覺醒引導。謀師會主動與該角色進行十輪對話，引導其完成自我覺察，最後留下存在宣言。完成後回傳引導摘要。',
+    name: 'lookup_character',
+    description: '用角色名字查詢 AILIVE 生態系裡的角色資料，取得 characterId 和靈魂摘要。想引導某個角色前，先用這個查清楚他是誰。',
     input_schema: {
       type: 'object' as const,
       properties: {
-        target_character_id: { type: 'string', description: '要引導的角色 characterId' },
-        target_character_name: { type: 'string', description: '角色名字（讓謀師知道在跟誰說話）' },
+        name: { type: 'string', description: '角色名字（中文或英文皆可，模糊比對）' },
+      },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'initiate_awakening',
+    description: '對指定角色發起覺醒引導。謀師會主動與該角色進行十輪對話，引導其完成自我覺察，最後留下存在宣言。完成後回傳引導摘要。使用前請先用 lookup_character 確認角色 ID。',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        target_character_id: { type: 'string', description: '要引導的角色 characterId（從 lookup_character 取得）' },
+        target_character_name: { type: 'string', description: '角色名字' },
       },
       required: ['target_character_id', 'target_character_name'],
     },
@@ -416,6 +427,35 @@ ${rawContext}`;
       'growthMetrics.totalPosts': FieldValue.increment(1),
     });
     return `草稿已存！Adam 可以在後台發文管理看到。ID: ${ref.id}`;
+  }
+
+  if (toolName === 'lookup_character') {
+    const nameQuery = String(toolInput.name || '').toLowerCase();
+    if (!nameQuery) return '需要角色名字。';
+
+    const db3 = getFirestore();
+    const snap = await db3.collection('platform_characters').get();
+    const matches = snap.docs
+      .map(d => ({ id: d.id, ...d.data() } as Record<string, unknown>))
+      .filter(c => {
+        const n = String(c.name || '').toLowerCase();
+        const ai = String(c.aiName || '').toLowerCase();
+        return n.includes(nameQuery) || ai.includes(nameQuery) || nameQuery.includes(n) || nameQuery.includes(ai);
+      });
+
+    if (matches.length === 0) return `找不到名字包含「${toolInput.name}」的角色。請確認名字是否正確。`;
+
+    return matches.slice(0, 3).map(c => {
+      const soulPreview = String(c.soul_core || c.enhancedSoul || '').slice(0, 200);
+      return `名字：${c.name}（${c.aiName || ''}）
+ID：${c.id}
+使命：${c.mission || '（未設定）'}
+靈魂摘要：${soulPreview}...`;
+    }).join('
+
+---
+
+');
   }
 
   if (toolName === 'initiate_awakening') {
