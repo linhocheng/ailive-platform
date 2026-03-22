@@ -117,5 +117,6 @@ export async function generateWithGrok(
   await file.save(imgBuffer, { metadata: { contentType } });
   await file.makePublic();
 
-  return { imageUrl: `https://storage.googleapis.com/${bucket.name}/${finalPath}`, model: GROK_IMAGE_MODEL };
+  const cleanBucketName = bucket.name.replace(/\n/g, '').trim();
+  return { imageUrl: `https://storage.googleapis.com/${cleanBucketName}/${finalPath}`, model: GROK_IMAGE_MODEL };
 }
