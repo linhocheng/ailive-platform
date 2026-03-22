@@ -7,6 +7,7 @@ const NAV_ITEMS = [
   { href: '/soul', label: '靈魂' },
   { href: '/identity', label: '身份' },
   { href: '/knowledge', label: '知識庫' },
+  { href: '/images', label: '生圖檔' },
   { href: '/memory', label: '記憶' },
   { href: '/posts', label: '發文' },
   { href: '/tasks', label: '排程' },
