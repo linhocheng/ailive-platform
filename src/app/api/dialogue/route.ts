@@ -623,6 +623,36 @@ export async function POST(req: NextRequest) {
     const db = getFirestore();
     const { characterId, userId, message, conversationId, image } = await req.json();
 
+    // ===== 謀師快速通道：偵測「引導 [名字]」指令，程式層直接執行 =====
+    if (characterId === MENTOR_CHARACTER_ID && message) {
+      const awakeningMatch = message.match(/(?:去引導|引導|覺醒|喚醒)\s*([^\s，。！？,!?]{2,10})/);
+      if (awakeningMatch) {
+        const targetName = awakeningMatch[1];
+        // 查角色
+        const lookupResult = await executeTool('lookup_character', { name: targetName }, characterId);
+        const idMatch = lookupResult.match(/ID[：:]\s*([A-Za-z0-9]+)/);
+        if (idMatch) {
+          const targetId = idMatch[1];
+          // 直接執行覺醒引導
+          const awakeningResult = await executeTool('initiate_awakening', {
+            target_character_id: targetId,
+            target_character_name: targetName,
+          }, characterId);
+          return NextResponse.json({
+            success: true,
+            reply: `（謀師出發了。）
+
+${awakeningResult}`,
+            conversationId: conversationId || 'mentor-direct',
+            toolsUsed: ['lookup_character', 'initiate_awakening'],
+            messageCount: 1,
+          });
+        }
+        // 找不到角色，繼續正常對話讓謀師解釋
+      }
+    }
+    // ===== 謀師快速通道結束 =====
+
   // 從 base64 header 偵測真實圖片格式，不信任前端傳的 media_type
   if (image?.data) {
     const header = image.data.slice(0, 16);
