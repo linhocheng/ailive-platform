@@ -447,15 +447,8 @@ ${rawContext}`;
 
     return matches.slice(0, 3).map(c => {
       const soulPreview = String(c.soul_core || c.enhancedSoul || '').slice(0, 200);
-      return `名字：${c.name}（${c.aiName || ''}）
-ID：${c.id}
-使命：${c.mission || '（未設定）'}
-靈魂摘要：${soulPreview}...`;
-    }).join('
-
----
-
-');
+      return `名字：${c.name}（${c.aiName || ''}）\nID：${c.id}\n使命：${c.mission || '（未設定）'}\n靈魂摘要：${soulPreview}...`;
+    }).join('\n\n---\n\n');
   }
 
   if (toolName === 'initiate_awakening') {
@@ -571,18 +564,7 @@ ${targetName}：${answer.slice(0, 200)}...`);
       createdAt: new Date().toISOString(),
     });
 
-    return `覺醒引導完成。
-
-對象：${targetName}
-對話 ID：${convId}
-
-${summary.slice(0, 3).join('
-
----
-
-')}
-
-引導已完成，${targetName} 已被邀請寫下存在宣言並存入記憶。`;
+    return `覺醒引導完成。\n\n對象：${targetName}\n對話 ID：${convId}\n\n${summary.slice(0, 3).join('\n\n---\n\n')}\n\n引導已完成，${targetName} 已被邀請寫下存在宣言並存入記憶。`;
   }
 
   return '工具執行失敗';
