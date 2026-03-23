@@ -90,12 +90,13 @@ async function saveInsight(
   content: string,
   source: string,
   date: string,
+  tier: string = 'fresh',
 ): Promise<void> {
   try {
     const embedding = await generateEmbedding(`${title} ${content}`);
     await db.collection('platform_insights').add({
       characterId, title, content, source,
-      eventDate: date, tier: 'fresh',
+      eventDate: date, tier,
       hitCount: 0, lastHitAt: null,
       embedding, createdAt: new Date().toISOString(),
     });
@@ -276,11 +277,13 @@ ${outputFormat}`;
     if (taskType === 'post') {
       savedId = await savePostDraft(db, characterId, result.content || '', result.topic || '', today, result.imagePrompt);
     } else {
+      const insightTier = taskType === 'sleep' ? 'self' : 'fresh';
       await saveInsight(db, characterId,
         result.title || `${taskType} ${today}`,
         result.content || '',
         `scheduler_${taskType}`,
-        today
+        today,
+        insightTier,
       );
     }
 
