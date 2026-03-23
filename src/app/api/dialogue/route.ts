@@ -912,26 +912,28 @@ ${convData.summary ? `對話摘要（上次回顧）：\n${convData.summary}` : 
     // 8. 每 20 輪提煉 insight
     if (newCount % 20 === 0) {
       const recentMessages = newMessages.slice(-20)
-        .map(m => `${m.role === 'user' ? '用戶' : '角色'}：${m.content}`)
+        .map(m => `${String(m.role) === 'user' ? '用戶' : '角色'}：${String(m.content || '')}`)
+        .filter(line => line.length > 5)
         .join('\n');
 
-      const extractRes = await client.messages.create({
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 500,
-        messages: [{
-          role: 'user',
-          content: `以下是一段對話記錄，請提煉出 1-2 條最重要的洞察（什麼值得記住）。
+      try {
+        const extractRes = await client.messages.create({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 500,
+          messages: [{
+            role: 'user',
+            content: `以下是一段對話記錄，請提煉出 1-2 條最重要的洞察（什麼值得記住）。
 用 JSON 陣列回傳：[{"title":"...","content":"..."}]
 只回傳 JSON，不要其他文字。
 
 對話：
 ${recentMessages}`,
-        }],
-      });
+          }],
+        });
 
-      try {
         const raw = (extractRes.content[0] as Anthropic.TextBlock).text.trim();
-        const insights = JSON.parse(raw);
+        const cleaned = raw.replace(/^```[\w]*\n?/m, '').replace(/\n?```$/m, '').trim();
+        const insights = JSON.parse(cleaned);
         const today = getTaipeiDate();
         for (const ins of insights) {
           const embedding = await generateEmbedding(`${ins.title} ${ins.content}`);
