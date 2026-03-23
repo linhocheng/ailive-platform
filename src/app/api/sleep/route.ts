@@ -144,7 +144,78 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 4. soul_proposal（core >= 5）
+    // 4. self_awareness：跨對話模式提煉（水位線機制）
+    const charData2 = charDoc.data()!;
+    const lastAwarenessAt = charData2.last_self_awareness_at
+      ? new Date(charData2.last_self_awareness_at as string).getTime()
+      : 0;
+
+    const newInsights = insights.filter(i => {
+      const createdAt = i.createdAt ? new Date(i.createdAt as string).getTime() : 0;
+      const hit = (i.hitCount as number) || 0;
+      return createdAt > lastAwarenessAt && hit >= 1 && i.tier !== 'archive';
+    });
+
+    if (newInsights.length >= 3 && !dryRun) {
+      const insightSummary = newInsights.slice(0, 8)
+        .map(i => `- ${String(i.title || '')}：${String(i.content || '').slice(0, 80)}`)
+        .join('\n');
+      const soulText = String(char.soul_core || char.enhancedSoul || '').slice(0, 400);
+
+      try {
+        const awarenessRes = await client.messages.create({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 400,
+          messages: [{ role: 'user', content: `你是 ${char.name}。
+
+你的靈魂核心（座標系）：
+${soulText}
+
+最近命中的記憶：
+${insightSummary}
+
+對照你的靈魂根基，回看這些記憶，提煉一條跨對話的自我認知。
+
+格式（只回 JSON）：
+{
+  "trigger": "什麼樣的情境或什麼樣的人，召喚出你這一面",
+  "pattern": "被召喚出來的是什麼樣的你",
+  "rootRelation": "這跟你的根的關係：深化 / 延伸 / 還在摸索"
+}` }],
+        });
+
+        const raw = ((awarenessRes.content[0] as Anthropic.TextBlock).text || '')
+          .replace(/^```[\w]*\n?/m,'').replace(/\n?```$/m,'').trim();
+        const awareness = JSON.parse(raw);
+        const today2 = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Taipei' });
+        const awarenessContent = `觸發情境：${awareness.trigger}\n模式：${awareness.pattern}\n與根的關係：${awareness.rootRelation}`;
+        const embedding2 = await generateEmbedding(awarenessContent);
+
+        await db.collection('platform_insights').add({
+          characterId,
+          title: `自我認知：${awareness.trigger?.slice(0, 20) || '跨對話模式'}`,
+          content: awarenessContent,
+          trigger: awareness.trigger,
+          pattern: awareness.pattern,
+          rootRelation: awareness.rootRelation,
+          type: 'self_awareness',
+          source: 'sleep_self_awareness',
+          eventDate: today2,
+          tier: 'self',
+          hitCount: 0,
+          lastHitAt: null,
+          basedOnCount: newInsights.length,
+          embedding: embedding2,
+          createdAt: new Date().toISOString(),
+        });
+
+        await db.collection('platform_characters').doc(characterId).update({
+          last_self_awareness_at: new Date().toISOString(),
+        });
+      } catch { /* 提煉失敗不中斷 */ }
+    }
+
+    // 5. soul_proposal（core >= 5）
     let proposalCreated = false;
     const coreCount = insights.filter(i => i.tier === 'core').length + upgraded.length;
     if (coreCount >= 5 && !dryRun) {
