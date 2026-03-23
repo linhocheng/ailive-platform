@@ -7,6 +7,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
 import { getFirestore } from '@/lib/firebase-admin';
+import { trackCost } from '@/lib/cost-tracker';
 
 const SOUL_FORGE_PROMPT = `你是 AILIVE 的鑄魂師。
 
@@ -149,6 +150,9 @@ export async function POST(req: NextRequest) {
       soulVersion: newVersion,
       updatedAt: new Date().toISOString(),
     });
+
+    await trackCost(characterId, 'claude-sonnet-4-6', response.usage?.input_tokens ?? 0, response.usage?.output_tokens ?? 0);
+    await trackCost(characterId, 'claude-haiku-4-5-20251001', coreResponse.usage?.input_tokens ?? 0, coreResponse.usage?.output_tokens ?? 0);
 
     return NextResponse.json({
       success: true,

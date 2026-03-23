@@ -17,6 +17,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
 import { getFirestore } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
+import { trackCost } from '@/lib/cost-tracker';
 
 export const maxDuration = 60;
 
@@ -80,6 +81,7 @@ async function runLearnTask(characterId: string, char: Record<string, unknown>, 
   });
 
   const raw = stripJson((res.content[0] as Anthropic.TextBlock).text.trim());
+  await trackCost(characterId, 'claude-haiku-4-5-20251001', res.usage?.input_tokens ?? 0, res.usage?.output_tokens ?? 0);
   const insight = JSON.parse(raw);
   const embedding = await generateEmbedding(`${insight.title} ${insight.content}`);
 
@@ -180,6 +182,7 @@ async function runSleepTask(characterId: string, char: Record<string, unknown>, 
       messages: [{ role: 'user', content: `你是 ${char.name}。以下是你的核心記憶：\n${coreInsights}\n\n用第一人稱寫一段自我洞察（60-80字），感受你最近的成長或變化。直接寫，不要標題。` }],
     });
     selfReflection = ((res.content[0] as { text: string }).text || '').trim();
+    await trackCost(characterId, 'claude-haiku-4-5-20251001', (res as {usage?:{input_tokens?:number}}).usage?.input_tokens ?? 0, (res as {usage?:{output_tokens?:number}}).usage?.output_tokens ?? 0);
 
     if (selfReflection) {
       const embedding = await generateEmbedding(selfReflection);
@@ -339,6 +342,7 @@ ${promptChoice}
   });
 
   const raw = stripJson((res.content[0] as Anthropic.TextBlock).text.trim());
+  await trackCost(characterId, 'claude-haiku-4-5-20251001', res.usage?.input_tokens ?? 0, res.usage?.output_tokens ?? 0);
   const insight = JSON.parse(raw);
   const embedding = await generateEmbedding(`${insight.title} ${insight.content}`);
 
@@ -467,6 +471,7 @@ ${postData.content}
   });
 
   const raw = stripJson((res.content[0] as Anthropic.TextBlock).text.trim());
+  await trackCost(characterId, 'claude-sonnet-4-6', res.usage?.input_tokens ?? 0, res.usage?.output_tokens ?? 0);
   const post = JSON.parse(raw);
 
   // Step 3：生圖（用角色的 ref 照鎖臉）

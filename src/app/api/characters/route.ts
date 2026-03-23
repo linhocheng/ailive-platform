@@ -77,6 +77,11 @@ export async function POST(req: NextRequest) {
         soulVersion: 0,
         lastGrowthEvent: null,
       },
+      costMetrics: {
+        totalInputTokens: 0,
+        totalOutputTokens: 0,
+        totalCostUSD: 0,
+      },
       status: 'pending',
       createdAt: now,
       updatedAt: now,

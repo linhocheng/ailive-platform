@@ -12,7 +12,17 @@ interface Character {
     totalInsights: number;
     totalPosts: number;
   };
+  costMetrics?: {
+    totalCostUSD: number;
+  };
   updatedAt?: string;
+}
+
+const USD_TO_NTD = 32;
+function formatNtd(usd: number): string {
+  const ntd = (usd || 0) * USD_TO_NTD;
+  if (ntd < 0.01) return 'NT$0.00';
+  return `NT$${ntd.toFixed(2)}`;
 }
 
 export default function DashboardPage() {
@@ -69,8 +79,13 @@ export default function DashboardPage() {
                     </div>
                   ))}
                 </div>
-                <div style={{ marginTop: 12, fontSize: 12, color: '#bbb' }}>
-                  靈魂版本 v{c.soulVersion} · 更新 {c.updatedAt ? new Date(c.updatedAt).toLocaleDateString('zh-TW') : '—'}
+                <div style={{ marginTop: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div style={{ fontSize: 12, color: '#bbb' }}>
+                    靈魂版本 v{c.soulVersion} · 更新 {c.updatedAt ? new Date(c.updatedAt).toLocaleDateString('zh-TW') : '—'}
+                  </div>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: c.costMetrics?.totalCostUSD ? '#e65100' : '#bbb' }}>
+                    {formatNtd(c.costMetrics?.totalCostUSD ?? 0)}
+                  </div>
                 </div>
               </div>
             </a>

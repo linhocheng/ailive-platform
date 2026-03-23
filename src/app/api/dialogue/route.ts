@@ -17,6 +17,7 @@ import { getFirestore } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 import { generateEmbedding, cosineSimilarity } from '@/lib/embeddings';
 import { generateImageForCharacter, buildGenerateImageDescription } from '@/lib/generate-image';
+import { trackCost } from '@/lib/cost-tracker';
 import { generateImagePath } from '@/lib/image-storage';
 
 export const maxDuration = 120;
@@ -167,6 +168,7 @@ async function executeTool(
   toolName: string,
   toolInput: Record<string, unknown>,
   characterId: string,
+  onHaikuTokens?: (input: number, output: number) => void,
 ): Promise<string> {
   const db = getFirestore();
 
@@ -264,6 +266,7 @@ ${rawContext}
 請用2-3句話整理：這些條目裡有哪些關鍵資訊？它們之間有什麼關係？有沒有可以直接用的圖片URL？直接輸出整理結果，不要標題不要列點。`,
           }],
         });
+        onHaikuTokens?.(reasonRes.usage?.input_tokens ?? 0, reasonRes.usage?.output_tokens ?? 0);
         const reasoned = (reasonRes.content[0] as { text: string }).text.trim();
         return `${reasoned}
 
@@ -800,6 +803,10 @@ ${convData.summary ? `對話摘要（上次回顧）：\n${convData.summary}` : 
     let toolsUsed: string[] = [];
     let generatedImageUrl = '';
     let currentMessages = [...messages];
+    let totalInputTokens = 0;
+    let totalOutputTokens = 0;
+    let haikuInputTokens = 0;
+    let haikuOutputTokens = 0;
 
     for (let turn = 0; turn < 10; turn++) {
       const response = await client.messages.create({
@@ -812,6 +819,8 @@ ${convData.summary ? `對話摘要（上次回顧）：\n${convData.summary}` : 
       });
 
       currentMessages.push({ role: 'assistant', content: response.content });
+      totalInputTokens += response.usage?.input_tokens ?? 0;
+      totalOutputTokens += response.usage?.output_tokens ?? 0;
 
       if (response.stop_reason === 'end_turn') {
         finalReply = response.content
@@ -828,7 +837,10 @@ ${convData.summary ? `對話摘要（上次回顧）：\n${convData.summary}` : 
             toolsUsed.push(block.name);
             // web_search 由 Anthropic 伺服器端處理，不需要手動 executeTool
             if (block.name === 'web_search') continue;
-            const result = await executeTool(block.name, block.input as Record<string, unknown>, characterId);
+            const result = await executeTool(
+              block.name, block.input as Record<string, unknown>, characterId,
+              (inp, out) => { haikuInputTokens += inp; haikuOutputTokens += out; },
+            );
             // generate_image 回傳 IMAGE_URL:xxx，解析出來讓 Claude 能在回覆裡帶出
             if (result.startsWith('IMAGE_URL:')) {
               const url = result.replace('IMAGE_URL:', '').trim();
@@ -903,11 +915,15 @@ ${convData.summary ? `對話摘要（上次回顧）：\n${convData.summary}` : 
       updatedAt: new Date().toISOString(),
     });
 
-    // 7. 更新 growthMetrics
+    // 7. 更新 growthMetrics + 費用追蹤
     await db.collection('platform_characters').doc(characterId).update({
       'growthMetrics.totalConversations': FieldValue.increment(1),
       updatedAt: new Date().toISOString(),
     });
+    await trackCost(characterId, 'claude-sonnet-4-6', totalInputTokens, totalOutputTokens);
+    if (haikuInputTokens + haikuOutputTokens > 0) {
+      await trackCost(characterId, 'claude-haiku-4-5-20251001', haikuInputTokens, haikuOutputTokens);
+    }
 
     // 8. 每 20 輪提煉 insight
     if (newCount % 20 === 0) {

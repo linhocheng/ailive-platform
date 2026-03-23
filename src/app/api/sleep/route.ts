@@ -13,6 +13,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
 import { getFirestore } from '@/lib/firebase-admin';
+import { trackCost } from '@/lib/cost-tracker';
 import { generateEmbedding, cosineSimilarity } from '@/lib/embeddings';
 
 export const maxDuration = 60;
@@ -126,6 +127,7 @@ export async function POST(req: NextRequest) {
         }],
       });
       selfReflection = (res.content[0] as Anthropic.TextBlock).text.trim();
+      await trackCost(characterId, 'claude-haiku-4-5-20251001', res.usage?.input_tokens ?? 0, res.usage?.output_tokens ?? 0);
 
       if (!dryRun && selfReflection) {
         const embedding = await generateEmbedding(selfReflection);

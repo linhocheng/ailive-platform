@@ -15,6 +15,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getFirestore } from '@/lib/firebase-admin';
+import { trackCost } from '@/lib/cost-tracker';
 import { generateEmbedding, cosineSimilarity } from '@/lib/embeddings';
 import { generateImageForCharacter } from '@/lib/generate-image';
 import Anthropic from '@anthropic-ai/sdk';
@@ -265,6 +266,7 @@ ${outputFormat}`;
     const raw = (response.content[0] as Anthropic.TextBlock).text.trim()
       .replace(/^```[\w]*\n?/m, '').replace(/\n?```$/m, '').trim();
 
+    await trackCost(characterId, 'claude-haiku-4-5-20251001', response.usage?.input_tokens ?? 0, response.usage?.output_tokens ?? 0);
     let result: Record<string, string>;
     try {
       result = JSON.parse(raw);
