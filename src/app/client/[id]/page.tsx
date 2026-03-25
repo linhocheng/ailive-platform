@@ -1,5 +1,6 @@
 'use client';
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useRef, useCallback, Suspense } from 'react';
+import ChatPageInner from '@/app/chat/[id]/page';
 import { useParams } from 'next/navigation';
 
 interface Character {
@@ -61,70 +62,7 @@ function PasswordGate({ charName, avatar, onUnlock }: { charName:string; avatar?
   );
 }
 
-function ChatTab({ char }: { char: Character }) {
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [input, setInput] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [conversationId, setConversationId] = useState<string|null>(null);
-  const [userId] = useState(() => `client-${Math.random().toString(36).slice(2,8)}`);
-  const bottomRef = useRef<HTMLDivElement>(null);
-  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior:'smooth' }); }, [messages]);
 
-  const send = async () => {
-    const text = input.trim();
-    if (!text || loading) return;
-    setInput('');
-    setMessages(prev => [...prev, { role:'user', content:text, timestamp:new Date().toISOString() }]);
-    setLoading(true);
-    try {
-      const res = await fetch('/api/dialogue', { method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ characterId:char.id, message:text, conversationId, userId }) });
-      const data = await res.json();
-      if (data.conversationId) setConversationId(data.conversationId);
-      setMessages(prev => [...prev, { role:'assistant', content:data.reply||'...', timestamp:new Date().toISOString(), imageUrl:data.imageUrl }]);
-    } catch {
-      setMessages(prev => [...prev, { role:'assistant', content:'發生錯誤，請稍後再試', timestamp:new Date().toISOString() }]);
-    }
-    setLoading(false);
-  };
-
-  return (
-    <div style={{ display:'flex', flexDirection:'column', height:'calc(100vh - 160px)' }}>
-      <div style={{ flex:1, overflowY:'auto', display:'flex', flexDirection:'column', gap:12, paddingBottom:8 }}>
-        {messages.length===0 && <div style={{ textAlign:'center', color:'#bbb', padding:40, fontSize:14 }}>和 {char.name} 開始對話吧</div>}
-        {messages.map((m,i) => (
-          <div key={i} style={{ display:'flex', justifyContent:m.role==='user'?'flex-end':'flex-start', gap:8 }}>
-            {m.role==='assistant' && char.visualIdentity?.characterSheet &&
-              <img src={char.visualIdentity.characterSheet} alt="" style={{ width:32, height:32, borderRadius:'50%', objectFit:'cover', flexShrink:0, marginTop:2 }} />}
-            <div style={{ maxWidth:'72%' }}>
-              <div style={{ background:m.role==='user'?'#1a1a2e':'#f0f0f0', color:m.role==='user'?'#fff':'#333',
-                borderRadius:m.role==='user'?'16px 16px 4px 16px':'16px 16px 16px 4px',
-                padding:'10px 14px', fontSize:14, lineHeight:1.7, whiteSpace:'pre-wrap' }}>{m.content}</div>
-              {m.imageUrl && <img src={m.imageUrl} alt="" style={{ maxWidth:'100%', borderRadius:8, marginTop:6 }} />}
-            </div>
-          </div>
-        ))}
-        {loading && (
-          <div style={{ display:'flex', gap:8 }}>
-            {char.visualIdentity?.characterSheet && <img src={char.visualIdentity.characterSheet} alt="" style={{ width:32, height:32, borderRadius:'50%', objectFit:'cover' }} />}
-            <div style={{ background:'#f0f0f0', borderRadius:'16px 16px 16px 4px', padding:'10px 16px', fontSize:20, color:'#bbb', letterSpacing:4 }}>···</div>
-          </div>
-        )}
-        <div ref={bottomRef} />
-      </div>
-      <div style={{ display:'flex', gap:8, paddingTop:12, borderTop:'1px solid #f0f0f0' }}>
-        <textarea value={input} onChange={e=>setInput(e.target.value)}
-          onKeyDown={e=>{ if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); send(); } }}
-          placeholder="輸入訊息... (Enter 送出)" rows={2}
-          style={{ flex:1, border:'1px solid #e0e0e0', borderRadius:10, padding:'10px 14px', fontSize:14, resize:'none', outline:'none', fontFamily:'inherit' }} />
-        <button onClick={send} disabled={loading||!input.trim()}
-          style={{ background:'#1a1a2e', color:'#fff', border:'none', borderRadius:10, padding:'0 20px', fontSize:13, fontWeight:600, cursor:'pointer', opacity:loading||!input.trim()?0.5:1 }}>
-          送出
-        </button>
-      </div>
-    </div>
-  );
-}
 
 function PostsTab({ charId }: { charId: string }) {
   const [posts, setPosts] = useState<Post[]>([]);
@@ -317,6 +255,7 @@ export default function ClientPage() {
   const TABS = [{ key:'posts', label:'📝 貼文' },{ key:'tasks', label:'🗓 排程' },{ key:'chat', label:'💬 聊天' }] as const;
 
   return (
+    <>
     <div style={{ maxWidth:640, margin:'0 auto', padding:'0 16px 40px' }}>
       <div style={{ display:'flex', alignItems:'center', gap:12, padding:'20px 0 16px', borderBottom:'1px solid #f0f0f0', marginBottom:20 }}>
         {char.visualIdentity?.characterSheet&&<img src={char.visualIdentity.characterSheet} alt="" style={{ width:44, height:44, borderRadius:'50%', objectFit:'cover', border:'2px solid #e0e0e0' }} />}
@@ -333,9 +272,21 @@ export default function ClientPage() {
           </button>
         ))}
       </div>
-      {tab==='chat'&&<ChatTab char={char} />}
       {tab==='posts'&&<PostsTab charId={charId} />}
       {tab==='tasks'&&<TasksTab charId={charId} />}
     </div>
+    {/* 聊天室全屏覆蓋（保留完整功能） */}
+    {tab==='chat'&&(
+      <div style={{ position:'fixed', inset:0, zIndex:100, background:'#0f0f13' }}>
+        <Suspense>
+          <ChatPageInner />
+        </Suspense>
+        <button onClick={()=>setTab('posts')}
+          style={{ position:'fixed', top:14, right:16, zIndex:101, background:'rgba(0,0,0,0.5)', border:'1px solid #2a2a38', color:'#888', borderRadius:20, padding:'4px 12px', fontSize:12, cursor:'pointer' }}>
+          ✕ 關閉
+        </button>
+      </div>
+    )}
+    </>
   );
 }
