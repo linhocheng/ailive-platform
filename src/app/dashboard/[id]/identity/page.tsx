@@ -492,6 +492,81 @@ export default function IdentityPage() {
         </div>
 
       </div>
+
+      {/* ── 客戶端入口 ── */}
+      <div style={{ background: '#fff', border: '1px solid #e0e0e0', borderRadius: 12, padding: 20, marginTop: 24 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
+          <span style={{ fontSize: 20 }}>🔗</span>
+          <h3 style={{ margin: 0, fontSize: 15 }}>客戶端入口</h3>
+        </div>
+        <div style={{ fontSize: 13, color: '#666', marginBottom: 12, lineHeight: 1.6 }}>
+          將以下連結傳給客戶，客戶可以存取：貼文審核、排程設定、與角色聊天。<br />
+          不會顯示後台其他功能。
+        </div>
+
+        {/* 客戶端密碼 */}
+        <ClientPasswordSection charId={id} />
+      </div>
+
+    </div>
+  );
+}
+
+function ClientPasswordSection({ charId }: { charId: string }) {
+  const [pw, setPw] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const clientUrl = typeof window !== 'undefined'
+    ? `${window.location.origin}/client/${charId}`
+    : `/client/${charId}`;
+
+  useEffect(() => {
+    fetch(`/api/characters/${charId}`).then(r => r.json()).then(d => {
+      setPw(d.character?.clientPassword || '');
+    });
+  }, [charId]);
+
+  const save = async () => {
+    setSaving(true);
+    await fetch(`/api/characters/${charId}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientPassword: pw }),
+    });
+    setSaving(false); setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
+  };
+
+  const copy = () => {
+    navigator.clipboard.writeText(clientUrl);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <div>
+      <div style={{ marginBottom: 12 }}>
+        <div style={{ fontSize: 12, color: '#666', marginBottom: 4 }}>客戶端連結</div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <input readOnly value={clientUrl}
+            style={{ flex: 1, border: '1px solid #e0e0e0', borderRadius: 6, padding: '8px 10px', fontSize: 12, color: '#555', background: '#f8f9fa', boxSizing: 'border-box' as const }} />
+          <button onClick={copy}
+            style={{ background: copied ? '#2e7d32' : '#1a1a2e', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 16px', cursor: 'pointer', fontSize: 13, whiteSpace: 'nowrap' as const }}>
+            {copied ? '✓ 已複製' : '複製'}
+          </button>
+        </div>
+      </div>
+      <div>
+        <div style={{ fontSize: 12, color: '#666', marginBottom: 4 }}>存取密碼 <span style={{ color: '#bbb' }}>(留空則不設密碼)</span></div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <input type="text" value={pw} onChange={e => setPw(e.target.value)} placeholder="設定客戶端密碼"
+            style={{ flex: 1, border: '1px solid #e0e0e0', borderRadius: 6, padding: '8px 10px', fontSize: 13, boxSizing: 'border-box' as const }} />
+          <button onClick={save} disabled={saving}
+            style={{ background: saving ? '#ccc' : '#1a1a2e', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 16px', cursor: saving ? 'default' : 'pointer', fontSize: 13, whiteSpace: 'nowrap' as const }}>
+            {saving ? '儲存中...' : saved ? '✓ 已儲存' : '儲存'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
