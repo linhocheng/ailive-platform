@@ -451,6 +451,15 @@ ${rawContext}`;
     const procedure = String(toolInput.procedure || '');
     if (!name || !trigger || !procedure) return '技巧名稱、觸發條件、步驟都要填。';
     const db2 = getFirestore();
+    // 防重複：同角色同名技巧已存在就直接回傳，不重複寫入
+    const existingSnap = await db2.collection('platform_skills')
+      .where('characterId', '==', characterId)
+      .where('name', '==', name)
+      .limit(1)
+      .get();
+    if (!existingSnap.empty) {
+      return `技巧「${name}」已經記下來了，不用重複建立。`;
+    }
     const ref = await db2.collection('platform_skills').add({
       characterId,
       name,
