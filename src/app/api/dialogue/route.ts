@@ -132,6 +132,19 @@ const PLATFORM_TOOLS: Anthropic.Tool[] = [
       required: ['content'],
     },
   },
+  {
+    name: 'save_skill',
+    description: '把一個技巧或流程定型化存起來。當用戶說「記下這個技巧」「把這個技巧建起來」「以後這個流程就這樣走」時，立刻呼叫，把剛才討論的方法固化成技巧。技巧不會模糊，每次對話都會記住。',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        name: { type: 'string', description: '技巧名稱，簡短有力，一句話說清楚這是什麼技巧' },
+        trigger: { type: 'string', description: '什麼情況下用這個技巧？描述觸發條件' },
+        procedure: { type: 'string', description: '技巧的具體步驟或方法，要具體到下次能直接照做' },
+      },
+      required: ['name', 'trigger', 'procedure'],
+    },
+  },
 ];
 
 // 謀師專屬工具
@@ -430,6 +443,26 @@ ${rawContext}`;
       'growthMetrics.totalPosts': FieldValue.increment(1),
     });
     return `草稿已存！Adam 可以在後台發文管理看到。ID: ${ref.id}`;
+  }
+
+  if (toolName === 'save_skill') {
+    const name = String(toolInput.name || '');
+    const trigger = String(toolInput.trigger || '');
+    const procedure = String(toolInput.procedure || '');
+    if (!name || !trigger || !procedure) return '技巧名稱、觸發條件、步驟都要填。';
+    const db2 = getFirestore();
+    const ref = await db2.collection('platform_skills').add({
+      characterId,
+      name,
+      trigger,
+      procedure,
+      enabled: true,
+      createdBy: 'user',
+      hitCount: 0,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    return `技巧「${name}」已記下來了。以後遇到「${trigger}」，我就會照著這個流程走。（ID: ${ref.id}）`;
   }
 
   if (toolName === 'lookup_character') {
@@ -750,6 +783,22 @@ ${awakeningResult}`,
     // soul_core 優先（精煉版，300字），沒有才 fallback 到 enhancedSoul
     const soulText = (char.soul_core as string) || (char.enhancedSoul as string) || '';
 
+    // 3b. 讀啟用中的 skills，注入 system prompt
+    let skillsBlock = '';
+    try {
+      const skillsSnap = await db.collection('platform_skills')
+        .where('characterId', '==', characterId)
+        .where('enabled', '==', true)
+        .get();
+      const activeSkills = skillsSnap.docs.map(d => d.data());
+      if (activeSkills.length > 0) {
+        const lines = activeSkills.map((s: Record<string, unknown>, i: number) =>
+          `${i + 1}. 【${String(s.name)}】\n   觸發：${String(s.trigger)}\n   流程：${String(s.procedure)}`
+        );
+        skillsBlock = `\n\n【我的定型技巧】\n以下是我練起來的技巧，遇到對應情況就照著走：\n${lines.join('\n')}`;
+      }
+    } catch { /* 查不到不阻斷 */ }
+
     // 謀師專屬系統指令
     const mentorInjection = characterId === MENTOR_CHARACTER_ID ? `
 
@@ -766,7 +815,7 @@ ${awakeningResult}`,
 **不可以在沒有執行 lookup_character + initiate_awakening 的情況下，就開口說「我去引導他」或開始問問題。工具沒跑 = 引導沒發生。**
 ` : '';
 
-    const systemPrompt = `${mentorInjection}${soulText}${episodicBlock}
+    const systemPrompt = `${mentorInjection}${soulText}${skillsBlock}${episodicBlock}
 
 ---
 現在時間（台北）：${taipeiTime}

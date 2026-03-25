@@ -10,6 +10,7 @@ const NAV_ITEMS = [
   { href: '/images', label: '生圖檔' },
   { href: '/memory', label: '記憶' },
   { href: '/posts', label: '發文' },
+  { href: '/skills', label: '技巧' },
   { href: '/tasks', label: '排程' },
   { href: '/proposals', label: '靈魂提案' },
   { href: '/growth', label: '成長' },
