@@ -13,6 +13,7 @@
  */
 import { getFirestore, getFirebaseAdmin } from '@/lib/firebase-admin';
 import { generateWithGemini } from '@/lib/gemini-imagen';
+import { trackCost } from '@/lib/cost-tracker';
 
 export interface GenerateImageResult {
   imageUrl: string;
@@ -160,6 +161,7 @@ export async function generateImageForCharacter(
 
     // 4. Grok 生圖：臉 ref + 產品圖（若有）同時送入
     const result = await generateWithGemini(finalPrompt, selectedRef, storagePath, overrideRefUrl);
+    trackCost(characterId, result.model, result.inputTokens, result.outputTokens).catch(() => {});
     return {
       imageUrl: result.imageUrl,
       model: result.model,
@@ -172,11 +174,13 @@ export async function generateImageForCharacter(
   // 沒有 characterSheet 但有產品圖：直接當 ref 畫
   if (overrideRefUrl) {
     const result = await generateWithGemini(finalPrompt, overrideRefUrl, storagePath);
+    trackCost(characterId, result.model, result.inputTokens, result.outputTokens).catch(() => {});
     return { imageUrl: result.imageUrl, model: result.model, promptTranslated: translated };
   }
 
   // 5. 沒有 ref → Grok text-only
   const result = await generateWithGemini(finalPrompt, null, storagePath);
+  trackCost(characterId, result.model, result.inputTokens, result.outputTokens).catch(() => {});
   return { imageUrl: result.imageUrl, model: result.model, promptTranslated: translated };
 }
 

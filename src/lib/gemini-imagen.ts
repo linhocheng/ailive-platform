@@ -19,6 +19,8 @@ const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models
 export interface GeminiImageResult {
   imageUrl: string;
   model: string;
+  inputTokens: number;
+  outputTokens: number;
 }
 
 /**
@@ -110,5 +112,11 @@ export async function generateWithGemini(
   if (!imgPart?.inlineData?.data) throw new Error('Gemini 沒有回傳圖片');
 
   const imageUrl = await persistBase64(imgPart.inlineData.data, imgPart.inlineData.mimeType || 'image/jpeg', storagePath);
-  return { imageUrl, model: GEMINI_IMAGE_MODEL };
+  const usage = data?.usageMetadata as { promptTokenCount?: number; candidatesTokenCount?: number } | undefined;
+  return {
+    imageUrl,
+    model: GEMINI_IMAGE_MODEL,
+    inputTokens: usage?.promptTokenCount ?? 0,
+    outputTokens: usage?.candidatesTokenCount ?? 0,
+  };
 }

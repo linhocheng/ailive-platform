@@ -10,6 +10,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getFirebaseAdmin } from '@/lib/firebase-admin';
 import Anthropic from '@anthropic-ai/sdk';
+import { trackCost } from '@/lib/cost-tracker';
 import mammoth from 'mammoth';
 
 export const maxDuration = 120;
@@ -74,7 +75,7 @@ async function uploadImageToStorage(
 }
 
 // ===== Haiku 描述圖片 =====
-async function describeImage(client: Anthropic, base64Data: string, contentType: string): Promise<string> {
+async function describeImage(client: Anthropic, base64Data: string, contentType: string): Promise<{ description: string; inputTokens: number; outputTokens: number }> {
   try {
     const res = await client.messages.create({
       model: 'claude-haiku-4-5-20251001',
@@ -87,9 +88,13 @@ async function describeImage(client: Anthropic, base64Data: string, contentType:
         ],
       }],
     });
-    return (res.content[0] as Anthropic.TextBlock).text.trim();
+    return {
+      description: (res.content[0] as Anthropic.TextBlock).text.trim(),
+      inputTokens: res.usage?.input_tokens ?? 0,
+      outputTokens: res.usage?.output_tokens ?? 0,
+    };
   } catch {
-    return '圖片內容無法識別';
+    return { description: '圖片內容無法識別', inputTokens: 0, outputTokens: 0 };
   }
 }
 
@@ -149,10 +154,12 @@ export async function POST(req: NextRequest) {
             try {
               const base64 = await image.readAsBase64String();
               const ct = image.contentType || 'image/png';
-              const [imageUrl, description] = await Promise.all([
+              const [imageUrl, descResult] = await Promise.all([
                 uploadImageToStorage(base64, ct, characterId, imgIndex),
                 describeImage(client, base64, ct),
               ]);
+              const description = descResult.description;
+              trackCost(characterId, 'claude-haiku-4-5-20251001', descResult.inputTokens, descResult.outputTokens).catch(() => {});
               const id = await saveKnowledge(
                 baseUrl, characterId,
                 `${filename} — 圖片 ${imgIndex}`,

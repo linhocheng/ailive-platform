@@ -16,6 +16,7 @@ const USD_TO_NTD = 32;
 const PRICING: Record<string, { input: number; output: number }> = {
   'claude-sonnet-4-6':         { input: 3.00,  output: 15.00 },
   'claude-haiku-4-5-20251001': { input: 0.80,  output: 4.00  },
+  'gemini-2.5-flash-image':    { input: 0.075, output: 0.30  },
 };
 
 // fallback：不認識的 model 用 haiku 定價
