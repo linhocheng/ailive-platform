@@ -212,7 +212,7 @@ async function runSleepTask(characterId: string, char: Record<string, unknown>, 
       .map(i => `- ${String(i.title || '')}：${String(i.content || '').slice(0, 80)}`)
       .join('\n');
 
-    const soulText = String(charData.soul_core || charData.enhancedSoul || '').slice(0, 400);
+    const soulText = String(charData.system_soul || charData.soul_core || charData.enhancedSoul || '').slice(0, 400);
 
     try {
       const awarenessRes = await client.messages.create({

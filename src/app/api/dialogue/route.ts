@@ -701,7 +701,7 @@ ${awakeningResult}`,
     if (!charDoc.exists) return NextResponse.json({ error: '角色不存在' }, { status: 404 });
     const char = charDoc.data()!;
 
-    if (!char.enhancedSoul) {
+    if (!char.soul_core && !char.system_soul && !char.enhancedSoul) {
       return NextResponse.json({ error: '角色尚未完成鑄魂，請先呼叫 /api/soul-enhance' }, { status: 400 });
     }
 
@@ -789,8 +789,8 @@ ${awakeningResult}`,
       }
     } catch { /* 查不到不阻斷 */ }
 
-    // soul_core 優先（精煉版，300字），沒有才 fallback 到 enhancedSoul
-    const soulText = (char.soul_core as string) || (char.enhancedSoul as string) || '';
+    // system_soul 優先（手動編修的最終版），沒有才 soul_core，再沒有才 enhancedSoul
+    const soulText = (char.system_soul as string) || (char.soul_core as string) || (char.enhancedSoul as string) || '';
 
     // 3b. 讀啟用中的 skills，注入 system prompt
     let skillsBlock = '';

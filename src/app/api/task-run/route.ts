@@ -165,7 +165,7 @@ export async function POST(req: NextRequest) {
     const charDoc = await db.collection('platform_characters').doc(characterId).get();
     if (!charDoc.exists) return NextResponse.json({ error: '角色不存在' }, { status: 404 });
     const char = charDoc.data()!;
-    const soulText = (char.soul_core as string) || (char.enhancedSoul as string) || '';
+    const soulText = (char.system_soul as string) || (char.soul_core as string) || (char.enhancedSoul as string) || '';
     const aiName = (char.name as string) || 'AI';
 
     // 組 context

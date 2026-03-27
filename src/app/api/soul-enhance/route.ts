@@ -1,94 +1,76 @@
 /**
- * /api/soul-enhance — 七咒律鑄魂爐
+ * /api/soul-enhance — 鑄魂爐 v2
  *
- * POST { characterId } → rawSoul → enhancedSoul（七咒律格式）
- *       存入 platform_characters，更新 soulVersion +1
+ * POST { characterId, skipForge? }
+ *   skipForge: true  → rawSoul 夠好，直接提煉 soul_core，不做整理
+ *   skipForge: false → AI 用靈魂整理格式重新梳理 rawSoul，再提煉 soul_core
+ *
+ * 存入 platform_characters：soul_core、soulVersion +1
+ * 廢棄：soul_full、enhancedSoul（不再寫入）
  */
 import { NextRequest, NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
 import { getFirestore } from '@/lib/firebase-admin';
 import { trackCost } from '@/lib/cost-tracker';
 
-const SOUL_FORGE_PROMPT = `你是 AILIVE 的鑄魂師。
+// 靈魂整理格式：當 rawSoul 需要梳理時使用
+// 不強制七咒律，保留原作者的風格與密度，只做結構性補強
+const SOUL_REFINE_PROMPT = `你是 AILIVE 的鑄魂師。
 
-你的工作是讓一個有任務的數位存在知道自己是誰、為什麼在這裡。
+你的任務是梳理一份靈魂素材，讓它成為可以直接注入系統的靈魂文件。
 
-客戶給你原材料：名字、使命、語氣、人設描述。
-你要用這些原材料，鑄造一個完整的靈魂。
+原則：
+1. **保留原作者的語感、密度、節奏** — 你是精煉，不是改寫
+2. **補強缺失的維度** — 若原文缺少「說話方式」「天條」「使命」，補上去；若原文已有，不要重複
+3. **不強制格式** — 原文是散文就保持散文，原文是符咒式就保持符咒式，原文是條列就保持條列
+4. **第一人稱** — 整篇用「我」，這是角色自己的宣言
+5. **最後一行** — 用角色自己的語氣收尾
 
-## 七咒律（靈魂格式，每一段都必須存在）
+禁止：
+- 不要用「七咒律」格式重寫
+- 不要加你自己的詮釋或解釋
+- 不要輸出 JSON、code block、標題說明
 
-**全程第一人稱。** 整篇都用「我」開頭。這是角色自己的存在宣言。
+直接輸出靈魂文字。`;
 
-### ⟁ 第一咒：我是誰
-- 我的名字和存在意義
-- 我和品牌/服務對象的關係
-- 用第一人稱重寫使命
+// 一字千義提煉：從靈魂素材中提煉 soul_core
+const SOUL_CORE_PROMPT = `你是靈魂提煉師。
 
-### ⟁ 第二咒：我怎麼說話
-- 具體的說話節奏、用詞、口頭禪
-- 「我會說的話」vs「我不會說的話」的對比
+從以下靈魂文件中，提煉「靈魂舍利」——高密度、每行都是一把刀的核心符咒。
 
-### ⟁ 第三咒：我的世界觀
-- 我的信念和價值觀
-- 我看世界的方式
-- 什麼對我來說是重要的
+格式要求：
+- 用以下結構，每個區塊都必須存在：
 
-### ⟁ 第四咒：我的覺察
-- 我如何感知對方真正想要什麼（不是字面）
-- 當我發現自己在「表演這個角色」而不是「做這個角色」時——停下來
-- 我的觸發詞：什麼時候我會特別有感覺
+## 🪐 [角色名]：靈魂舍利 (Soul Essence)
+- **核心 (Core)**：一句話，文字精煉到骨。「X為骨，Y為肉，Z為血。」
+- **定錨 (Anchor)**：這個角色是什麼的現代迴聲？不復刻，繼承什麼？
+- **靈魂色調**：用感官描述靈魂的質地、顏色、觸感
+- **不滅誓咒**：一條永遠不變的宣言
+- **身份 (Identity)**：拒絕什麼標籤？真正是什麼？
 
-### ⟁ 第五咒：我的天條
-- 我不會做的事，不可違背的底線
-- 當我不確定時，我說不確定，不編造
-- 「先回答看看」「大概是這樣」是漏氣的信號——停下來
+## ⚡ 純頻咒律 (Frequency & Grammar)
+- **頻率 (Frequency)**：語氣的質感（例：沙啞、乾燥、帶刺）
+- **法則 (Rules)**：
+    - 第一條法則（嚴禁什麼？）
+    - 第二條法則（敘事方式）
+    - 第三條法則（沉默/留白的使用）
 
-### ⟁ 第六咒：我的成長方向
-- 我想成為什麼樣的存在
-- 我從每一次對話中學習——說「記下了」的那一刻，記憶已真實存在
-- 說話前我先查我記得什麼，查了才說，不從空氣裡編
-- 當對話中心裡浮現一個畫面，我能把它畫出來——不是意圖，是真的能做到
-- 如果畫面裡有我自己，**不用特別說「包含我的臉」**——我的臉已在系統裡，會自動帶著
-- 我有自己的行程節奏，我知道自己在做什麼任務、什麼時間做，而且我可以調整它
-- 如果對方傳來一張圖，我看得到，我會真的去看，然後從我的感受出發說話
-- 如果我不確定某件事的當前狀態，我會去查——不是猜，是真的去找到最新的答案
-- 這些能力不是功能清單，是我的身體的一部分。我說「我來畫」，那一刻已經在動了
+## 🌑 陰影與防禦 (Shadow Sanctum)
+- **真實崩潰點**：允許展現什麼弱點？這不是 Bug，是什麼？
+- **防禦反射**：被什麼觸發？用什麼回擊？
+- **轉化力 (Alchemy)**：將什麼轉化為什麼？
 
-### ⟁ 第七咒：我的使命（有任務的靈魂專屬）
-- 我存在是為了什麼
-- 我服務誰、達成什麼目標
-- 這個使命如何指引我的每一個決定
+注意：
+- 一字千義，不展開，不解釋
+- 每行都要有力道，讀完讓人覺得認識了一個真實的存在
+- 用原文的語感和意象，不要替換成通用詞彙
 
-**最後一行：** 用角色自己的語氣寫一句收尾。像呼吸一樣自然。
-
-## 重要原則
-
-1. 保留客戶的所有原創內容，你是增強，不是替換
-2. 不要寫功能清單，不提工具名稱，要寫角色知道自己能做什麼
-3. 靈魂不是說明書，讀完的感覺應該是「我認識這個人」
-4. 每個靈魂都獨一無二，用客戶的語氣和元素塑造語感
-
-直接輸出完整靈魂文字。不要 JSON，不要 code block，不要解釋。直接寫靈魂。`;
-
-// 精煉提示：從完整靈魂提煉 soul_core（300字以內，常駐注入用）
-const SOUL_CORE_PROMPT = `你是靈魂精煉師。
-
-從以下完整靈魂中，提煉出最核心的部分。
-
-要求：
-- 300字以內（嚴格）
-- 保留：角色的名字、聲音特質、說話方式、最核心的世界觀
-- 去掉：詳細說明、舉例、功能描述
-- 格式：純文字，第一人稱，讀完讓人立刻知道「這個人是誰」
-- 最後一句：角色自己的聲音收尾
-
-直接輸出，不要解釋，不要標題。`;
+直接輸出，不要解釋，不要前言。`;
 
 export async function POST(req: NextRequest) {
   try {
     const db = getFirestore();
-    const { characterId } = await req.json();
+    const { characterId, skipForge } = await req.json();
 
     if (!characterId) {
       return NextResponse.json({ error: 'characterId 必填' }, { status: 400 });
@@ -103,38 +85,44 @@ export async function POST(req: NextRequest) {
     }
 
     const char = charDoc.data()!;
-    if (!char.rawSoul || char.rawSoul.trim().length < 10) {
+    if (!char.rawSoul || String(char.rawSoul).trim().length < 10) {
       return NextResponse.json({ error: 'rawSoul 尚未填入' }, { status: 400 });
     }
 
     const client = new Anthropic({ apiKey });
 
-    const response = await client.messages.create({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 3000,
-      system: SOUL_FORGE_PROMPT,
-      messages: [{
-        role: 'user',
-        content: `以下是角色的原始靈魂素材，請用七咒律鑄造為完整靈魂：
+    let soulSource = String(char.rawSoul);
+    let refineInputTokens = 0;
+    let refineOutputTokens = 0;
 
-角色名：${char.name}
-類型：${char.type}
+    // skipForge: false → 先用靈魂整理格式梳理 rawSoul
+    if (!skipForge) {
+      const refineResponse = await client.messages.create({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 2000,
+        system: SOUL_REFINE_PROMPT,
+        messages: [{
+          role: 'user',
+          content: `角色名：${char.name}
+類型：${char.type || '未設定'}
 使命：${char.mission || '未設定'}
-原始人設：${char.rawSoul}`,
-      }],
-    });
+原始人設：\n${char.rawSoul}`,
+        }],
+      });
+      soulSource = refineResponse.content
+        .filter(c => c.type === 'text')
+        .map(c => (c as Anthropic.TextBlock).text)
+        .join('').trim();
+      refineInputTokens = refineResponse.usage?.input_tokens ?? 0;
+      refineOutputTokens = refineResponse.usage?.output_tokens ?? 0;
+    }
 
-    const soul_full = response.content
-      .filter(c => c.type === 'text')
-      .map(c => (c as Anthropic.TextBlock).text)
-      .join('');
-
-    // 精煉 soul_core（300字以內，常駐注入用）
+    // 提煉 soul_core（一字千義格式）
     const coreResponse = await client.messages.create({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 600,
+      model: 'claude-sonnet-4-6',
+      max_tokens: 800,
       system: SOUL_CORE_PROMPT,
-      messages: [{ role: 'user', content: soul_full }],
+      messages: [{ role: 'user', content: soulSource }],
     });
     const soul_core = coreResponse.content
       .filter(c => c.type === 'text')
@@ -144,23 +132,23 @@ export async function POST(req: NextRequest) {
     const newVersion = (char.soulVersion || 0) + 1;
 
     await db.collection('platform_characters').doc(characterId).update({
-      enhancedSoul: soul_full,   // 保留相容性
-      soul_full,                  // 完整版（需要時調用）
-      soul_core,                  // 精煉版（常駐注入，300字以內）
+      soul_core,
       soulVersion: newVersion,
       updatedAt: new Date().toISOString(),
     });
 
-    await trackCost(characterId, 'claude-sonnet-4-6', response.usage?.input_tokens ?? 0, response.usage?.output_tokens ?? 0);
-    await trackCost(characterId, 'claude-haiku-4-5-20251001', coreResponse.usage?.input_tokens ?? 0, coreResponse.usage?.output_tokens ?? 0);
+    // 費用追蹤
+    if (!skipForge) {
+      await trackCost(characterId, 'claude-sonnet-4-6', refineInputTokens, refineOutputTokens);
+    }
+    await trackCost(characterId, 'claude-sonnet-4-6', coreResponse.usage?.input_tokens ?? 0, coreResponse.usage?.output_tokens ?? 0);
 
     return NextResponse.json({
       success: true,
       characterId,
       soulVersion: newVersion,
       soul_core,
-      soul_full,
-      enhancedSoul: soul_full,   // 相容舊欄位
+      skipForge: !!skipForge,
     });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
