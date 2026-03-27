@@ -9,7 +9,7 @@ interface CharacterDraft {
   type: 'vtuber' | 'brand_editor';
   mission: string;
   rawSoul: string;
-  enhancedSoul: string;
+  soul_core: string;
   soulVersion: number;
   imagePromptPrefix: string;
   styleGuide: string;
@@ -50,7 +50,7 @@ export default function CreatePage() {
   const router = useRouter();
   const [step, setStep] = useState<Step>(1);
   const [draft, setDraft] = useState<CharacterDraft>({
-    name: '', type: 'vtuber', mission: '', rawSoul: '', enhancedSoul: '', soulVersion: 0,
+    name: '', type: 'vtuber', mission: '', rawSoul: '', soul_core: '', soulVersion: 0,
     imagePromptPrefix: '', styleGuide: 'realistic', negativePrompt: 'different face, inconsistent features',
     lineChannelToken: '', lineChannelSecret: '',
     tasks: DEFAULT_TASKS.map(t => ({ ...t })),
@@ -83,7 +83,7 @@ export default function CreatePage() {
     const sd = await sr.json();
 
     if (sd.success) {
-      setDraft(prev => ({ ...prev, enhancedSoul: sd.enhancedSoul, soulVersion: sd.soulVersion, _tmpId: tmpId } as CharacterDraft & { _tmpId: string }));
+      setDraft(prev => ({ ...prev, soul_core: sd.soul_core, soulVersion: sd.soulVersion, _tmpId: tmpId } as CharacterDraft & { _tmpId: string }));
       setForgeMsg(`✅ 鑄魂完成（v${sd.soulVersion}）`);
     } else {
       setForgeMsg(`❌ ${sd.error}`);
@@ -133,7 +133,7 @@ export default function CreatePage() {
   // 步驟驗收條件
   const canProceed: Record<Step, boolean> = {
     1: !!draft.name.trim() && !!draft.mission.trim(),
-    2: !!draft.enhancedSoul,
+    2: !!draft.soul_core,
     3: true,
     4: true,
     5: true,
@@ -223,7 +223,7 @@ export default function CreatePage() {
             {step === 2 && (
               <div style={{ background: '#fff', borderRadius: 16, padding: 32 }}>
                 <h2 style={{ margin: '0 0 8px', color: '#1a1a2e' }}>注入靈魂</h2>
-                <p style={{ color: '#666', margin: '0 0 24px', fontSize: 14 }}>用自然語言描述角色的個性、說話方式和世界觀，鑄魂爐會將它鑄造成七咒律格式。</p>
+                <p style={{ color: '#666', margin: '0 0 24px', fontSize: 14 }}>用自然語言描述角色的個性、說話方式和世界觀，鑄魂爐會將它提煉成靈魂舍利格式。</p>
                 <div style={{ marginBottom: 16 }}>
                   <label style={labelStyle}>原始人設描述</label>
                   <textarea value={draft.rawSoul} onChange={e => setDraft({ ...draft, rawSoul: e.target.value })}
@@ -235,10 +235,10 @@ export default function CreatePage() {
                   {forging ? '🔥 鑄魂中...' : '⚡ 觸發鑄魂爐'}
                 </button>
                 {forgeMsg && <div style={{ fontSize: 13, color: forgeMsg.includes('❌') ? '#c00' : '#2e7d32', marginBottom: 12 }}>{forgeMsg}</div>}
-                {draft.enhancedSoul && (
+                {draft.soul_core && (
                   <div style={{ background: '#f8f9fa', borderRadius: 10, padding: 16, maxHeight: 260, overflowY: 'auto' }}>
-                    <div style={{ fontSize: 12, color: '#999', marginBottom: 8 }}>七咒律靈魂預覽</div>
-                    <div style={{ fontSize: 13, lineHeight: 1.7, whiteSpace: 'pre-wrap', color: '#333' }}>{draft.enhancedSoul.slice(0, 600)}...</div>
+                    <div style={{ fontSize: 12, color: '#999', marginBottom: 8 }}>Soul Core 預覽</div>
+                    <div style={{ fontSize: 13, lineHeight: 1.7, whiteSpace: 'pre-wrap', color: '#333' }}>{draft.soul_core}</div>
                   </div>
                 )}
               </div>
