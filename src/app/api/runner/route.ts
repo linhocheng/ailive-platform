@@ -323,7 +323,7 @@ async function runReflectTask(characterId: string, char: Record<string, unknown>
   const promptChoice = reflectPrompts[Math.floor(Date.now() / 86400000) % 2];
 
   const res = await client.messages.create({
-    model: 'claude-haiku-4-5-20251001',
+    model: 'claude-sonnet-4-6',
     max_tokens: 500,
     messages: [{
       role: 'user',
