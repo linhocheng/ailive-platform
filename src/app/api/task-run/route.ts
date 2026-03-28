@@ -172,6 +172,31 @@ export async function POST(req: NextRequest) {
     const recentInsights = await getRecentInsights(db, characterId);
     const relevantKnowledge = await getRelevantKnowledge(db, characterId, intent || taskType);
 
+    // 讀最近發文自評（skill reflection），優先注入 post 任務
+    let postReflectionBlock = '';
+    if (taskType === 'post') {
+      try {
+        const reflSnap = await db.collection('platform_insights')
+          .where('characterId', '==', characterId)
+          .where('source', '==', 'post_reflection')
+          .limit(10)
+          .get();
+        const reflections = reflSnap.docs
+          .map(d => d.data())
+          .sort((a, b) => String(b.eventDate || '').localeCompare(String(a.eventDate || '')))
+          .slice(0, 3);
+        if (reflections.length > 0) {
+          const lines = reflections
+            .filter(r => r.next_time)
+            .map(r => `- ${r.next_time}`)
+            .join('\n');
+          if (lines) {
+            postReflectionBlock = `\n【上次發文學到的（自己說的，這次要做到）】\n${lines}\n`;
+          }
+        }
+      } catch { /* 不阻斷 */ }
+    }
+
     // 組 system prompt（靈魂）
     const systemPrompt = `${soulText}
 
@@ -191,7 +216,7 @@ export async function POST(req: NextRequest) {
 {"topic":"主題一句話","content":"完整貼文文案（含 hashtag）","imagePrompt":"配圖描述（英文，50字以內）","outfitConcept":"這篇文的衣著概念（中文一句話，描述今天的穿搭情緒）"}`;
       userPrompt = `【排程任務：生成 IG 貼文草稿】
 任務意義：${intent || '從今天的感受出發，寫一篇真實的貼文'}
-${contextBlock}
+${postReflectionBlock}${contextBlock}
 
 從上面的記憶和知識出發，寫一篇今天的 IG 貼文草稿。
 不重複最近說過的主題。從感受出發，不從格式出發。
@@ -278,6 +303,56 @@ ${outputFormat}`;
     let savedId = '';
     if (taskType === 'post') {
       savedId = await savePostDraft(db, characterId, result.content || '', result.topic || '', today, result.imagePrompt);
+
+      // Step 5：發文自評回饋迴圈（Skill Reflection Loop）
+      try {
+        const soulRef = (char.system_soul as string || char.soul_core as string || char.enhancedSoul as string || '').slice(0, 400);
+        const selfEvalRes = await client.messages.create({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 300,
+          messages: [{
+            role: 'user',
+            content: `你是 ${char.name}。剛寫完一篇 IG 草稿，現在回頭看一眼。
+
+你的靈魂核心：
+${soulRef}
+
+剛寫的草稿：
+主題：${result.topic || ''}
+內容：${result.content || ''}
+
+用第一人稱，誠實說：
+1. 這篇有多像「我」？哪裡最對、哪裡最不像？
+2. 下次寫這類主題，我要記住什麼？
+
+格式（只回 JSON）：
+{"score": 1到10的數字, "aligned": "最像自己的地方（一句話）", "drift": "最不像的地方（一句話）", "next_time": "下次要記住的事（一句話）"}`,
+          }],
+        });
+
+        const evalRaw = (selfEvalRes.content[0] as Anthropic.TextBlock).text.trim().replace(/^```[\w]*\n?/m, '').replace(/\n?```$/m, '').trim();
+        await trackCost(characterId, 'claude-haiku-4-5-20251001', selfEvalRes.usage?.input_tokens ?? 0, selfEvalRes.usage?.output_tokens ?? 0);
+        const evalResult = JSON.parse(evalRaw);
+
+        const insightContent = `靈魂契合度 ${evalResult.score}/10。最像自己：${evalResult.aligned}。需要校正：${evalResult.drift}。下次記住：${evalResult.next_time}`;
+        await saveInsight(db, characterId,
+          `發文自評：${(result.topic || '').slice(0, 30)}`,
+          insightContent,
+          'post_reflection',
+          today,
+          'fresh',
+        );
+        // 額外補存 next_time 方便 postReflectionBlock 讀取
+        await db.collection('platform_insights').where('characterId', '==', characterId)
+          .where('source', '==', 'post_reflection')
+          .limit(1).get().then(async snap => {
+            if (!snap.empty) {
+              await snap.docs[0].ref.update({ next_time: evalResult.next_time, score: evalResult.score });
+            }
+          });
+      } catch (reflErr) {
+        console.error('[task-run] 發文自評失敗，不阻斷：', reflErr);
+      }
     } else {
       const insightTier = taskType === 'sleep' ? 'self' : 'fresh';
       await saveInsight(db, characterId,
