@@ -436,37 +436,59 @@ ${postData.content}
 
   // === 沒有 postId → 生成新草稿（文案 + 生圖）===
 
-  // Step 1：讀近期 insights 作為靈感來源
+  // Step 1：讀近期 insights（優先帶入發文自評的學習）
   const insightSnap = await db.collection('platform_insights')
     .where('characterId', '==', characterId)
-    .limit(20)
+    .limit(30)
     .get();
 
-  const recentInsights = insightSnap.docs
-    .map(d => d.data())
-    .sort((a, b) => (b.hitCount || 0) - (a.hitCount || 0))
-    .slice(0, 3)
-    .map(d => `${d.title}：${String(d.content).slice(0, 80)}`)
-    .join('\n');
+  const allInsights = insightSnap.docs.map(d => d.data());
 
-  // Step 2：用靈魂寫文案
+  // 發文自評（skill reflection）優先取最近 3 條
+  const postReflections = allInsights
+    .filter(d => d.source === 'post_reflection')
+    .sort((a, b) => String(b.eventDate || '').localeCompare(String(a.eventDate || '')))
+    .slice(0, 3);
+
+  // 其他 insights 按 hitCount 取前 2 條
+  const otherInsights = allInsights
+    .filter(d => d.source !== 'post_reflection')
+    .sort((a, b) => (b.hitCount || 0) - (a.hitCount || 0))
+    .slice(0, 2);
+
+  const reflectionBlock = postReflections.length > 0
+    ? postReflections.map(d => `- ${d.next_time || String(d.content).slice(0, 80)}`).join('\n')
+    : '';
+
+  const insightBlock = otherInsights.length > 0
+    ? otherInsights.map(d => `- ${d.title}：${String(d.content).slice(0, 80)}`).join('\n')
+    : '';
+
+  // Step 2：用靈魂寫文案（帶入自評學習）
+  const soulText = (char.system_soul as string || char.soul_core as string || char.enhancedSoul as string || '').slice(0, 500);
   const res = await client.messages.create({
-    model: 'claude-haiku-4-5-20251001',
-    max_tokens: 500,
+    model: 'claude-sonnet-4-6',
+    max_tokens: 600,
     messages: [{
       role: 'user',
       content: `你是 ${char.name}，要為 IG 寫一篇今天的貼文草稿。
 
-使命：${char.mission || ''}
-靈魂片段：${(char.enhancedSoul as string || '').slice(0, 300)}
-近期洞察：${recentInsights || '（暫無）'}
-今天日期：${dateStr}
+【我是誰】
+${soulText}
 
-寫一篇 120-160 字的 IG 貼文草稿（含 hashtag，符合你的說話方式）。
-然後用一句英文描述這篇文適合搭配的圖片畫面（給生圖用，不超過 30 個英文字）。
+【使命】${char.mission || ''}
+
+${reflectionBlock ? `【上次發文學到的】（這是我自己說的，要確實做到）
+${reflectionBlock}
+` : ''}${insightBlock ? `【最近的洞察靈感】
+${insightBlock}
+` : ''}今天日期：${dateStr}
+
+寫一篇 120-160 字的 IG 貼文草稿（含 hashtag，完全符合我的聲音和節奏）。
+然後用一句英文描述適合搭配的圖片畫面（給生圖用，不超過 30 個英文字）。
 
 格式（只回 JSON）：
-{"topic":"主題","content":"完整貼文內容","imagePrompt":"適合搭配的圖片畫面（英文）"}`,
+{"topic":"主題","content":"完整貼文內容","imagePrompt":"圖片畫面描述（英文）"}`,
     }],
   });
 
@@ -547,6 +569,9 @@ ${soulRef}
       lastHitAt: null,
       postId: postRef.id,
       score: evalResult.score,
+      next_time: evalResult.next_time || '',
+      aligned: evalResult.aligned || '',
+      drift: evalResult.drift || '',
       embedding,
       createdAt: new Date().toISOString(),
     });
