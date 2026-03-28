@@ -71,7 +71,27 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
     // 刪角色本體
     await db.collection('platform_characters').doc(id).delete();
 
-    return NextResponse.json({ success: true, deleted: id });
+    // 刪 Firebase Storage 圖檔（platform-images + platform-refs）
+    let storageDeleted = 0;
+    try {
+      const admin = (await import('@/lib/firebase-admin')).getFirebaseAdmin();
+      const bucket = admin.storage().bucket();
+      const prefixes = [
+        `platform-images/${id}/`,
+        `platform-refs/${id}/`,
+      ];
+      for (const prefix of prefixes) {
+        const [files] = await bucket.getFiles({ prefix });
+        for (const file of files) {
+          await file.delete();
+          storageDeleted++;
+        }
+      }
+    } catch (storageErr) {
+      console.warn('[DELETE character] Storage 清理失敗（不阻斷）:', storageErr);
+    }
+
+    return NextResponse.json({ success: true, deleted: id, storageDeleted });
   } catch (e: unknown) {
     return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
   }
