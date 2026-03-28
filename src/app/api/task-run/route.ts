@@ -213,7 +213,7 @@ export async function POST(req: NextRequest) {
 
     if (taskType === 'post') {
       outputFormat = `輸出格式（JSON，只輸出 JSON，不要其他文字）：
-{"topic":"主題一句話","content":"完整貼文文案（含 hashtag）","imagePrompt":"配圖描述（英文，50字以內）","outfitConcept":"這篇文的衣著概念（中文一句話，描述今天的穿搭情緒）"}`;
+{"topic":"主題一句話","content":"完整貼文文案（含 hashtag）","imagePrompt":"配圖描述（英文，50字以內，從角色的視覺語言和靈魂色調出發）"}`;
       userPrompt = `【排程任務：生成 IG 貼文草稿】
 任務意義：${intent || '從今天的感受出發，寫一篇真實的貼文'}
 ${postReflectionBlock}${contextBlock}

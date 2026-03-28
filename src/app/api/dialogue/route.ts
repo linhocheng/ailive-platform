@@ -99,7 +99,7 @@ const PLATFORM_TOOLS: Anthropic.Tool[] = [
         run_hour: { type: 'number', description: '幾點執行（台北時間 0-23）' },
         run_minute: { type: 'number', description: '幾分執行（0-59）' },
         description: { type: 'string', description: '任務說明' },
-        intent: { type: 'string', description: '任務意義——這個任務存在的原因，一句話說清楚。蓉兒執行時會根據這個 + 記憶決定怎麼做。' },
+        intent: { type: 'string', description: '任務意義——這個任務存在的原因，一句話說清楚。角色執行時會根據這個 + 記憶決定怎麼做。' },
       },
       required: ['task_id'],
     },
@@ -427,7 +427,7 @@ ${rawContext}`;
       createdAt: new Date().toISOString(),
     });
 
-    // 發文記憶：存一條 insight，讓蓉兒記得自己說過什麼
+    // 發文記憶：存一條 insight，讓角色記得自己說過什麼
     try {
       const summary = content.slice(0, 100).replace(/\n/g, ' ');
       const insightTitle = topic ? `發文：${topic}` : `發文 ${today}`;
