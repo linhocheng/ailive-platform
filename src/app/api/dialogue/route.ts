@@ -133,6 +133,18 @@ const PLATFORM_TOOLS: Anthropic.Tool[] = [
     },
   },
   {
+    name: 'query_posts',
+    description: '查看自己的貼文草稿列表。當想知道「我最近寫了什麼」「我的草稿在哪」「我上次發了什麼」時，呼叫這個工具查看自己的草稿。',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        status: { type: 'string', description: '篩選狀態：draft（草稿）、published（已發布）、all（全部），預設 draft', enum: ['draft', 'published', 'all'] },
+        limit: { type: 'number', description: '最多幾筆，預設 5' },
+      },
+      required: [],
+    },
+  },
+  {
     name: 'save_skill',
     description: '把一個技巧或流程定型化存起來。當用戶說「記下這個技巧」「把這個技巧建起來」「以後這個流程就這樣走」時，立刻呼叫，把剛才討論的方法固化成技巧。技巧不會模糊，每次對話都會記住。',
     input_schema: {
@@ -443,6 +455,28 @@ ${rawContext}`;
       'growthMetrics.totalPosts': FieldValue.increment(1),
     });
     return `草稿已存！Adam 可以在後台發文管理看到。ID: ${ref.id}`;
+  }
+
+  if (toolName === 'query_posts') {
+    const status = String(toolInput.status || 'draft');
+    const limit = Number(toolInput.limit || 5);
+    const db2 = getFirestore();
+    const snap = await db2.collection('platform_posts')
+      .where('characterId', '==', characterId)
+      .limit(Math.min(limit, 10))
+      .get();
+    let posts = snap.docs.map(d => ({ id: d.id, ...d.data() })) as Record<string, unknown>[];
+    if (status !== 'all') posts = posts.filter(p => p.status === status);
+    posts.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+    if (posts.length === 0) return '目前沒有' + (status === 'draft' ? '草稿' : '貼文') + '。';
+    const lines = posts.map(p => {
+      const date = String(p.createdAt || '').slice(0, 10);
+      const topic = String(p.topic || '（無標題）');
+      const preview = String(p.content || '').slice(0, 60).replace(/\n/g, ' ');
+      const hasImg = p.imageUrl ? '🖼️' : '';
+      return `- [${p.status}] ${date} ${hasImg} 《${topic}》\n  ${preview}...`;
+    });
+    return `我的貼文草稿（${posts.length} 篇）：\n${lines.join('\n')}`;
   }
 
   if (toolName === 'save_skill') {
