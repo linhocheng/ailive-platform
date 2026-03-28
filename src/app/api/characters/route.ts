@@ -120,6 +120,14 @@ export async function POST(req: NextRequest) {
         enabled: false, // 預設關閉，讓 Adam/角色手動開啟
         description: `從你最近的洞察或感受出發，寫一篇 IG 貼文草稿。不要寫讓人覺得像廣告的東西，寫真的打動你的東西。用 save_post_draft 存起來，配一張圖用 generate_image。`,
       },
+      {
+        type: 'sleep',
+        run_hour: 2,
+        run_minute: 0,
+        days: ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'],
+        enabled: true,
+        description: `每天深夜，整理今天的記憶。合併重複的洞察，讓重要的事浮上來，讓沒被用到的慢慢沉下去。這是你的自我管理，不需要表演。`,
+      },
     ];
 
     const taskBatch = db.batch();
@@ -133,6 +141,16 @@ export async function POST(req: NextRequest) {
       });
     }
     await taskBatch.commit();
+
+    // 角色建立後立刻觸發一次 sleep 初始化（建立記憶基線）
+    try {
+      const sleepUrl = `https://ailive-platform.vercel.app/api/sleep`;
+      await fetch(sleepUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ characterId: ref.id }),
+      });
+    } catch { /* 不阻斷建立流程 */ }
 
     return NextResponse.json({
       success: true,
