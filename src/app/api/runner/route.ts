@@ -501,6 +501,59 @@ ${postData.content}
     'growthMetrics.totalPosts': FieldValue.increment(1),
   });
 
+  // Step 5：發文自評回饋（Skill Reflection Loop）
+  // 角色讀自己剛寫的草稿，對照靈魂自評，存進 insights 作為下次的參考
+  try {
+    const soulRef = (char.soul_core as string || char.enhancedSoul as string || '').slice(0, 400);
+    const selfEvalRes = await client.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 300,
+      messages: [{
+        role: 'user',
+        content: `你是 ${char.name}。剛寫完一篇 IG 草稿，現在回頭看一眼。
+
+你的靈魂核心：
+${soulRef}
+
+剛寫的草稿：
+主題：${post.topic}
+內容：${post.content}
+
+用第一人稱，誠實說：
+1. 這篇有多像「我」？哪裡最對、哪裡最不像？
+2. 下次寫這類主題，我要記住什麼？
+
+格式（只回 JSON）：
+{"score": 1到10的數字, "aligned": "最像自己的地方（一句話）", "drift": "最不像的地方（一句話）", "next_time": "下次要記住的事（一句話）"}`,
+      }],
+    });
+
+    const evalRaw = stripJson((selfEvalRes.content[0] as Anthropic.TextBlock).text.trim());
+    await trackCost(characterId, 'claude-haiku-4-5-20251001', selfEvalRes.usage?.input_tokens ?? 0, selfEvalRes.usage?.output_tokens ?? 0);
+    const evalResult = JSON.parse(evalRaw);
+
+    const insightContent = `靈魂契合度 ${evalResult.score}/10。最像自己：${evalResult.aligned}。需要校正：${evalResult.drift}。下次記住：${evalResult.next_time}`;
+    const { generateEmbedding: genEmb } = await import('@/lib/embeddings');
+    const embedding = await genEmb(`發文自評 ${post.topic} ${insightContent}`);
+
+    await db.collection('platform_insights').add({
+      characterId,
+      title: `發文自評：${post.topic.slice(0, 30)}`,
+      content: insightContent,
+      source: 'post_reflection',
+      eventDate: dateStr,
+      tier: 'fresh',
+      hitCount: 0,
+      lastHitAt: null,
+      postId: postRef.id,
+      score: evalResult.score,
+      embedding,
+      createdAt: new Date().toISOString(),
+    });
+  } catch (reflErr) {
+    console.error('[runner] 發文自評失敗，不阻斷主流程：', reflErr);
+  }
+
   return `草稿建立：${postRef.id}${imageUrl ? '（含圖）' : '（無圖）'}`;
 }
 
