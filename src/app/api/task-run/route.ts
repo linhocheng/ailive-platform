@@ -352,7 +352,6 @@ ${soulRef}
           });
       } catch (reflErr) {
         console.error('[task-run] 發文自評失敗，不阻斷：', reflErr);
-        (result as Record<string, unknown>)._reflError = String(reflErr);
       }
     } else {
       const insightTier = taskType === 'sleep' ? 'self' : 'fresh';
