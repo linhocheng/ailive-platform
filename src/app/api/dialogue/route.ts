@@ -472,11 +472,12 @@ ${rawContext}`;
     const lines = posts.map(p => {
       const date = String(p.createdAt || '').slice(0, 10);
       const topic = String(p.topic || '（無標題）');
-      const preview = String(p.content || '').slice(0, 60).replace(/\n/g, ' ');
-      const hasImg = p.imageUrl ? '🖼️' : '';
-      return `- [${p.status}] ${date} ${hasImg} 《${topic}》\n  ${preview}...`;
+      const fullContent = String(p.content || '');
+      const imageUrl = String(p.imageUrl || '');
+      const imgLine = imageUrl ? `\n  🖼️ 圖片：${imageUrl}` : '';
+      return `---\n📅 ${date}｜[${p.status}]\n📌 《${topic}》\n\n${fullContent}${imgLine}`;
     });
-    return `我的貼文草稿（${posts.length} 篇）：\n${lines.join('\n')}`;
+    return `我的貼文（${posts.length} 篇）：\n\n${lines.join('\n\n')}`;
   }
 
   if (toolName === 'save_skill') {
