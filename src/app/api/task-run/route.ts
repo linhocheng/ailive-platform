@@ -29,7 +29,7 @@ function getTaipeiDate(): string {
 }
 
 // 讀角色最近的 insights（最多 5 條，按時間排序）
-async function getRecentInsights(db: ReturnType<typeof getFirestore>, characterId: string): Promise<string> {
+async function getRecentInsights(db: ReturnType<typeof getFirestore>, characterId: string): Promise<{ text: string; ids: string[] }> {
   try {
     const snap = await db.collection('platform_insights')
       .where('characterId', '==', characterId)
@@ -44,15 +44,16 @@ async function getRecentInsights(db: ReturnType<typeof getFirestore>, characterI
       )
       .slice(0, 5);
 
-    if (docs.length === 0) return '';
+    if (docs.length === 0) return { text: '', ids: [] };
 
+    const ids = docs.map((d: Record<string, unknown>) => String(d.id || ''));
     const lines = docs.map((d: Record<string, unknown>) => {
       const tier = d.tier === 'self' ? '[關於我]' : '[記憶]';
       return `${tier} ${String(d.title || '')}：${String(d.content || '').slice(0, 80)}`;
     });
 
-    return `\n\n【最近的事與感受】\n${lines.join('\n')}`;
-  } catch { return ''; }
+    return { text: `\n\n【最近的事與感受】\n${lines.join('\n')}`, ids };
+  } catch { return { text: '', ids: [] }; }
 }
 
 // 語義搜尋相關知識（query 跟 intent 相關的知識庫內容）
@@ -153,6 +154,18 @@ async function getKnowledgeBookList(db: ReturnType<typeof getFirestore>, charact
   } catch { return ''; }
 }
 
+// 更新 insights hitCount（任務執行後，被讀到的記憶 +1）
+async function updateHitCounts(db: ReturnType<typeof getFirestore>, ids: string[]): Promise<void> {
+  if (!ids.length) return;
+  const now = new Date().toISOString();
+  await Promise.all(ids.map(id =>
+    db.collection('platform_insights').doc(id).update({
+      hitCount: require('firebase-admin/firestore').FieldValue.increment(1),
+      lastHitAt: now,
+    }).catch(() => { /* 單條失敗不阻斷 */ })
+  ));
+}
+
 // 存 insight
 async function saveInsight(
   db: ReturnType<typeof getFirestore>,
@@ -239,7 +252,9 @@ export async function POST(req: NextRequest) {
     const aiName = (char.name as string) || 'AI';
 
     // 組 context
-    const recentInsights = await getRecentInsights(db, characterId);
+    const recentInsightsResult = await getRecentInsights(db, characterId);
+    const recentInsights = recentInsightsResult.text;
+    const recentInsightIds = recentInsightsResult.ids;
     const relevantKnowledge = await getRelevantKnowledge(db, characterId, intent || taskType);
     // post 任務專用：預查草稿去重 + 知識庫素材清單
     let recentPostContext = '';
@@ -390,6 +405,8 @@ ${outputFormat}`;
     let savedId = '';
     if (taskType === 'post') {
       savedId = await savePostDraft(db, characterId, result.content || '', result.topic || '', today, result.imagePrompt);
+      // post：更新 postReflectionBlock 用到的自評 ids（保底）
+      await updateHitCounts(db, recentInsightIds);
 
       // Step 5：發文自評回饋迴圈（Skill Reflection Loop）
       try {
@@ -449,6 +466,10 @@ ${soulRef}
         today,
         insightTier,
       );
+      // learn / reflect / explore：更新 context 裡讀到的 insights（保底）
+      if (taskType === 'learn' || taskType === 'reflect' || taskType === 'explore') {
+        await updateHitCounts(db, recentInsightIds);
+      }
     }
 
     return NextResponse.json({
