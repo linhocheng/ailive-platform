@@ -146,7 +146,7 @@ async function getKnowledgeBookList(db: ReturnType<typeof getFirestore>, charact
       else available.push(title);
     }
 
-    let result = '\n\n【知識庫書目】\n';
+    let result = '\n\n【知識庫素材】\n';
     if (available.length > 0) result += `可用（未用過）：${available.join('、')}\n`;
     if (usedBooks.length > 0) result += `已用過（這次避開）：${usedBooks.join('、')}`;
     return result;
@@ -241,7 +241,7 @@ export async function POST(req: NextRequest) {
     // 組 context
     const recentInsights = await getRecentInsights(db, characterId);
     const relevantKnowledge = await getRelevantKnowledge(db, characterId, intent || taskType);
-    // post 任務專用：預查草稿去重 + 知識庫書目
+    // post 任務專用：預查草稿去重 + 知識庫素材清單
     let recentPostContext = '';
     let knowledgeBookList = '';
     if (taskType === 'post') {
