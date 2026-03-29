@@ -320,7 +320,7 @@ ${postReflectionBlock}${contextBlock}${recentPostContext}${knowledgeBookList}
 - 描述這個場景裡的穿搭（outfit）：符合當下情境和氛圍，每次都要不同，不要重複上次的服裝
 - 描述姿勢（pose）和態度（attitude）：自然、有主體感，像是被抓拍到的那一刻
 - 不要描述臉，只描述場景、穿搭、姿勢、光線
-- 英文描述，60字以內
+- 英文描述，200字以內
 
 ${outputFormat}`;
 
