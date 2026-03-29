@@ -279,6 +279,109 @@ ${insightSummary}
       }
     }
 
+
+    // 6. skills 整理（補 trigger/procedure + 合併類似）
+    const skillsSnap = await db.collection('platform_skills')
+      .where('characterId', '==', characterId)
+      .where('enabled', '==', true)
+      .limit(50)
+      .get();
+
+    const skillDocs = skillsSnap.docs.map(d => ({ id: d.id, ...d.data() })) as Record<string, unknown>[];
+    const skillsFixed: string[] = [];
+    const skillsMerged: string[] = [];
+
+    // 6a. 合併語義相似的 skills（cosine > 0.85）
+    const skillsWithEmb = skillDocs.filter(s => s.embedding && Array.isArray(s.embedding));
+    const skillMergedSet = new Set<string>();
+
+    for (let i = 0; i < skillsWithEmb.length; i++) {
+      if (skillMergedSet.has(skillsWithEmb[i].id as string)) continue;
+      for (let j = i + 1; j < skillsWithEmb.length; j++) {
+        if (skillMergedSet.has(skillsWithEmb[j].id as string)) continue;
+        const score = cosineSimilarity(
+          skillsWithEmb[i].embedding as number[],
+          skillsWithEmb[j].embedding as number[]
+        );
+        if (score > 0.85) {
+          skillMergedSet.add(skillsWithEmb[j].id as string);
+          if (!dryRun) {
+            const keepHit = Math.max(
+              (skillsWithEmb[i].hitCount as number) || 0,
+              (skillsWithEmb[j].hitCount as number) || 0
+            );
+            await db.collection('platform_skills').doc(skillsWithEmb[i].id as string).update({ hitCount: keepHit });
+            await db.collection('platform_skills').doc(skillsWithEmb[j].id as string).delete();
+            skillsMerged.push(String(skillsWithEmb[j].name || skillsWithEmb[j].id));
+          }
+        }
+      }
+    }
+
+    // 6b. 角色補齊 trigger / procedure（空的才補）
+    const needsFix = skillDocs.filter(s =>
+      !skillMergedSet.has(s.id as string) &&
+      (!String(s.trigger || '').trim() || !String(s.procedure || '').trim())
+    );
+
+    if (needsFix.length > 0 && !dryRun) {
+      const skillList = needsFix.map(s =>
+        `- id: ${s.id}\n  名稱: ${s.name}\n  觸發條件: ${s.trigger || '（空）'}\n  步驟: ${s.procedure || '（空）'}`
+      ).join('\n');
+
+      const soulRef = String(char.system_soul || char.soul_core || char.enhancedSoul || '').slice(0, 300);
+
+      try {
+        const fixRes = await client.messages.create({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 600,
+          messages: [{
+            role: 'user',
+            content: `你是 ${char.name}。以下是你還沒寫清楚的技巧，請用第一人稱補完。
+
+你的靈魂：
+${soulRef}
+
+需要補齊的技巧：
+${skillList}
+
+對每條技巧：
+- 如果「觸發條件」是空的，用一句話說「我什麼時候會用這個技巧」
+- 如果「步驟」是空的，用 2-4 條具體說明怎麼做
+- 用你自己的說話方式，不要太正式
+
+只回 JSON 陣列：
+[{"id":"...","trigger":"...","procedure":"..."}]
+沒有要補的欄位就保留原值。`,
+          }],
+        });
+
+        await trackCost(characterId, 'claude-haiku-4-5-20251001',
+          fixRes.usage?.input_tokens ?? 0, fixRes.usage?.output_tokens ?? 0);
+
+        const raw = (fixRes.content[0] as Anthropic.TextBlock).text
+          .replace(/^```[\w]*\n?/m, '').replace(/\n?```$/m, '').trim();
+        const fixes = JSON.parse(raw) as Array<{ id: string; trigger: string; procedure: string }>;
+
+        for (const fix of fixes) {
+          const original = needsFix.find(s => s.id === fix.id);
+          if (!original) continue;
+          const updates: Record<string, string> = {};
+          if (!String(original.trigger || '').trim() && fix.trigger) updates.trigger = fix.trigger;
+          if (!String(original.procedure || '').trim() && fix.procedure) updates.procedure = fix.procedure;
+          if (Object.keys(updates).length > 0) {
+            await db.collection('platform_skills').doc(fix.id).update({
+              ...updates,
+              updatedAt: new Date().toISOString(),
+            });
+            skillsFixed.push(String(original.name || fix.id));
+          }
+        }
+      } catch (skillErr) {
+        console.error('[sleep] skills 補齊失敗，不阻斷：', skillErr);
+      }
+    }
+
     return NextResponse.json({
       success: true,
       dryRun: !!dryRun,
@@ -291,6 +394,9 @@ ${insightSummary}
         proposalCreated,
         coreCount,
         knowledgeMerged: kMerged.length,
+        skillsMerged: skillsMerged.length,
+        skillsFixed: skillsFixed.length,
+        skillsFixedNames: skillsFixed,
       },
     });
   } catch (e: unknown) {
