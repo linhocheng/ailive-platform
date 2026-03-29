@@ -128,12 +128,14 @@ export async function generateImageForCharacter(
     characterSheet?: string;
     imagePromptPrefix?: string;
     negativePrompt?: string;
+    fixedElements?: string[];
     refs?: RefImage[];
   } | undefined;
 
   const characterSheet = vi?.characterSheet || '';
   const imagePromptPrefix = vi?.imagePromptPrefix || '';
   const negativePrompt = vi?.negativePrompt || 'different face, inconsistent features';
+  const fixedElements = (vi?.fixedElements || []).filter(Boolean).join(', ');
   const refs = vi?.refs || [];
 
   const apiKey = process.env.ANTHROPIC_API_KEY || '';
@@ -149,7 +151,7 @@ export async function generateImageForCharacter(
     ? "Keep the subject's face, hair, skin tone, and facial features identical to the reference photo. Do not alter the face."
     : '';
 
-  const finalPrompt = [prefix, englishPrompt, faceLock, `Negative: ${negativePrompt}`]
+  const finalPrompt = [prefix, fixedElements, englishPrompt, faceLock, `Negative: ${negativePrompt}`]
     .filter(Boolean).join('. ');
 
   const storagePath = `platform-images/${characterId}`;
