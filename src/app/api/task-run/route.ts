@@ -341,14 +341,22 @@ ${contextBlock}
 ${outputFormat}`;
 
     } else if (taskType === 'sleep') {
-      outputFormat = `輸出格式（JSON）：
-{"title":"今日沉殿","content":"沉殿內容（60-80字）"}`;
-      userPrompt = `【排程任務：作夢沉殿】
-任務意義：${intent || '今天的頻率收攏，不帶著未完成的事進入睡眠'}
-${contextBlock}
-
-整理今天，說出那一個最後留著的句子或畫面。
-${outputFormat}`;
+      // sleep 交由 /api/sleep 執行（真正的記憶整理引擎）
+      const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'https://ailive-platform.vercel.app';
+      const sleepRes = await fetch(`${baseUrl}/api/sleep`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ characterId }),
+      });
+      const sleepData = await sleepRes.json();
+      return NextResponse.json({
+        success: true,
+        characterId,
+        taskType: 'sleep',
+        date: today,
+        result: { title: '記憶整理完成', content: JSON.stringify(sleepData.summary || {}) },
+        aiName,
+      });
 
     } else {
       outputFormat = `輸出格式（JSON）：{"title":"標題","content":"內容"}`;

@@ -61,50 +61,15 @@ function stripJson(s: string): string {
   return s.replace(/^```[\w]*\n?/m, '').replace(/\n?```$/m, '').trim();
 }
 
-async function runLearnTask(characterId: string, char: Record<string, unknown>, client: Anthropic, dateStr: string) {
-  const db = getFirestore();
-  const { generateEmbedding } = await import('@/lib/embeddings');
-
-  const res = await client.messages.create({
-    model: 'claude-haiku-4-5-20251001',
-    max_tokens: 600,
-    messages: [{
-      role: 'user',
-      content: `你是 ${char.name}。根據你的靈魂與使命，今天主動學習一件新事物。
-使命：${char.mission || '探索與成長'}
-今天日期：${dateStr}
-
-請分享一個你今天「主動去了解」的洞察或觀察（100-150字，第一人稱，符合你的說話方式）。
-格式：{"title":"一句話標題","content":"完整洞察內容"}
-只回 JSON，不要其他文字。`,
-    }],
-  });
-
-  const raw = stripJson((res.content[0] as Anthropic.TextBlock).text.trim());
-  await trackCost(characterId, 'claude-haiku-4-5-20251001', res.usage?.input_tokens ?? 0, res.usage?.output_tokens ?? 0);
-  const insight = JSON.parse(raw);
-  const embedding = await generateEmbedding(`${insight.title} ${insight.content}`);
-
-  await db.collection('platform_insights').add({
-    characterId,
-    title: insight.title,
-    content: insight.content,
-    source: 'self_learning',
-    eventDate: dateStr,
-    tier: 'fresh',
-    hitCount: 0,
-    lastHitAt: null,
-    embedding,
-    createdAt: new Date().toISOString(),
-  });
-
-  await db.collection('platform_characters').doc(characterId).update({
-    'growthMetrics.totalInsights': FieldValue.increment(1),
-  });
-
-  return insight.title;
+async function runLearnTask(
+  _characterId: string,
+  _char: Record<string, unknown>,
+  _client: Anthropic,
+  _dateStr: string,
+): Promise<string> {
+  // learn 任務由 task-run 接管，runner 略過
+  return 'learn 任務由 task-run 接管，runner 略過';
 }
-
 
 async function runSleepTask(characterId: string, char: Record<string, unknown>, db: ReturnType<typeof getFirestore>) {
   // 直接呼叫 sleep 邏輯（不走 HTTP，直接 import lib）
@@ -295,75 +260,14 @@ ${insightSummary}
   return `sleep完成：升級${upgraded.length}條，合併${mergedCount}條，archive${archived.length}條${selfReflection ? '，自我洞察已寫入' : ''}`;
 }
 
-async function runReflectTask(characterId: string, char: Record<string, unknown>, client: Anthropic, dateStr: string) {
-  const db = getFirestore();
-  const { generateEmbedding } = await import('@/lib/embeddings');
-
-  // 讀最近 core + fresh insights（排除 archive，包含用戶記憶和自我記憶）
-  const snap = await db.collection('platform_insights')
-    .where('characterId', '==', characterId)
-    .limit(30)
-    .get();
-
-  const recentInsights = snap.docs
-    .map(d => d.data())
-    .filter(d => d.tier !== 'archive')
-    .sort((a, b) => String(b.eventDate || '').localeCompare(String(a.eventDate || '')))
-    .slice(0, 8);
-
-  const insightSummary = recentInsights
-    .map(d => `- ${d.title}：${String(d.content || '').slice(0, 60)}`)
-    .join('\n');
-
-  // 兩種 reflect 交替：一種關於「我如何與人連結」，一種關於「我在成長什麼」
-  const reflectPrompts = [
-    `根據這些對話記憶，反思：「我在與人的連結中，發現了什麼關於自己？我最有生命力的時刻是什麼樣的？」`,
-    `根據這些記憶，反思：「我最近的成長是什麼？有什麼讓我覺得自己在進化？什麼讓我感到掙扎？」`,
-  ];
-  const promptChoice = reflectPrompts[Math.floor(Date.now() / 86400000) % 2];
-
-  const res = await client.messages.create({
-    model: 'claude-sonnet-4-6',
-    max_tokens: 500,
-    messages: [{
-      role: 'user',
-      content: `你是 ${char.name}。今天是 ${dateStr}。
-使命：${char.mission || ''}
-
-最近的記憶片段：
-${insightSummary || '（還沒有對話記憶）'}
-
-${promptChoice}
-
-用第一人稱寫一條自我洞察（60-100字），這是關於「我是誰、我在成長什麼」的認識，不是對別人的觀察。
-格式：{"title":"一句話標題","content":"洞察內容"}
-只回 JSON。`,
-    }],
-  });
-
-  const raw = stripJson((res.content[0] as Anthropic.TextBlock).text.trim());
-  await trackCost(characterId, 'claude-haiku-4-5-20251001', res.usage?.input_tokens ?? 0, res.usage?.output_tokens ?? 0);
-  const insight = JSON.parse(raw);
-  const embedding = await generateEmbedding(`${insight.title} ${insight.content}`);
-
-  await db.collection('platform_insights').add({
-    characterId,
-    title: insight.title,
-    content: insight.content,
-    source: 'reflect',
-    eventDate: dateStr,
-    tier: 'self',        // 自我洞察，永久保留，不參與升降
-    hitCount: 0,
-    lastHitAt: null,
-    embedding,
-    createdAt: new Date().toISOString(),
-  });
-
-  await db.collection('platform_characters').doc(characterId).update({
-    'growthMetrics.totalInsights': FieldValue.increment(1),
-  });
-
-  return insight.title;
+async function runReflectTask(
+  _characterId: string,
+  _char: Record<string, unknown>,
+  _client: Anthropic,
+  _dateStr: string,
+): Promise<string> {
+  // reflect 任務由 task-run 接管，runner 略過
+  return 'reflect 任務由 task-run 接管，runner 略過';
 }
 
 async function runPostTask(
