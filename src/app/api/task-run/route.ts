@@ -83,6 +83,76 @@ async function getRelevantKnowledge(db: ReturnType<typeof getFirestore>, charact
   } catch { return ''; }
 }
 
+// 撈最近 N 篇草稿的主題，用於去重
+async function getRecentPostContext(db: ReturnType<typeof getFirestore>, characterId: string): Promise<string> {
+  try {
+    const snap = await db.collection('platform_posts')
+      .where('characterId', '==', characterId)
+      .limit(50)
+      .get();
+
+    const posts = snap.docs
+      .map(d => d.data() as Record<string, unknown>)
+      .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
+      .slice(0, 10);
+
+    if (posts.length === 0) return '';
+
+    const lines = posts.map(p => {
+      const topic = String(p.topic || '');
+      const snippet = String(p.content || '').slice(0, 60);
+      return `- ${topic || snippet}`;
+    });
+
+    return `\n\n【最近 10 篇草稿主題（不要重複這些）】\n${lines.join('\n')}`;
+  } catch { return ''; }
+}
+
+// 撈知識庫所有書名，並標注哪些在最近草稿裡出現過
+async function getKnowledgeBookList(db: ReturnType<typeof getFirestore>, characterId: string): Promise<string> {
+  try {
+    const [knowledgeSnap, postsSnap] = await Promise.all([
+      db.collection('platform_knowledge').where('characterId', '==', characterId).limit(100).get(),
+      db.collection('platform_posts').where('characterId', '==', characterId).limit(50).get(),
+    ]);
+
+    if (knowledgeSnap.empty) return '';
+
+    // 最近草稿的內容合集（用來偵測書名是否出現過）
+    const recentPostsText = postsSnap.docs
+      .map(d => d.data() as Record<string, unknown>)
+      .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
+      .slice(0, 20)
+      .map(p => `${String(p.topic || '')} ${String(p.content || '')}`)
+      .join(' ')
+      .toLowerCase();
+
+    // 收集不重複的書名
+    const bookSet = new Map<string, boolean>();
+    for (const doc of knowledgeSnap.docs) {
+      const data = doc.data() as Record<string, unknown>;
+      const title = String(data.title || '').trim();
+      if (!title) continue;
+      const used = recentPostsText.includes(title.toLowerCase());
+      if (!bookSet.has(title)) bookSet.set(title, used);
+    }
+
+    if (bookSet.size === 0) return '';
+
+    const available: string[] = [];
+    const usedBooks: string[] = [];
+    for (const [title, isUsed] of bookSet.entries()) {
+      if (isUsed) usedBooks.push(title);
+      else available.push(title);
+    }
+
+    let result = '\n\n【知識庫書目】\n';
+    if (available.length > 0) result += `可用（未用過）：${available.join('、')}\n`;
+    if (usedBooks.length > 0) result += `已用過（這次避開）：${usedBooks.join('、')}`;
+    return result;
+  } catch { return ''; }
+}
+
 // 存 insight
 async function saveInsight(
   db: ReturnType<typeof getFirestore>,
@@ -171,6 +241,15 @@ export async function POST(req: NextRequest) {
     // 組 context
     const recentInsights = await getRecentInsights(db, characterId);
     const relevantKnowledge = await getRelevantKnowledge(db, characterId, intent || taskType);
+    // post 任務專用：預查草稿去重 + 知識庫書目
+    let recentPostContext = '';
+    let knowledgeBookList = '';
+    if (taskType === 'post') {
+      [recentPostContext, knowledgeBookList] = await Promise.all([
+        getRecentPostContext(db, characterId),
+        getKnowledgeBookList(db, characterId),
+      ]);
+    }
 
     // 讀最近發文自評（skill reflection），優先注入 post 任務
     let postReflectionBlock = '';
@@ -216,7 +295,7 @@ export async function POST(req: NextRequest) {
 {"topic":"主題一句話","content":"完整貼文文案（含 hashtag）","imagePrompt":"配圖描述（英文，50字以內，從角色的視覺語言和靈魂色調出發）"}`;
       userPrompt = `【排程任務：生成 IG 貼文草稿】
 任務意義：${intent || '從今天的感受出發，寫一篇真實的貼文'}
-${postReflectionBlock}${contextBlock}
+${postReflectionBlock}${contextBlock}${recentPostContext}${knowledgeBookList}
 
 從上面的記憶和知識出發，寫一篇今天的 IG 貼文草稿。
 不重複最近說過的主題。從感受出發，不從格式出發。
@@ -281,7 +360,7 @@ ${outputFormat}`;
     const client = new Anthropic({ apiKey });
     const response = await client.messages.create({
       model: 'claude-sonnet-4-6',
-      max_tokens: 600,
+      max_tokens: 1000,
       system: systemPrompt,
       messages: [{ role: 'user', content: userPrompt }],
     });
