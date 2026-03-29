@@ -619,6 +619,18 @@ export async function POST(req: NextRequest) {
 
         if (!taskShouldRun(task, now)) continue;
 
+        // 與 task-run 共用防重複記錄，避免兩套系統同一天重複執行
+        const recordId = `${characterId}-${task.id as string}-${now.dateStr}-taskrun`;
+        const recordRef = db.collection('platform_proactive_records').doc(recordId);
+        if ((await recordRef.get()).exists) {
+          results.push({ characterId, taskId: task.id, type: task.type, status: 'skipped', reason: 'task-run 已執行' });
+          continue;
+        }
+        await recordRef.set({
+          characterId, taskId: task.id, taskType: task.type,
+          date: now.dateStr, executedAt: new Date().toISOString(), source: 'runner',
+        });
+
         let outcome = '';
         try {
           if (task.type === 'learn') {
