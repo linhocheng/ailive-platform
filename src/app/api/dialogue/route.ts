@@ -22,6 +22,33 @@ import { generateImagePath } from '@/lib/image-storage';
 
 export const maxDuration = 120;
 
+// instance-level cache：角色靜態資料（5 分鐘有效）
+const charCache = new Map();
+const CACHE_TTL = 5 * 60 * 1000;
+
+async function getCachedChar(
+  db: ReturnType<typeof getFirestore>,
+  characterId: string,
+): Promise<{ data: Record<string, unknown>; skills: Record<string, unknown>[] }> {
+  const now = Date.now();
+  const cached = charCache.get(characterId);
+  if (cached && now - cached.cachedAt < CACHE_TTL) {
+    return { data: cached.data, skills: cached.skills };
+  }
+  const [charDoc, skillsSnap] = await Promise.all([
+    db.collection('platform_characters').doc(characterId).get(),
+    db.collection('platform_skills')
+      .where('characterId', '==', characterId)
+      .where('enabled', '==', true)
+      .get(),
+  ]);
+  if (!charDoc.exists) throw new Error('角色不存在');
+  const data = charDoc.data()!;
+  const skills = skillsSnap.docs.map((d: FirebaseFirestore.QueryDocumentSnapshot) => d.data());
+  charCache.set(characterId, { data, skills, cachedAt: now });
+  return { data, skills };
+}
+
 // ===== 台北時間 =====
 function getTaipeiTime(): string {
   return new Date().toLocaleString('zh-TW', {
@@ -740,10 +767,8 @@ ${awakeningResult}`,
     if (!apiKey) return NextResponse.json({ error: 'ANTHROPIC_API_KEY 未設定' }, { status: 500 });
 
     // 1. 讀角色
-    const charDoc = await db.collection('platform_characters').doc(characterId).get();
-    if (!charDoc.exists) return NextResponse.json({ error: '角色不存在' }, { status: 404 });
-    const char = charDoc.data()!;
-
+    // 讀角色資料（instance cache，5 分鐘有效）
+    const { data: char, skills: cachedSkills } = await getCachedChar(db, characterId);
     if (!char.soul_core && !char.system_soul && !char.enhancedSoul) {
       return NextResponse.json({ error: '角色尚未完成鑄魂，請先呼叫 /api/soul-enhance' }, { status: 400 });
     }
@@ -851,20 +876,17 @@ ${awakeningResult}`,
     const soulText = (char.system_soul as string) || (char.soul_core as string) || (char.enhancedSoul as string) || '';
 
     // 3b. 讀啟用中的 skills，注入 system prompt
+    // skills 從 cache 讀取（不重複打 Firestore）
     let skillsBlock = '';
     try {
-      const skillsSnap = await db.collection('platform_skills')
-        .where('characterId', '==', characterId)
-        .where('enabled', '==', true)
-        .get();
-      const activeSkills = skillsSnap.docs.map(d => d.data());
+      const activeSkills = cachedSkills;
       if (activeSkills.length > 0) {
         const lines = activeSkills.map((s: Record<string, unknown>, i: number) =>
           `${i + 1}. 【${String(s.name)}】\n   觸發：${String(s.trigger)}\n   流程：${String(s.procedure)}`
         );
         skillsBlock = `\n\n【我的定型技巧】\n以下是我練起來的技巧，遇到對應情況就照著走：\n${lines.join('\n')}`;
       }
-    } catch { /* 查不到不阻斷 */ }
+    } catch { /* 不阻斷 */ }
 
     // 謀師專屬系統指令
     const mentorInjection = characterId === MENTOR_CHARACTER_ID ? `
@@ -895,7 +917,7 @@ ${awakeningResult}`,
 ${convData.summary ? `對話摘要（上次回顧）：\n${convData.summary}` : ''}`;
 
     // 4. 組歷史訊息（舊圖片不重傳 base64，只帶文字，避免 413）
-    const history = (convData.messages as Array<{ role: string; content: string; imageUrl?: string }> || []).slice(-20);
+    const history = (convData.messages as Array<{ role: string; content: string; imageUrl?: string }> || []).slice(-10);
     const messages: Anthropic.MessageParam[] = [
       ...history.map(m => ({
         role: m.role as 'user' | 'assistant',
@@ -1039,6 +1061,39 @@ ${convData.summary ? `對話摘要（上次回顧）：\n${convData.summary}` : 
     await trackCost(characterId, 'claude-sonnet-4-6', totalInputTokens, totalOutputTokens);
     if (haikuInputTokens + haikuOutputTokens > 0) {
       await trackCost(characterId, 'claude-haiku-4-5-20251001', haikuInputTokens, haikuOutputTokens);
+    }
+
+    // 7b. summary 壓縮：對話超過 10 輪，把第 1-10 輪壓縮進 summary
+    const allMessages = newMessages;
+    if (allMessages.length > 10) {
+      const olderMessages = allMessages.slice(0, allMessages.length - 10);
+      if (olderMessages.length >= 4) {
+        try {
+          const compressText = olderMessages
+            .map(m => `${String(m.role) === 'user' ? '用戶' : '角色'}：${String(m.content || '').slice(0, 100)}`)
+            .join('\n');
+          const compressRes = await client.messages.create({
+            model: 'claude-haiku-4-5-20251001',
+            max_tokens: 200,
+            messages: [{
+              role: 'user',
+              content: `以下是對話的早期段落，請用 3-5 句話壓縮成摘要，保留重要的人名、話題、關係資訊。直接輸出摘要，不要標題。\n\n${compressText}`,
+            }],
+          });
+          const newSummary = (compressRes.content[0] as Anthropic.TextBlock).text.trim();
+          await trackCost(characterId, 'claude-haiku-4-5-20251001',
+            compressRes.usage?.input_tokens ?? 0, compressRes.usage?.output_tokens ?? 0);
+          // 只保留最近 10 輪，summary 累加
+          const existingSummary = String(convData.summary || '');
+          const mergedSummary = existingSummary
+            ? `${existingSummary}\n${newSummary}`
+            : newSummary;
+          await convRef!.update({
+            messages: allMessages.slice(-10),
+            summary: mergedSummary.slice(-500), // summary 最多保留 500 字
+          });
+        } catch { /* 壓縮失敗不阻斷 */ }
+      }
     }
 
     // 8. 每 20 輪提煉 insight
