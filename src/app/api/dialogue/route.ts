@@ -790,16 +790,31 @@ ${awakeningResult}`,
     const taipeiTime = getTaipeiTime();
 
     // 3a. 抓最近 episodic insights（時間感注入）
+    // identity memoryType 的 source 清單
+    const IDENTITY_SOURCES = new Set([
+      'sleep_time', 'self_awareness', 'sleep_self_awareness',
+      'reflect', 'scheduler_reflect', 'scheduler_sleep',
+      'post_reflection', 'pre_publish_reflection',
+      'conversation', 'awakening',
+    ]);
+
     let episodicBlock = '';
     try {
       const recentSnap = await db.collection('platform_insights')
         .where('characterId', '==', characterId)
-        .limit(20)
+        .limit(50)
         .get();
 
       const recentInsights = recentSnap.docs
         .map(d => ({ ...d.data(), id: d.id }))
-        .filter((d: Record<string, unknown>) => d.tier !== 'archive')
+        .filter((d: Record<string, unknown>) => {
+          if (d.tier === 'archive') return false;
+          // 只取 identity 類：有 memoryType 欄位的按欄位判斷，沒有的按 source 判斷
+          const mType = String(d.memoryType || '');
+          if (mType === 'identity') return true;
+          if (mType === 'knowledge') return false;
+          return IDENTITY_SOURCES.has(String(d.source || ''));
+        })
         .sort((a: Record<string, unknown>, b: Record<string, unknown>) =>
           String(b.eventDate || '').localeCompare(String(a.eventDate || ''))
         )

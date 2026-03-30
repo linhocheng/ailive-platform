@@ -23,6 +23,18 @@ function stripJson(s: string): string {
   return s.replace(/^```[\w]*\n?/m, '').replace(/\n?```$/m, '').trim();
 }
 
+
+// source → memoryType 映射
+function getMemoryType(source: string): 'identity' | 'knowledge' {
+  const identitySources = new Set([
+    'sleep_time', 'self_awareness', 'sleep_self_awareness',
+    'reflect', 'scheduler_reflect', 'scheduler_sleep',
+    'post_reflection', 'pre_publish_reflection',
+    'conversation', 'awakening',
+  ]);
+  return identitySources.has(source) ? 'identity' : 'knowledge';
+}
+
 export async function POST(req: NextRequest) {
   try {
     const db = getFirestore();
@@ -64,15 +76,24 @@ export async function POST(req: NextRequest) {
 
       if (tier === 'self' || tier === 'archive') continue; // self 不動，已歸檔不重複處理
 
+      // memoryType 分流：identity 保護更久，knowledge 衰退更快
+      const memType = getMemoryType(String(ins.source || ''));
+      const coreDecayDays = memType === 'identity' ? 60 : 14;
+      const freshDecayDays = memType === 'identity' ? 30 : 7;
+
       if (hitCount >= 5 && tier === 'fresh') {
-        if (!dryRun) await db.collection('platform_insights').doc(ins.id as string).update({ tier: 'core' });
+        if (!dryRun) await db.collection('platform_insights').doc(ins.id as string).update({ tier: 'core', memoryType: memType });
         upgraded.push(ins.title as string);
-      } else if (tier === 'core' && daysSinceHit > 30) {
+      } else if (tier === 'core' && daysSinceHit > coreDecayDays) {
         if (!dryRun) await db.collection('platform_insights').doc(ins.id as string).update({ tier: 'archive' });
         archived.push(ins.title as string);
-      } else if (tier === 'fresh' && hitCount === 0 && ageDays > 14) {
+      } else if (tier === 'fresh' && hitCount === 0 && ageDays > freshDecayDays) {
         if (!dryRun) await db.collection('platform_insights').doc(ins.id as string).update({ tier: 'archive' });
         archived.push(ins.title as string);
+      }
+      // 補 memoryType（舊資料沒有這個欄位）
+      if (!ins.memoryType && !dryRun) {
+        await db.collection('platform_insights').doc(ins.id as string).update({ memoryType: memType });
       }
     }
 

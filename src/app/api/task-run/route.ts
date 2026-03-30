@@ -29,16 +29,40 @@ function getTaipeiDate(): string {
 }
 
 // 讀角色最近的 insights（最多 5 條，按時間排序）
-async function getRecentInsights(db: ReturnType<typeof getFirestore>, characterId: string): Promise<{ text: string; ids: string[] }> {
+// identity source 清單（與 sleep/dialogue 共用邏輯）
+const IDENTITY_SOURCES_SET = new Set([
+  'sleep_time', 'self_awareness', 'sleep_self_awareness',
+  'reflect', 'scheduler_reflect', 'scheduler_sleep',
+  'post_reflection', 'pre_publish_reflection',
+  'conversation', 'awakening',
+]);
+
+function isIdentityInsight(d: Record<string, unknown>): boolean {
+  const mType = String(d.memoryType || '');
+  if (mType === 'identity') return true;
+  if (mType === 'knowledge') return false;
+  return IDENTITY_SOURCES_SET.has(String(d.source || ''));
+}
+
+async function getRecentInsights(
+  db: ReturnType<typeof getFirestore>,
+  characterId: string,
+  filter?: 'identity' | 'knowledge' | 'all'
+): Promise<{ text: string; ids: string[] }> {
   try {
     const snap = await db.collection('platform_insights')
       .where('characterId', '==', characterId)
-      .limit(30)
+      .limit(50)
       .get();
 
     const docs = snap.docs
       .map(d => ({ ...d.data(), id: d.id }))
-      .filter((d: Record<string, unknown>) => d.tier !== 'archive')
+      .filter((d: Record<string, unknown>) => {
+        if (d.tier === 'archive') return false;
+        if (!filter || filter === 'all') return true;
+        const isIdentity = isIdentityInsight(d);
+        return filter === 'identity' ? isIdentity : !isIdentity;
+      })
       .sort((a: Record<string, unknown>, b: Record<string, unknown>) =>
         String(b.eventDate || '').localeCompare(String(a.eventDate || ''))
       )
@@ -154,6 +178,18 @@ async function getKnowledgeBookList(db: ReturnType<typeof getFirestore>, charact
   } catch { return ''; }
 }
 
+
+// source → memoryType 映射（全域共用）
+function getMemoryType(source: string): 'identity' | 'knowledge' {
+  const identitySources = new Set([
+    'sleep_time', 'self_awareness', 'sleep_self_awareness',
+    'reflect', 'scheduler_reflect', 'scheduler_sleep',
+    'post_reflection', 'pre_publish_reflection',
+    'conversation', 'awakening',
+  ]);
+  return identitySources.has(source) ? 'identity' : 'knowledge';
+}
+
 // 更新 insights hitCount（任務執行後，被讀到的記憶 +1）
 async function updateHitCounts(db: ReturnType<typeof getFirestore>, ids: string[]): Promise<void> {
   if (!ids.length) return;
@@ -178,9 +214,10 @@ async function saveInsight(
 ): Promise<void> {
   try {
     const embedding = await generateEmbedding(`${title} ${content}`);
+    const memoryType = getMemoryType(source);
     await db.collection('platform_insights').add({
       characterId, title, content, source,
-      eventDate: date, tier,
+      eventDate: date, tier, memoryType,
       hitCount: 0, lastHitAt: null,
       embedding, createdAt: new Date().toISOString(),
     });
@@ -252,7 +289,9 @@ export async function POST(req: NextRequest) {
     const aiName = (char.name as string) || 'AI';
 
     // 組 context
-    const recentInsightsResult = await getRecentInsights(db, characterId);
+    // reflect/sleep 只讀 identity（關於自我），learn/post 讀 identity（避免知識噪音）
+    const insightFilter = taskType === 'learn' ? 'all' : 'identity';
+    const recentInsightsResult = await getRecentInsights(db, characterId, insightFilter);
     const recentInsights = recentInsightsResult.text;
     const recentInsightIds = recentInsightsResult.ids;
     const relevantKnowledge = await getRelevantKnowledge(db, characterId, intent || taskType);
