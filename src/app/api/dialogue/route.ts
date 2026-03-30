@@ -199,7 +199,7 @@ async function executeTool(
 
   if (toolName === 'query_knowledge_base') {
     const query = String(toolInput.query || '');
-    const limit = Number(toolInput.limit || 15);
+    const limit = Number(toolInput.limit || 5);
 
     const [knowledgeSnap, insightSnap] = await Promise.all([
       db.collection('platform_knowledge').where('characterId', '==', characterId).limit(100).get(),
@@ -222,7 +222,7 @@ async function executeTool(
     const qEmb = await generateEmbedding(query);
     const scored = withEmb
       .map(d => ({ d, score: cosineSimilarity(qEmb, d.embedding as number[]) }))
-      .filter(s => s.score >= 0.35)  // 256維低維向量，threshold 從 0.5 降到 0.35
+      .filter(s => s.score >= 0.5)  // 品質優先：只取相似度 ≥ 0.5 的結果
       .sort((a, b) => {
         // knowledge（天命）永遠排在 insight 前面，相同 type 再比 score
         const aIsKnowledge = a.d._type === 'knowledge' ? 1 : 0;
@@ -293,10 +293,18 @@ ${rawContext}
         });
         onHaikuTokens?.(reasonRes.usage?.input_tokens ?? 0, reasonRes.usage?.output_tokens ?? 0);
         const reasoned = (reasonRes.content[0] as { text: string }).text.trim();
-        return `${reasoned}
-
----
-${rawContext}`;
+        // 只附上 top 3 原始條目，不回傳全部（省 token）
+        const top3Context = scored.slice(0, 3).map(({ d, score }) => {
+          const tag = d._type === 'knowledge' ? `[天命・${d.category || '一般'}]` : `[記憶]`;
+          const body = d._type === 'knowledge'
+            ? String(d.content || d.summary || '').slice(0, 150)
+            : String(d.content || '').slice(0, 100);
+          const imgLine = (d._type === 'knowledge' && d.imageUrl)
+            ? `\n[產品圖 imageUrl: ${d.imageUrl}]`
+            : '';
+          return `${tag} ${d.title || ''}：${body}${imgLine}`;
+        }).join('\n\n');
+        return `${reasoned}\n\n---\n${top3Context}`;
       } catch {
         // 推理失敗 fallback 原始結果
         return rawContext;
