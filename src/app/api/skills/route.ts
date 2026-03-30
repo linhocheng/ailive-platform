@@ -8,6 +8,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getFirestore } from '@/lib/firebase-admin';
+import { generateEmbedding } from '@/lib/embeddings';
 
 export async function GET(req: NextRequest) {
   try {
@@ -41,6 +42,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'characterId, name, trigger, procedure 必填' }, { status: 400 });
     }
 
+    const embedding = await generateEmbedding(`${name} ${trigger} ${procedure}`).catch(() => []);
     const ref = await db.collection('platform_skills').add({
       characterId,
       name,
@@ -49,6 +51,7 @@ export async function POST(req: NextRequest) {
       enabled: true,
       createdBy: createdBy || 'user',
       hitCount: 0,
+      embedding,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     });
@@ -70,6 +73,15 @@ export async function PATCH(req: NextRequest) {
     if (trigger !== undefined) updates.trigger = trigger;
     if (procedure !== undefined) updates.procedure = procedure;
     if (enabled !== undefined) updates.enabled = enabled;
+
+    // 內容有更新時，重算 embedding
+    if (name !== undefined || trigger !== undefined || procedure !== undefined) {
+      const existing = (await db.collection('platform_skills').doc(id).get()).data() || {};
+      const newName = name ?? existing.name ?? '';
+      const newTrigger = trigger ?? existing.trigger ?? '';
+      const newProcedure = procedure ?? existing.procedure ?? '';
+      updates.embedding = await generateEmbedding(`${newName} ${newTrigger} ${newProcedure}`).catch(() => []);
+    }
 
     await db.collection('platform_skills').doc(id).update(updates);
     return NextResponse.json({ success: true });

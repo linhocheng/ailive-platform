@@ -291,6 +291,21 @@ ${insightSummary}
     const skillsFixed: string[] = [];
     const skillsMerged: string[] = [];
 
+    // 6a-0. 補沒有 embedding 的 skills
+    if (!dryRun) {
+      for (const skill of skillDocs) {
+        if (!skill.embedding || !Array.isArray(skill.embedding) || (skill.embedding as number[]).length === 0) {
+          try {
+            const emb = await generateEmbedding(
+              `${String(skill.name || '')} ${String(skill.trigger || '')} ${String(skill.procedure || '')}`
+            );
+            await db.collection('platform_skills').doc(skill.id as string).update({ embedding: emb });
+            skill.embedding = emb; // 更新本地，讓後續合併能用到
+          } catch { /* 單條失敗不阻斷 */ }
+        }
+      }
+    }
+
     // 6a. 合併語義相似的 skills（cosine > 0.85）
     const skillsWithEmb = skillDocs.filter(s => s.embedding && Array.isArray(s.embedding));
     const skillMergedSet = new Set<string>();
