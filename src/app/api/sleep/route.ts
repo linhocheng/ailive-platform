@@ -59,12 +59,42 @@ export async function POST(req: NextRequest) {
     const merged: string[] = [];
     const upgraded: string[] = [];
     const archived: string[] = [];
+    const blocked: string[] = []; // rootRelevance 太低，升 core 被擋
     const now = Date.now();
 
-    // 1. 升降級（設計規則 2026-03-17）
-    // fresh  → core    : hitCount >= 5
-    // core   → archive : lastHitAt 超過 30 天無新命中
-    // fresh  → archive : createdAt 超過 14 天 且 hitCount = 0
+    // 建立 rootAnchor：用於計算 rootRelevance（防漂移保護）
+    // 優先用知識庫天命條目，fallback 用 soul_core 文字
+    let rootAnchorEmbeddings: number[][] = [];
+    try {
+      const kSnap0 = await db.collection('platform_knowledge')
+        .where('characterId', '==', characterId)
+        .limit(30)
+        .get();
+      const kWithEmb0 = kSnap0.docs
+        .map(d => d.data())
+        .filter(d => d.embedding && Array.isArray(d.embedding));
+      if (kWithEmb0.length > 0) {
+        rootAnchorEmbeddings = kWithEmb0.map(d => d.embedding as number[]);
+      } else {
+        // fallback：soul_core 文字
+        const soulText = String(char.soul_core || char.enhancedSoul || '').slice(0, 400);
+        if (soulText) {
+          const soulEmb = await generateEmbedding(soulText);
+          rootAnchorEmbeddings = [soulEmb];
+        }
+      }
+    } catch { /* rootAnchor 建立失敗不阻斷，只是不做保護 */ }
+
+    function calcRootRelevance(insightEmb: number[]): number {
+      if (rootAnchorEmbeddings.length === 0) return 1; // 無 anchor = 不擋
+      return Math.max(...rootAnchorEmbeddings.map(a => cosineSimilarity(insightEmb, a)));
+    }
+
+    // 1. 升降級（設計規則 2026-03-30 rootRelevance 保護版）
+    // fresh  → core    : hitCount >= 5 且 rootRelevance >= 門檻（identity: 0.2 / knowledge: 0.35）
+    // fresh  → blocked : hitCount >= 5 但 rootRelevance 不足 → 寫入 rootRelevance，不升
+    // core   → archive : lastHitAt 超過 decayDays 無新命中
+    // fresh  → archive : createdAt 超過 decayDays 且 hitCount = 0
     // self   → 不參與升降，永久保留
     for (const ins of insights) {
       const hitCount = (ins.hitCount as number) || 0;
@@ -74,16 +104,28 @@ export async function POST(req: NextRequest) {
       const ageDays = (now - createdAt) / 86400000;
       const daysSinceHit = (now - lastHitAt) / 86400000;
 
-      if (tier === 'self' || tier === 'archive') continue; // self 不動，已歸檔不重複處理
+      if (tier === 'self' || tier === 'archive') continue;
 
       // memoryType 分流：identity 保護更久，knowledge 衰退更快
       const memType = getMemoryType(String(ins.source || ''));
       const coreDecayDays = memType === 'identity' ? 60 : 14;
       const freshDecayDays = memType === 'identity' ? 30 : 7;
+      const rootThreshold = memType === 'identity' ? 0.2 : 0.35;
 
       if (hitCount >= 5 && tier === 'fresh') {
-        if (!dryRun) await db.collection('platform_insights').doc(ins.id as string).update({ tier: 'core', memoryType: memType });
-        upgraded.push(ins.title as string);
+        // rootRelevance 保護：升 core 前先驗根
+        const insEmb = ins.embedding && Array.isArray(ins.embedding) ? ins.embedding as number[] : null;
+        const rootRelevance = insEmb ? calcRootRelevance(insEmb) : 1;
+        if (rootRelevance >= rootThreshold) {
+          if (!dryRun) await db.collection('platform_insights').doc(ins.id as string).update({
+            tier: 'core', memoryType: memType, rootRelevance,
+          });
+          upgraded.push(ins.title as string);
+        } else {
+          // 不升，但寫入 rootRelevance 讓 dashboard 可見
+          if (!dryRun) await db.collection('platform_insights').doc(ins.id as string).update({ rootRelevance, memoryType: memType });
+          blocked.push(String(ins.title || ''));
+        }
       } else if (tier === 'core' && daysSinceHit > coreDecayDays) {
         if (!dryRun) await db.collection('platform_insights').doc(ins.id as string).update({ tier: 'archive' });
         archived.push(ins.title as string);
@@ -420,6 +462,40 @@ ${skillList}
       }
     }
 
+    // 記憶健康報告
+    const healthReport = {
+      totalInsights: insights.length,
+      byTier: {
+        self: insights.filter(i => i.tier === 'self').length,
+        core: insights.filter(i => i.tier === 'core').length + upgraded.length,
+        fresh: insights.filter(i => i.tier === 'fresh').length - upgraded.length - blocked.length,
+        archive: insights.filter(i => i.tier === 'archive').length + archived.length,
+      },
+      byMemoryType: {
+        identity: insights.filter(i => {
+          const mType = String(i.memoryType || '');
+          if (mType === 'identity') return true;
+          if (mType === 'knowledge') return false;
+          const IDENTITY_SOURCES = new Set(['sleep_time','self_awareness','sleep_self_awareness','reflect','scheduler_reflect','scheduler_sleep','post_reflection','pre_publish_reflection','conversation','awakening']);
+          return IDENTITY_SOURCES.has(String(i.source || ''));
+        }).length,
+        knowledge: insights.filter(i => {
+          const mType = String(i.memoryType || '');
+          if (mType === 'knowledge') return true;
+          if (mType === 'identity') return false;
+          const IDENTITY_SOURCES = new Set(['sleep_time','self_awareness','sleep_self_awareness','reflect','scheduler_reflect','scheduler_sleep','post_reflection','pre_publish_reflection','conversation','awakening']);
+          return !IDENTITY_SOURCES.has(String(i.source || ''));
+        }).length,
+      },
+      rootAnchorSource: rootAnchorEmbeddings.length > 0
+        ? (await db.collection('platform_knowledge').where('characterId','==',characterId).limit(1).get()).empty
+          ? 'soul_core'
+          : 'knowledge_base'
+        : 'none',
+      blockedFromCore: blocked.length,
+      blockedNames: blocked,
+    };
+
     return NextResponse.json({
       success: true,
       dryRun: !!dryRun,
@@ -428,6 +504,7 @@ ${skillList}
         merged: merged.length,
         upgraded: upgraded.length,
         archived: archived.length,
+        blocked: blocked.length,
         selfReflection: selfReflection.slice(0, 100),
         proposalCreated,
         coreCount,
@@ -436,6 +513,7 @@ ${skillList}
         skillsFixed: skillsFixed.length,
         skillsFixedNames: skillsFixed,
       },
+      healthReport,
     });
   } catch (e: unknown) {
     return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
