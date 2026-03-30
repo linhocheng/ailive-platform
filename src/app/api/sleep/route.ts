@@ -186,6 +186,7 @@ ${insightSummary}
 }` }],
         });
 
+        await trackCost(characterId, 'claude-haiku-4-5-20251001', awarenessRes.usage?.input_tokens ?? 0, awarenessRes.usage?.output_tokens ?? 0);
         const raw = ((awarenessRes.content[0] as Anthropic.TextBlock).text || '')
           .replace(/^```[\w]*\n?/m,'').replace(/\n?```$/m,'').trim();
         const awareness = JSON.parse(raw);
@@ -237,6 +238,7 @@ ${insightSummary}
         }],
       });
 
+      await trackCost(characterId, 'claude-haiku-4-5-20251001', propRes.usage?.input_tokens ?? 0, propRes.usage?.output_tokens ?? 0);
       const propRaw = stripJson((propRes.content[0] as Anthropic.TextBlock).text.trim());
       const proposal = JSON.parse(propRaw);
 
