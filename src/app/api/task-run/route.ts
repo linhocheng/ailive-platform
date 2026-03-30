@@ -291,8 +291,42 @@ export async function POST(req: NextRequest) {
       } catch { /* 不阻斷 */ }
     }
 
-    // 組 system prompt（靈魂）
-    const systemPrompt = `${soulText}
+    // 讀啟用中的 skills，語義搜尋跟當前任務相關的（用 intent + taskType 作為 query）
+    let skillsBlock = '';
+    try {
+      const skillsSnap = await db.collection('platform_skills')
+        .where('characterId', '==', characterId)
+        .where('enabled', '==', true)
+        .limit(20)
+        .get();
+
+      if (!skillsSnap.empty) {
+        const skillQuery = `${taskType} ${intent || ''}`.trim();
+        const qEmb = await generateEmbedding(skillQuery);
+
+        const relevantSkills = skillsSnap.docs
+          .map(d => {
+            const data = d.data() as Record<string, unknown>;
+            const score = data.embedding && Array.isArray(data.embedding)
+              ? cosineSimilarity(qEmb, data.embedding as number[])
+              : 0;
+            return { data, score };
+          })
+          .filter(r => r.score >= 0.3)
+          .sort((a, b) => b.score - a.score)
+          .slice(0, 3);
+
+        if (relevantSkills.length > 0) {
+          const lines = relevantSkills.map(r =>
+            `【${String(r.data.name || '')}】\n觸發：${String(r.data.trigger || '')}\n做法：${String(r.data.procedure || '').slice(0, 200)}`
+          ).join('\n\n');
+          skillsBlock = `\n\n---\n【我的定型技巧（這次任務用得上的）】\n${lines}`;
+        }
+      }
+    } catch { /* 不阻斷 */ }
+
+    // 組 system prompt（靈魂 + 技巧）
+    const systemPrompt = `${soulText}${skillsBlock}
 
 ---
 今天日期（台北）：${today}
