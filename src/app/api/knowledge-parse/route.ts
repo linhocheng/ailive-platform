@@ -179,8 +179,11 @@ export async function POST(req: NextRequest) {
       const pdfParse = require('pdf-parse');
       const data = await pdfParse(Buffer.from(buffer));
       text = data.text;
+    } else if (ext === 'md' || ext === 'txt') {
+      // Markdown / 純文字：直接讀取
+      text = Buffer.from(buffer).toString('utf-8');
     } else {
-      return NextResponse.json({ error: '只支援 .pdf 和 .docx' }, { status: 400 });
+      return NextResponse.json({ error: '只支援 .pdf、.docx、.md、.txt' }, { status: 400 });
     }
 
     // 文字分塊存入

@@ -16,8 +16,8 @@ export async function POST(req: NextRequest) {
     }
 
     const ext = filename.split('.').pop()?.toLowerCase();
-    if (!['pdf', 'docx'].includes(ext || '')) {
-      return NextResponse.json({ error: '只支援 .pdf 和 .docx' }, { status: 400 });
+    if (!['pdf', 'docx', 'md', 'txt'].includes(ext || '')) {
+      return NextResponse.json({ error: '只支援 .pdf、.docx、.md、.txt' }, { status: 400 });
     }
 
     const admin = getFirebaseAdmin();
