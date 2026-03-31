@@ -196,8 +196,11 @@ export async function POST(req: NextRequest) {
               ]);
 
               // 圖片獨立存成 knowledge 條目
+              // title 保留原始檔名+編號，方便語義搜尋找到
+              // content 只存圖片網址，不存 Haiku 描述（避免誤描述污染知識庫）
               const title = `${file.name} — 圖片 ${imgIndex}`;
-              const content = `${description}\n\n圖片網址：${imageUrl}`;
+              const content = `圖片網址：${imageUrl}`;
+              void description; // 不再使用 Haiku 描述
               const id = await saveKnowledge(baseUrl, characterId, title, content, 'image', imageUrl);
               if (id) imageIds.push(id);
               else imageFailed++;
