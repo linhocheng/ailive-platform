@@ -187,9 +187,15 @@ export async function POST(req: NextRequest) {
       const mammoth = await import('mammoth');
       let imgIndex = 0;
 
-      // 先拿純文字
+      // 先拿純文字，同時收集圖說：非空白、有意義的短行
       const rawResult = await mammoth.extractRawText({ buffer });
       markdown = rawResult.value;
+
+      // 從全文抽圖說：取非空白、長度 < 60 的行（圖說通常是短標題）
+      const captionLines = rawResult.value
+        .split('\n')
+        .map((l: string) => l.trim())
+        .filter((l: string) => l.length > 2 && l.length < 80);
 
       // 再跑一次專門抽圖片
       await mammoth.convertToHtml(
@@ -201,18 +207,14 @@ export async function POST(req: NextRequest) {
               const base64 = await image.readAsBase64String();
               const ct = image.contentType || 'image/png';
 
-              // 並行：上傳圖片 + Haiku 描述
-              const [imageUrl, description] = await Promise.all([
-                uploadImageToStorage(base64, ct, characterId, imgIndex),
-                describeImage(client, base64, ct),
-              ]);
+              // 上傳圖片（不再呼叫 Haiku 描述）
+              const imageUrl = await uploadImageToStorage(base64, ct, characterId, imgIndex);
 
               // 圖片獨立存成 knowledge 條目
-              // title 保留原始檔名+編號，方便語義搜尋找到
-              // content 只存圖片網址，不存 Haiku 描述（避免誤描述污染知識庫）
-              const title = `${file.name} — 圖片 ${imgIndex}`;
+              // title 優先用圖說（按 imgIndex 對應），沒有才用 filename — 圖片 N
+              const caption = captionLines[imgIndex - 1] || '';
+              const title = caption || `${file.name} — 圖片 ${imgIndex}`;
               const content = `圖片網址：${imageUrl}`;
-              void description; // 不再使用 Haiku 描述
               const id = await saveKnowledge(baseUrl, characterId, title, content, 'image', imageUrl);
               if (id) imageIds.push(id);
               else imageFailed++;
