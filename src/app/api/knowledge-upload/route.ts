@@ -30,22 +30,34 @@ export const config = {
 
 // ===== 工具函式 =====
 
+// H1 = 產品名稱（parentTitle），H2 = 段落名稱
+// title 格式：「產品名稱 — 段落名稱」，讓每條知識都知道自己屬於哪個產品
 function chunkMarkdown(md: string, filename: string): Array<{ title: string; content: string }> {
   const lines = md.split('\n');
   const chunks: Array<{ title: string; content: string }> = [];
-  let currentTitle = '';
+  let parentTitle = '';
+  let sectionTitle = '';
   let currentContent: string[] = [];
 
   const flush = () => {
-    const content = currentContent.join('\n').trim();
-    if (content.length > 20) chunks.push({ title: currentTitle, content });
+    const c = currentContent.join('\n').trim();
+    if (c.length > 20) {
+      const title = parentTitle && sectionTitle
+        ? `${parentTitle} — ${sectionTitle}`
+        : parentTitle || sectionTitle || filename;
+      chunks.push({ title, content: c });
+    }
     currentContent = [];
   };
 
   for (const line of lines) {
-    if (line.startsWith('# ') || line.startsWith('## ')) {
+    if (line.startsWith('# ')) {
       flush();
-      currentTitle = line.replace(/^#+\s+/, '').trim();
+      parentTitle = line.replace(/^#\s+/, '').trim();
+      sectionTitle = '';
+    } else if (line.startsWith('## ')) {
+      flush();
+      sectionTitle = line.replace(/^##\s+/, '').trim();
     } else {
       currentContent.push(line);
     }
