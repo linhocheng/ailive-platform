@@ -189,35 +189,44 @@ export async function POST(req: NextRequest) {
       const rawResult = await mammoth.extractRawText({ buffer: Buffer.from(buffer) });
       text = rawResult.value;
 
-      // 抽圖片 — 獨立建檔
+      // 抽圖片：mammoth 轉 HTML，按 <th>/<td> 同格抽圖說 + base64
+      // 圖說和圖片在同一格，對應絕對準確
+      const htmlResult = await mammoth.convertToHtml({ buffer: Buffer.from(buffer) });
+      const htmlStr = htmlResult.value;
+
+      const cellRegex = /<t[hd][^>]*>([\s\S]*?)<\/t[hd]>/gi;
+      const imgSrcRegex = /src="data:(image\/[^;]+);base64,([A-Za-z0-9+/=]+)"/;
+      const tagRegex = /<[^>]+>/g;
+
+      let cellMatch;
       let imgIndex = 0;
-      await mammoth.convertToHtml(
-        { buffer: Buffer.from(buffer) },
-        {
-          convertImage: mammoth.images.imgElement(async (image) => {
-            imgIndex++;
-            try {
-              const base64 = await image.readAsBase64String();
-              const ct = image.contentType || 'image/png';
-              const [imageUrl, descResult] = await Promise.all([
-                uploadImageToStorage(base64, ct, characterId, imgIndex),
-                describeImage(client, base64, ct),
-              ]);
-              const description = descResult.description;
-              trackCost(characterId, 'claude-haiku-4-5-20251001', descResult.inputTokens, descResult.outputTokens).catch(() => {});
-              const id = await saveKnowledge(
-                baseUrl, characterId,
-                `${filename} — 圖片 ${imgIndex}`,
-                `${description}\n\n圖片網址：${imageUrl}`,
-                'image', imageUrl,
-              );
-              if (id) imageIds.push(id);
-              else imageFailed++;
-            } catch { imageFailed++; }
-            return { src: '' };
-          }),
-        }
-      );
+      while ((cellMatch = cellRegex.exec(htmlStr)) !== null) {
+        const cellHtml = cellMatch[1];
+        const imgMatch = imgSrcRegex.exec(cellHtml);
+        if (!imgMatch) continue;
+
+        imgIndex++;
+        try {
+          const contentType = imgMatch[1];
+          const base64 = imgMatch[2];
+
+          // 抽圖說：移除 HTML 標籤和圖片 src
+          const rawText = cellHtml.replace(imgSrcRegex, '').replace(tagRegex, ' ').replace(/\s+/g, ' ').trim();
+          const caption = rawText.replace(/ /g, ' ').trim();
+
+          const imageUrl = await uploadImageToStorage(base64, contentType, characterId, imgIndex);
+
+          const title = caption || `${filename} — 圖片 ${imgIndex}`;
+          const id = await saveKnowledge(
+            baseUrl, characterId,
+            title,
+            `圖片網址：${imageUrl}`,
+            'image', imageUrl,
+          );
+          if (id) imageIds.push(id);
+          else imageFailed++;
+        } catch { imageFailed++; }
+      }
 
     } else if (ext === 'pdf') {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
