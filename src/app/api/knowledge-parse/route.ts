@@ -16,6 +16,37 @@ import mammoth from 'mammoth';
 export const maxDuration = 120;
 
 // ===== 文字分塊 =====
+
+// ===== Markdown 分塊（按 # / ## 切，適合結構化 md 檔）=====
+function chunkMarkdown(md: string, filename: string): Array<{ title: string; content: string }> {
+  const lines = md.split('\n');
+  const chunks: Array<{ title: string; content: string }> = [];
+  let currentTitle = '';
+  let currentContent: string[] = [];
+
+  const flush = () => {
+    const c = currentContent.join('\n').trim();
+    if (c.length > 20) chunks.push({ title: currentTitle, content: c });
+    currentContent = [];
+  };
+
+  for (const line of lines) {
+    if (line.startsWith('# ') || line.startsWith('## ')) {
+      flush();
+      currentTitle = line.replace(/^#+\s+/, '').trim();
+    } else {
+      currentContent.push(line);
+    }
+  }
+  flush();
+
+  if (chunks.length === 0 && md.trim().length > 0) {
+    chunks.push({ title: filename, content: md.trim() });
+  }
+
+  return chunks;
+}
+
 function chunkText(text: string, filename: string): Array<{ title: string; content: string }> {
   const lines = text.split('\n');
   const chunks: Array<{ title: string; content: string }> = [];
@@ -138,6 +169,8 @@ export async function POST(req: NextRequest) {
     let text = '';
     const imageIds: string[] = [];
     let imageFailed = 0;
+    const textIds: string[] = [];
+    let textFailed = 0;
 
     if (ext === 'docx') {
       // 純文字
@@ -180,15 +213,27 @@ export async function POST(req: NextRequest) {
       const data = await pdfParse(Buffer.from(buffer));
       text = data.text;
     } else if (ext === 'md' || ext === 'txt') {
-      // Markdown / 純文字：直接讀取
-      text = Buffer.from(buffer).toString('utf-8');
+      // Markdown / 純文字：直接讀取，用 chunkMarkdown 分塊（不走 chunkText）
+      const mdText = Buffer.from(buffer).toString('utf-8');
+      const mdChunks = chunkMarkdown(mdText, filename);
+      for (let i = 0; i < mdChunks.length; i++) {
+        const id = await saveKnowledge(baseUrl, characterId, mdChunks[i].title || `${filename} — 段落 ${i + 1}`, mdChunks[i].content, category || 'document');
+        if (id) textIds.push(id);
+        else textFailed++;
+      }
+      // 跳過後面的 chunkText 流程
+      await file.delete().catch(() => {});
+      return NextResponse.json({
+        success: true,
+        filename,
+        text: { chunks: textIds.length, failed: textFailed, ids: textIds },
+        images: { chunks: imageIds.length, failed: imageFailed, ids: imageIds },
+      });
     } else {
       return NextResponse.json({ error: '只支援 .pdf、.docx、.md、.txt' }, { status: 400 });
     }
 
-    // 文字分塊存入
-    const textIds: string[] = [];
-    let textFailed = 0;
+    // 文字分塊存入（pdf / docx 走這裡，md/txt 已在上面 return）
     if (text.trim()) {
       const chunks = chunkText(text, filename);
       for (let i = 0; i < chunks.length; i++) {
