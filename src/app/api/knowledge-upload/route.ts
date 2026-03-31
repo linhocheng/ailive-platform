@@ -185,46 +185,50 @@ export async function POST(req: NextRequest) {
     if (ext === 'docx') {
       // ===== DOCX：文字 + 圖片獨立建檔 =====
       const mammoth = await import('mammoth');
-      let imgIndex = 0;
 
-      // 先拿純文字，同時收集圖說：非空白、有意義的短行
+      // 先拿純文字（給後面文字分塊用）
       const rawResult = await mammoth.extractRawText({ buffer });
       markdown = rawResult.value;
 
-      // 從全文抽圖說：取非空白、長度 < 60 的行（圖說通常是短標題）
-      const captionLines = rawResult.value
-        .split('\n')
-        .map((l: string) => l.trim())
-        .filter((l: string) => l.length > 2 && l.length < 80);
+      // 轉 HTML，帶完整 base64（圖說與圖片在同一個 <th>/<td> 裡）
+      // 用 HTML 解析同一格的圖說 + base64，對應絕對準確
+      const htmlResult = await mammoth.convertToHtml({ buffer });
+      const htmlStr = htmlResult.value;
 
-      // 再跑一次專門抽圖片
-      await mammoth.convertToHtml(
-        { buffer },
-        {
-          convertImage: mammoth.images.imgElement(async (image) => {
-            imgIndex++;
-            try {
-              const base64 = await image.readAsBase64String();
-              const ct = image.contentType || 'image/png';
+      // 從 <th> 或 <td> 裡同時抽圖說文字和 base64 圖片
+      // 格式：<th><p>圖說文字<img src="data:image/png;base64,..." /></p></th>
+      const cellRegex = /<t[hd][^>]*>([\s\S]*?)<\/t[hd]>/gi;
+      const imgSrcRegex = /src="data:(image\/[^;]+);base64,([A-Za-z0-9+/=]+)"/;
+      const textRegex = /<[^>]+>/g;
 
-              // 上傳圖片（不再呼叫 Haiku 描述）
-              const imageUrl = await uploadImageToStorage(base64, ct, characterId, imgIndex);
+      let cellMatch;
+      let imgIndex = 0;
+      while ((cellMatch = cellRegex.exec(htmlStr)) !== null) {
+        const cellHtml = cellMatch[1];
+        const imgMatch = imgSrcRegex.exec(cellHtml);
+        if (!imgMatch) continue; // 沒有圖片的格跳過
 
-              // 圖片獨立存成 knowledge 條目
-              // title 優先用圖說（按 imgIndex 對應），沒有才用 filename — 圖片 N
-              const caption = captionLines[imgIndex - 1] || '';
-              const title = caption || `${file.name} — 圖片 ${imgIndex}`;
-              const content = `圖片網址：${imageUrl}`;
-              const id = await saveKnowledge(baseUrl, characterId, title, content, 'image', imageUrl);
-              if (id) imageIds.push(id);
-              else imageFailed++;
-            } catch {
-              imageFailed++;
-            }
-            return { src: '' };
-          }),
-        }
-      );
+        imgIndex++;
+        try {
+          const contentType = imgMatch[1]; // e.g. image/png
+          const base64 = imgMatch[2];
+
+          // 抽圖說文字：移除 HTML 標籤，取純文字
+          const rawText = cellHtml.replace(imgSrcRegex, '').replace(textRegex, ' ').replace(/\s+/g, ' ').trim();
+          const caption = rawText.replace(/\s* \s*/g, ' ').trim(); // 移除 &nbsp;
+
+          // 上傳圖片到 Firebase Storage
+          const imageUrl = await uploadImageToStorage(base64, contentType, characterId, imgIndex);
+
+          // 圖片獨立存成 knowledge 條目
+          // title = 圖說文字（同格，絕對準確），沒有才用 filename — 圖片 N
+          const title = caption || `${file.name} — 圖片 ${imgIndex}`;
+          const knowledgeContent = `圖片網址：${imageUrl}`;
+          const id = await saveKnowledge(baseUrl, characterId, title, knowledgeContent, 'image', imageUrl);
+          if (id) imageIds.push(id);
+          else imageFailed++;
+        } catch { imageFailed++; }
+      } // end while cellMatch
 
     } else if (ext === 'md' || ext === 'txt') {
       // ===== Markdown / 純文字：直接讀取，不需要額外解析器 =====
