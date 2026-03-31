@@ -2,13 +2,15 @@
  * /api/knowledge-upload — 文件上傳解析入知識庫
  *
  * POST multipart/form-data
- *   file: .docx 或 .pdf
+ *   file: .docx / .pdf / .md / .txt
  *   characterId: string
  *   category: string（選填，預設 'document'）
  *
  * 流程：
  *   .docx → mammoth（文字 + 圖片 base64）
  *   .pdf  → pdf-parse（文字）
+ *   .md   → 直接走 chunkMarkdown（按 H1/H2 分塊）
+ *   .txt  → 直接走 chunkMarkdown（整份當一塊或按標題切）
  *   圖片  → 上傳 Firebase Storage（永久 URL）+ Claude Haiku 描述
  *           → 圖片獨立存成 knowledge 條目（category='image'）
  *   文字  → 按 H1/H2 分塊 → 批次存 platform_knowledge
@@ -155,8 +157,8 @@ export async function POST(req: NextRequest) {
     }
 
     const ext = file.name.split('.').pop()?.toLowerCase();
-    if (!['pdf', 'docx'].includes(ext || '')) {
-      return NextResponse.json({ error: '只支援 .pdf 和 .docx' }, { status: 400 });
+    if (!['pdf', 'docx', 'md', 'txt'].includes(ext || '')) {
+      return NextResponse.json({ error: '只支援 .pdf、.docx、.md、.txt' }, { status: 400 });
     }
 
     const apiKey = process.env.ANTHROPIC_API_KEY || '';
@@ -206,6 +208,10 @@ export async function POST(req: NextRequest) {
           }),
         }
       );
+
+    } else if (ext === 'md' || ext === 'txt') {
+      // ===== Markdown / 純文字：直接讀取，不需要額外解析器 =====
+      markdown = buffer.toString('utf-8');
 
     } else {
       // ===== PDF：pdf-parse（純文字）=====
