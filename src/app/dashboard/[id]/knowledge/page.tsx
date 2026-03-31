@@ -156,8 +156,8 @@ export default function KnowledgePage() {
           {/* 上傳文件 */}
           <div style={{ background: '#fff', border: '1px solid #e0e0e0', borderRadius: 12, padding: 20 }}>
             <h3 style={{ margin: '0 0 6px', fontSize: 15 }}>📄 上傳文件</h3>
-            <p style={{ margin: '0 0 12px', fontSize: 12, color: '#888' }}>支援 .docx 和 .pdf，文字與圖片分開建檔</p>
-            <input ref={fileInputRef} type="file" accept=".docx,.pdf" onChange={handleFileChange} style={{ display: 'none' }} />
+            <p style={{ margin: '0 0 12px', fontSize: 12, color: '#888' }}>支援 .docx、.pdf、.md、.txt，文字與圖片分開建檔</p>
+            <input ref={fileInputRef} type="file" accept=".docx,.pdf,.md,.txt" onChange={handleFileChange} style={{ display: 'none' }} />
             <button
               onClick={() => { setUploadStatus('idle'); setUploadMsg(''); fileInputRef.current?.click(); }}
               disabled={isUploading}
@@ -169,7 +169,7 @@ export default function KnowledgePage() {
                 fontSize: 14, color: isUploading ? '#999' : '#5560cc', fontWeight: 600,
               }}
             >
-              {isUploading ? '⏳ ' + uploadMsg : '＋ 選擇 .docx 或 .pdf'}
+              {isUploading ? '⏳ ' + uploadMsg : '＋ 選擇文件'}
             </button>
             {uploadStatus === 'done' && (
               <div style={{ marginTop: 10, padding: '10px 12px', background: '#e8f5e9', borderRadius: 8, fontSize: 13, color: '#2e7d32' }}>{uploadMsg}</div>
