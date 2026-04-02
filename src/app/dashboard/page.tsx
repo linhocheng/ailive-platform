@@ -83,8 +83,15 @@ export default function DashboardPage() {
                   <div style={{ fontSize: 12, color: '#bbb' }}>
                     靈魂版本 v{c.soulVersion} · 更新 {c.updatedAt ? new Date(c.updatedAt).toLocaleDateString('zh-TW') : '—'}
                   </div>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: c.costMetrics?.totalCostUSD ? '#e65100' : '#bbb' }}>
-                    {formatNtd(c.costMetrics?.totalCostUSD ?? 0)}
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <a href={`/chat/${c.id}`} onClick={e => e.stopPropagation()}
+                      style={{ fontSize: 12, color: '#1a1a2e', border: '1px solid #e0e0e0', borderRadius: 20, padding: '3px 10px', textDecoration: 'none' }}>
+                      文字
+                    </a>
+                    <a href={`/voice/${c.id}`} onClick={e => e.stopPropagation()}
+                      style={{ fontSize: 12, color: '#fff', background: '#6c63ff', borderRadius: 20, padding: '3px 10px', textDecoration: 'none' }}>
+                      🎙 語音
+                    </a>
                   </div>
                 </div>
               </div>
