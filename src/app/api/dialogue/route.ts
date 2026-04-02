@@ -229,6 +229,27 @@ async function executeTool(
     const query = String(toolInput.query || '');
     const limit = Number(toolInput.limit || 5);
 
+    // 語音模式：跳過 embedding 搜尋，直接回傳 top knowledge（省 1-2 秒）
+    if (skipHaikuReasoning) {
+      const [kwSnap, insSnap] = await Promise.all([
+        db.collection('platform_knowledge').where('characterId', '==', characterId).limit(5).get(),
+        db.collection('platform_insights').where('characterId', '==', characterId)
+          .orderBy('hitCount', 'desc').limit(3).get().catch(() =>
+            db.collection('platform_insights').where('characterId', '==', characterId).limit(3).get()
+          ),
+      ]);
+      const kwLines = kwSnap.docs.map(d => {
+        const data = d.data();
+        return `[天命] ${data.title || ''}：${String(data.content || data.summary || '').slice(0, 200)}`;
+      });
+      const insLines = insSnap.docs.map(d => {
+        const data = d.data();
+        return `[記憶] ${data.title || ''}：${String(data.content || '').slice(0, 100)}`;
+      });
+      const all = [...kwLines, ...insLines];
+      return all.length > 0 ? all.join('\n\n') : '（記憶庫目前是空的）';
+    }
+
     const [knowledgeSnap, insightSnap] = await Promise.all([
       db.collection('platform_knowledge').where('characterId', '==', characterId).limit(100).get(),
       db.collection('platform_insights').where('characterId', '==', characterId).limit(100).get(),
