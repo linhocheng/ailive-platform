@@ -157,7 +157,7 @@ export default function VoicePage() {
           body: JSON.stringify({
             text: replyText,
             voiceId: char?.voiceId,
-            gender: char?.type === 'brand_editor' ? 'female' : 'female',
+            gender: char?.type === 'brand_editor' ? 'female' : 'female',  // voiceId 已設定，gender 備用
           }),
         });
 
