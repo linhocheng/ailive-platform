@@ -833,7 +833,6 @@ ${awakeningResult}`,
 
     let episodicBlock = '';
     try {
-      if (voiceMode) throw new Error('skip'); // 語音模式跳過 episodic 查詢，省 Firestore round trip
       const recentSnap = await db.collection('platform_insights')
         .where('characterId', '==', characterId)
         .limit(50)
@@ -959,8 +958,8 @@ ${convData.summary ? `對話摘要（上次回顧）：\n${convData.summary}` : 
 
     for (let turn = 0; turn < 10; turn++) {
       const response = await client.messages.create({
-        model: voiceMode ? 'claude-haiku-4-5-20251001' : 'claude-sonnet-4-6',
-        max_tokens: voiceMode ? 400 : 1500,
+        model: 'claude-sonnet-4-6',
+        max_tokens: 1500,
         system: systemPrompt,
         tools: [WEB_SEARCH_TOOL, ...dynamicTools],
         tool_choice: { type: 'auto' }, // auto：讓 Claude 自己判斷要不要查網路/記憶
