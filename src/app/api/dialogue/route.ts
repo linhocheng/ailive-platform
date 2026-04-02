@@ -221,34 +221,12 @@ async function executeTool(
   toolInput: Record<string, unknown>,
   characterId: string,
   onHaikuTokens?: (input: number, output: number) => void,
-  skipHaikuReasoning?: boolean,
 ): Promise<string> {
   const db = getFirestore();
 
   if (toolName === 'query_knowledge_base') {
     const query = String(toolInput.query || '');
     const limit = Number(toolInput.limit || 5);
-
-    // 語音模式：跳過 embedding 搜尋，直接回傳 top knowledge（省 1-2 秒）
-    if (skipHaikuReasoning) {
-      const [kwSnap, insSnap] = await Promise.all([
-        db.collection('platform_knowledge').where('characterId', '==', characterId).limit(5).get(),
-        db.collection('platform_insights').where('characterId', '==', characterId)
-          .orderBy('hitCount', 'desc').limit(3).get().catch(() =>
-            db.collection('platform_insights').where('characterId', '==', characterId).limit(3).get()
-          ),
-      ]);
-      const kwLines = kwSnap.docs.map(d => {
-        const data = d.data();
-        return `[天命] ${data.title || ''}：${String(data.content || data.summary || '').slice(0, 200)}`;
-      });
-      const insLines = insSnap.docs.map(d => {
-        const data = d.data();
-        return `[記憶] ${data.title || ''}：${String(data.content || '').slice(0, 100)}`;
-      });
-      const all = [...kwLines, ...insLines];
-      return all.length > 0 ? all.join('\n\n') : '（記憶庫目前是空的）';
-    }
 
     const [knowledgeSnap, insightSnap] = await Promise.all([
       db.collection('platform_knowledge').where('characterId', '==', characterId).limit(100).get(),
@@ -323,8 +301,8 @@ async function executeTool(
       return `${tag} ${d.title || ''}：${body}${imgLine} (相似度${(score * 100).toFixed(0)}%)`;
     }).join('\n\n');
 
-    // Haiku 推理：從搜尋結果抽關係，回傳結構化 context（voice mode 跳過）
-    if (scored.length >= 2 && !skipHaikuReasoning) {
+    // Haiku 推理：從搜尋結果抽關係，回傳結構化 context
+    if (scored.length >= 2) {
       try {
         const Anthropic2 = (await import('@anthropic-ai/sdk')).default;
         const haikuClient = new Anthropic2({ apiKey: process.env.ANTHROPIC_API_KEY || '' });
@@ -1011,7 +989,6 @@ ${convData.summary ? `對話摘要（上次回顧）：\n${convData.summary}` : 
             const result = await executeTool(
               block.name, block.input as Record<string, unknown>, characterId,
               (inp, out) => { haikuInputTokens += inp; haikuOutputTokens += out; },
-              voiceMode === true,
             );
             // generate_image 回傳 IMAGE_URL:xxx，解析出來讓 Claude 能在回覆裡帶出
             if (result.startsWith('IMAGE_URL:')) {
