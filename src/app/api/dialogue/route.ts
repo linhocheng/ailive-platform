@@ -221,6 +221,7 @@ async function executeTool(
   toolInput: Record<string, unknown>,
   characterId: string,
   onHaikuTokens?: (input: number, output: number) => void,
+  skipHaikuReasoning?: boolean,
 ): Promise<string> {
   const db = getFirestore();
 
@@ -301,8 +302,8 @@ async function executeTool(
       return `${tag} ${d.title || ''}：${body}${imgLine} (相似度${(score * 100).toFixed(0)}%)`;
     }).join('\n\n');
 
-    // Haiku 推理：從搜尋結果抽關係，回傳結構化 context
-    if (scored.length >= 2) {
+    // Haiku 推理：從搜尋結果抽關係，回傳結構化 context（voice mode 跳過）
+    if (scored.length >= 2 && !skipHaikuReasoning) {
       try {
         const Anthropic2 = (await import('@anthropic-ai/sdk')).default;
         const haikuClient = new Anthropic2({ apiKey: process.env.ANTHROPIC_API_KEY || '' });
@@ -909,11 +910,10 @@ ${awakeningResult}`,
 ---
 【語音對話天條】
 你現在是語音模式。說話要像真人對話，不是在寫文章。
-- 開口前必須先呼叫 query_knowledge_base 查一次，知道自己有什麼資訊才說。就算是語音也一樣，查了才說。
-- 單次回應控制在 100 字以內，說完一個重點就停
-- 如果話題很豐富，說完第一個重點後自然地問：「你覺得呢？」或「要繼續聊嗎？」
-- 不要用條列式，不要說「第一點第二點」，說人話
-- 讓對話有來有往，不要一次說完所有事` : '';
+- 問到產品、成分、功效、記憶相關才查知識庫，一般對話直接回應
+- 單次回應控制在 80 字以內，說完一個重點就停
+- 說完後可以自然問：「你覺得呢？」讓對話有來有往
+- 不用條列式，說人話，像朋友在聊天` : '';
 
     const systemPrompt = `${mentorInjection}${soulText}${skillsBlock}${episodicBlock}${voiceModeBlock}
 
@@ -989,6 +989,7 @@ ${convData.summary ? `對話摘要（上次回顧）：\n${convData.summary}` : 
             const result = await executeTool(
               block.name, block.input as Record<string, unknown>, characterId,
               (inp, out) => { haikuInputTokens += inp; haikuOutputTokens += out; },
+              voiceMode === true,
             );
             // generate_image 回傳 IMAGE_URL:xxx，解析出來讓 Claude 能在回覆裡帶出
             if (result.startsWith('IMAGE_URL:')) {
