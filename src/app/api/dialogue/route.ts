@@ -713,7 +713,7 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const db = getFirestore();
-    const { characterId, userId, message, conversationId, image } = await req.json();
+    const { characterId, userId, message, conversationId, image, voiceMode } = await req.json();
 
     // ===== 謀師快速通道：偵測「引導 [名字]」指令，程式層直接執行 =====
     if (characterId === MENTOR_CHARACTER_ID && message) {
@@ -904,7 +904,17 @@ ${awakeningResult}`,
 **不可以在沒有執行 lookup_character + initiate_awakening 的情況下，就開口說「我去引導他」或開始問問題。工具沒跑 = 引導沒發生。**
 ` : '';
 
-    const systemPrompt = `${mentorInjection}${soulText}${skillsBlock}${episodicBlock}
+    const voiceModeBlock = voiceMode ? `
+
+---
+【語音對話天條】
+你現在是語音模式。說話要像真人對話，不是在寫文章。
+- 單次回應控制在 100 字以內，說完一個重點就停
+- 如果話題很豐富，說完第一個重點後自然地問：「你覺得呢？」或「要繼續聊嗎？」
+- 不要用條列式，不要說「第一點第二點」，說人話
+- 讓對話有來有往，不要一次說完所有事` : '';
+
+    const systemPrompt = `${mentorInjection}${soulText}${skillsBlock}${episodicBlock}${voiceModeBlock}
 
 ---
 現在時間（台北）：${taipeiTime}

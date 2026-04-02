@@ -126,6 +126,7 @@ export default function VoicePage() {
             userId: `voice-${characterId}`,
             message: userText,
             conversationId,
+            voiceMode: true,
           }),
         });
         const dlgData = await dlgRes.json() as { reply?: string; conversationId?: string; error?: string };
