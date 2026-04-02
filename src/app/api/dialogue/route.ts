@@ -855,6 +855,7 @@ ${awakeningResult}`,
 
     let episodicBlock = '';
     try {
+      if (voiceMode) throw new Error('skip'); // 語音模式跳過 episodic 查詢，省 Firestore round trip
       const recentSnap = await db.collection('platform_insights')
         .where('characterId', '==', characterId)
         .limit(50)
