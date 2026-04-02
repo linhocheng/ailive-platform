@@ -959,8 +959,8 @@ ${convData.summary ? `對話摘要（上次回顧）：\n${convData.summary}` : 
 
     for (let turn = 0; turn < 10; turn++) {
       const response = await client.messages.create({
-        model: 'claude-sonnet-4-6',
-        max_tokens: 1500,
+        model: voiceMode ? 'claude-haiku-4-5-20251001' : 'claude-sonnet-4-6',
+        max_tokens: voiceMode ? 400 : 1500,
         system: systemPrompt,
         tools: [WEB_SEARCH_TOOL, ...dynamicTools],
         tool_choice: { type: 'auto' }, // auto：讓 Claude 自己判斷要不要查網路/記憶
