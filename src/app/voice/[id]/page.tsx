@@ -43,7 +43,7 @@ const FLOW: Record<string, FlowParams> = {
   idle:       { noiseScale:0.002,  speed:0.8,  attraction:0,    vortex:0.1, lineWidth:0.4, noiseZStep:0.002, colorAlpha:0.08, hueBase:190 },
   recording:  { noiseScale:0.005,  speed:3.5,  attraction:1.2,  vortex:0.5, lineWidth:0.7, noiseZStep:0.015, colorAlpha:0.25, hueBase:0   },
   processing: { noiseScale:0.05,   speed:0.3,  attraction:3.5,  vortex:0.3, lineWidth:1.0, noiseZStep:0.12,  colorAlpha:0.22, hueBase:280 },
-  playing:    { noiseScale:0.0015, speed:2.5,  attraction:-0.4, vortex:1.8, lineWidth:2.0, noiseZStep:0.008, colorAlpha:0.35, hueBase:170 },
+  playing:    { noiseScale:0.0015, speed:2.8,  attraction:-0.6, vortex:2.2, lineWidth:2.2, noiseZStep:0.012, colorAlpha:0.40, hueBase:170 },
   ending:     { noiseScale:0.002,  speed:0.5,  attraction:0,    vortex:0.05,lineWidth:0.4, noiseZStep:0.003, colorAlpha:0.06, hueBase:190 },
 };
 
@@ -196,7 +196,9 @@ export default function VoicePage() {
         const check=()=>{ if(!audio||audio.ended||(streamDone&&audioQueue.length===0&&!sourceBuffer?.updating)){resolve();}else{setTimeout(check,200);}};
         (audio as HTMLAudioElement).addEventListener('ended',()=>resolve(),{once:true}); setTimeout(check,500);
       });
-      setVoiceState('idle');
+      // 播完：先讓粒子慢下來再切 idle
+      setVoiceState('ending');
+      setTimeout(() => setVoiceState('idle'), 800);
     } catch { setVoiceState('idle'); }
   }, [characterId, conversationId, setVoiceState]);
 
@@ -276,17 +278,13 @@ export default function VoicePage() {
 
       {/* 頂部：角色資訊 */}
       <div style={{ position:'absolute', top:0, left:0, right:0, display:'flex', alignItems:'center', justifyContent:'space-between', padding:'24px 24px 0' }}>
-        <a href={`/dashboard/${characterId}`} style={{ color:'rgba(255,255,255,0.2)', textDecoration:'none', fontSize:10, letterSpacing:'0.2em', fontWeight:200 }}>← BACK</a>
+        <a href={`/dashboard/${characterId}`} style={{ color:'rgba(255,255,255,0.55)', textDecoration:'none', fontSize:18, letterSpacing:'0.15em', fontWeight:200 }}>←</a>
 
         <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:8 }}>
-          {avatar
-            ? <img src={avatar} alt="" style={{ width:32, height:32, borderRadius:'50%', objectFit:'cover', border:'1px solid rgba(255,255,255,0.2)' }} />
-            : <div style={{ width:32, height:32, borderRadius:'50%', border:'1px solid rgba(255,255,255,0.2)', display:'flex', alignItems:'center', justifyContent:'center', color:'rgba(255,255,255,0.3)', fontSize:12, fontWeight:200 }}>{char?.name?.[0]||'…'}</div>
-          }
-          <div style={{ fontSize:9, letterSpacing:'0.4em', textTransform:'uppercase', color:'rgba(255,255,255,0.35)', fontWeight:200 }}>{char?.name||'…'}</div>
+          <div style={{ fontSize:18, letterSpacing:'0.3em', textTransform:'uppercase', color:'rgba(255,255,255,0.85)', fontWeight:200, borderBottom:'1px solid rgba(255,255,255,0.4)', paddingBottom:4 }}>{char?.name||'…'}</div>
         </div>
 
-        <div style={{ fontSize:9, color:'rgba(255,255,255,0.15)', letterSpacing:'0.1em', fontWeight:200 }}>
+        <div style={{ fontSize:18, color:'rgba(255,255,255,0.4)', letterSpacing:'0.15em', fontWeight:200 }}>
           {usingSpeechAPI ? 'LIVE' : 'CLOUD'}
         </div>
       </div>
@@ -326,11 +324,11 @@ export default function VoicePage() {
         {/* 狀態文字 */}
         <div style={{
           marginTop:32,
-          fontSize:10,
+          fontSize:20,
           letterSpacing: state==='processing' ? '1em' : '0.8em',
           textTransform:'uppercase',
           fontWeight:200,
-          color: state==='idle' ? 'rgba(255,255,255,0.25)' : state==='recording' ? '#ff3b30' : state==='processing' ? '#ffffff' : state==='playing' ? '#00f2ff' : 'rgba(255,255,255,0.25)',
+          color: state==='idle' ? 'rgba(255,255,255,0.6)' : state==='recording' ? '#ff3b30' : state==='processing' ? '#ffffff' : state==='playing' ? '#00f2ff' : 'rgba(255,255,255,0.6)',
           transition:'all 0.8s ease',
         }}>
           {STATE_LABEL[state]}
@@ -340,15 +338,15 @@ export default function VoicePage() {
       {/* 底部：輪數 / 結束 / 沉澱結果 */}
       <div style={{ position:'absolute', bottom:32, left:0, right:0, display:'flex', flexDirection:'column', alignItems:'center', gap:12 }}>
         {endDone ? (
-          <div style={{ fontSize:10, letterSpacing:'0.3em', fontWeight:200, color:'rgba(52,211,153,0.7)', textTransform:'uppercase' }}>
+          <div style={{ fontSize:20, letterSpacing:'0.3em', fontWeight:200, color:'rgba(52,211,153,0.9)', textTransform:'uppercase' }}>
             ✓ {insightCount > 0 ? `${insightCount} MEMORIES` : 'SAVED'}
           </div>
         ) : messages.length >= 2 && state==='idle' && (
           <button onClick={endConversation} style={{
-            background:'transparent', border:'1px solid rgba(255,255,255,0.1)',
-            color:'rgba(255,255,255,0.3)', fontSize:9,
+            background:'transparent', border:'1px solid rgba(255,255,255,0.3)',
+            color:'rgba(255,255,255,0.7)', fontSize:18,
             letterSpacing:'0.3em', textTransform:'uppercase',
-            fontWeight:200, padding:'8px 20px', borderRadius:20, cursor:'pointer',
+            fontWeight:200, padding:'10px 28px', borderRadius:20, cursor:'pointer',
             fontFamily:"'Inter', sans-serif",
           }}>
             END · {char?.name}
@@ -356,7 +354,7 @@ export default function VoicePage() {
         )}
 
         {messages.length > 0 && (
-          <div style={{ fontSize:9, color:'rgba(255,255,255,0.12)', letterSpacing:'0.2em', fontWeight:200 }}>
+          <div style={{ fontSize:18, color:'rgba(255,255,255,0.35)', letterSpacing:'0.2em', fontWeight:200 }}>
             {messages.length / 2} TURNS
           </div>
         )}
