@@ -218,19 +218,37 @@ export async function POST(req: NextRequest) {
         const ttsQueue: Promise<void>[] = [];
         let sentenceIndex = 0;
 
+        // 有序音訊緩衝：TTS 並行打，但按 idx 順序送出
+        const audioBuffer = new Map<number, string>(); // idx → base64
+        let nextToSend = 0;
+
+        const flushOrdered = () => {
+          while (audioBuffer.has(nextToSend)) {
+            const chunk = audioBuffer.get(nextToSend)!;
+            if (chunk) send({ type: 'audio', chunk, index: nextToSend });
+            audioBuffer.delete(nextToSend);
+            nextToSend++;
+          }
+        };
+
         const processSentence = async (sentence: string, idx: number) => {
-          if (!sentence.trim()) return;
+          if (!sentence.trim()) {
+            // 空句子也要佔位，讓後面的句子不卡
+            audioBuffer.set(idx, '');
+            flushOrdered();
+            return;
+          }
           send({ type: 'text', content: sentence, index: idx });
 
           try {
             const audioStream = await fetchTTSStream(sentence, voiceId, elevenKey);
-            if (audioStream) {
-              const base64 = await streamToBase64(audioStream);
-              send({ type: 'audio', chunk: base64, index: idx });
-            }
+            const base64 = audioStream ? await streamToBase64(audioStream) : '';
+            audioBuffer.set(idx, base64);
           } catch (_e) {
             console.error('TTS error for sentence:', sentence, _e);
+            audioBuffer.set(idx, ''); // 失敗也要佔位
           }
+          flushOrdered();
         };
 
         for await (const chunk of claudeStream) {
