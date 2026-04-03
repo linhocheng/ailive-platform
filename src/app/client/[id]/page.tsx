@@ -693,15 +693,17 @@ export default function ClientPage() {
     </div>
 
     {tab==='chat'&&(
-      <div style={{position:'fixed',inset:0,zIndex:100,background:'#fff'}}>
+      <div style={{position:'fixed',inset:0,zIndex:100,background:'#fff',display:'flex',flexDirection:'column'}}>
         <style>{`
           .client-chat-wrap header a:first-child { display: none !important; }
           .client-chat-wrap header > div > div:nth-child(2) { display: none !important; }
         `}</style>
-        <div className="client-chat-wrap" style={{height:'calc(100dvh - 56px)'}}>
+        {/* Chat 佔剩餘空間 */}
+        <div className="client-chat-wrap" style={{flex:1,minHeight:0,overflow:'hidden'}}>
           <Suspense><ChatPageInner/></Suspense>
         </div>
-        <div style={{position:'fixed',bottom:0,left:0,right:0,zIndex:101}}>
+        {/* Tab bar 在最下方，不 fixed，不蓋住 input */}
+        <div style={{flexShrink:0}}>
           <TabBar fixed={true}/>
         </div>
       </div>
