@@ -205,7 +205,7 @@ export default function DashboardPage() {
                       onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--text-primary)'; e.currentTarget.style.color = 'var(--text-primary)'; }}
                       onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.color = 'var(--text-secondary)'; }}
                     >文字</a>
-                    <a href={`/voice/${c.id}`}
+                    <a href={`/voice/${c.id}`} target="_blank" rel="noopener noreferrer"
                       onClick={e => e.stopPropagation()}
                       style={{
                         fontSize: 12, fontWeight: 500,
