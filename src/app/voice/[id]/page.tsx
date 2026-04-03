@@ -297,9 +297,7 @@ export default function VoicePage() {
       <div style={{ position:'absolute', top:0, left:0, right:0, display:'flex', alignItems:'center', justifyContent:'space-between', padding:'24px 24px 0' }}>
         <a href={`/dashboard/${characterId}`} style={{ color:'rgba(255,255,255,0.55)', textDecoration:'none', fontSize:18, letterSpacing:'0.15em', fontWeight:200 }}>←</a>
 
-        <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:8 }}>
-          <div style={{ fontSize:18, letterSpacing:'0.3em', textTransform:'uppercase', color:'rgba(255,255,255,0.85)', fontWeight:200, borderBottom:'1px solid rgba(255,255,255,0.4)', paddingBottom:4 }}>{char?.name||'…'}</div>
-        </div>
+        <div />
 
         <div style={{ fontSize:18, color:'rgba(255,255,255,0.4)', letterSpacing:'0.15em', fontWeight:200 }}>
           {usingSpeechAPI ? 'LIVE' : 'CLOUD'}
@@ -308,6 +306,18 @@ export default function VoicePage() {
 
       {/* 中心：按鈕 */}
       <div style={{ position:'absolute', inset:0, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', pointerEvents:'none' }}>
+
+        {/* 角色名 — 按鈕上方 */}
+        <div style={{
+          marginBottom:20,
+          fontSize:18,
+          letterSpacing:'0.3em',
+          textTransform:'uppercase',
+          color:'rgba(255,255,255,0.85)',
+          fontWeight:200,
+          borderBottom:'1px solid rgba(255,255,255,0.4)',
+          paddingBottom:4,
+        }}>{char?.name||'…'}</div>
 
         {/* ping 圈（playing 時） */}
         {state==='playing' && (
