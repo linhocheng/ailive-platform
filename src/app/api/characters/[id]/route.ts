@@ -26,7 +26,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
     const allowed = ['name', 'type', 'rawSoul', 'enhancedSoul', 'soul_core', 'soul_full', 'system_soul', 'clientPassword',
       'mission', 'status', 'lineChannelToken', 'lineChannelSecret',
-      'igAccessToken', 'igUserId', 'visualIdentity'];
+      'igAccessToken', 'igUserId', 'visualIdentity', 'voiceId'];
     const updates: Record<string, unknown> = { updatedAt: new Date().toISOString() };
     for (const key of allowed) {
       if (body[key] !== undefined) updates[key] = body[key];
