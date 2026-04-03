@@ -275,7 +275,7 @@ export default function SonicPage() {
           )}
 
           <div style={{
-            width: 60, height: 60,
+            width: 120, height: 120,
             background: 'rgba(255,255,255,0.05)',
             backdropFilter: 'blur(20px)',
             border: `1px solid ${ringColor}`,
@@ -286,7 +286,7 @@ export default function SonicPage() {
             animation: appState === 'thinking' ? 'breathe 1s infinite alternate' : 'none',
           }}>
             <div style={{
-              width: 12, height: 12,
+              width: 20, height: 20,
               background: dotColor,
               borderRadius: '50%',
               boxShadow: `0 0 20px ${dotColor}`,
