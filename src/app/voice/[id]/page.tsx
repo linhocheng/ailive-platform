@@ -64,6 +64,7 @@ export default function VoicePage() {
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const flowRef = useRef<FlowParams>({ ...FLOW.idle });
+  const targetFlowRef = useRef<FlowParams>({ ...FLOW.idle });
   const rafRef = useRef<number>(0);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -87,8 +88,21 @@ export default function VoicePage() {
       ctx.fillStyle='#000'; ctx.fillRect(0,0,width,height);
     };
     const animate = () => {
+      // 每幀把 flowRef 往 targetFlowRef lerp（0.03 = 慢速平滑）
+      const lerpF = 0.03;
+      const cur = flowRef.current;
+      const tgt = targetFlowRef.current;
+      cur.noiseScale  += (tgt.noiseScale  - cur.noiseScale)  * lerpF;
+      cur.speed       += (tgt.speed       - cur.speed)       * lerpF;
+      cur.attraction  += (tgt.attraction  - cur.attraction)  * lerpF;
+      cur.vortex      += (tgt.vortex      - cur.vortex)      * lerpF;
+      cur.lineWidth   += (tgt.lineWidth   - cur.lineWidth)   * lerpF;
+      cur.noiseZStep  += (tgt.noiseZStep  - cur.noiseZStep)  * lerpF;
+      cur.colorAlpha  += (tgt.colorAlpha  - cur.colorAlpha)  * lerpF;
+      cur.hueBase     += (tgt.hueBase     - cur.hueBase)     * lerpF;
+
       const p = flowRef.current;
-      const isThinking = flowRef.current.hueBase === 280;
+      const isThinking = tgt.hueBase === 280;
       ctx.fillStyle = `rgba(0,0,0,${isThinking ? 0.25 : 0.07})`; ctx.fillRect(0,0,width,height);
       zOff += p.noiseZStep;
       particles.forEach(pt => {
@@ -124,7 +138,7 @@ export default function VoicePage() {
   // 同步 flow 參數
   const setVoiceState = useCallback((s: VoiceState) => {
     setState(s);
-    flowRef.current = { ...FLOW[s] };
+    targetFlowRef.current = { ...FLOW[s] };
   }, []);
 
   // 載入角色
