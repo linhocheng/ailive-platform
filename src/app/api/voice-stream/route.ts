@@ -45,21 +45,29 @@ const PRONUNCIATION_MAP: Record<string, string> = {
 
 function preprocessTTS(text: string): string {
   let r = text;
+  // 清掉 Markdown 符號，避免 ElevenLabs 唸出來
+  r = r.replace(/\*\*(.+?)\*\*/g, '$1');   // **bold** → bold
+  r = r.replace(/\*(.+?)\*/g, '$1');         // *italic* → italic
+  r = r.replace(/^#{1,3}\s*/gm, '');          // # 標題符號
+  r = r.replace(/^[-•·]\s*/gm, '');           // 列表符號
+  r = r.replace(/`[^`]+`/g, '');              // `code` → 直接移除
+  r = r.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1'); // [text](url) → text
+  // 中台用語 + 破音字
   for (const k of Object.keys(ZH_TW_MAP).sort((a, b) => b.length - a.length))
     r = r.replaceAll(k, ZH_TW_MAP[k]);
   for (const k of Object.keys(PRONUNCIATION_MAP).sort((a, b) => b.length - a.length))
     r = r.replaceAll(k, PRONUNCIATION_MAP[k]);
-  return r;
+  return r.trim();
 }
 
 // ===== 句子切割 =====
 function splitSentences(text: string): string[] {
-  // 在句子結尾後切開，保留標點
-  return text.split(/(?<=[。！？!?\n])\s*/).filter(s => s.trim().length > 0);
+  // 句號/問號/驚嘆號/換行/逗號 都切
+  return text.split(/(?<=[。！？!?\n，,])\s*/).filter(s => s.trim().length > 0);
 }
 
 function isSentenceEnd(text: string): boolean {
-  return /[。！？!?\n]/.test(text);
+  return /[。！？!?\n，,]/.test(text);
 }
 
 // ===== SSE helper =====
@@ -193,9 +201,9 @@ export async function POST(req: NextRequest) {
 
 【語音對話天條】
 你現在是語音模式。說話要像真人對話，不是在寫文章。
-- 單次回應控制在 80 字以內，說完一個重點就停
-- 不用條列式，說人話，像朋友在聊天
-- 說完後可以自然問一個問題讓對話有來有往`;
+- 說人話，像朋友在聊天，不要條列式、不要 Markdown 符號
+- 說完一個完整的想法，可以延伸、可以深入，不要刻意截短
+- 說完後自然問一個問題讓對話有來有往`;
 
         // 5. 組歷史 messages
         const messages: Anthropic.MessageParam[] = [
@@ -207,7 +215,7 @@ export async function POST(req: NextRequest) {
         const client = new Anthropic({ apiKey: anthropicKey });
         const claudeStream = await client.messages.stream({
           model: 'claude-sonnet-4-6',
-          max_tokens: 600,
+          max_tokens: 1500,
           system: systemPrompt,
           messages,
         });
