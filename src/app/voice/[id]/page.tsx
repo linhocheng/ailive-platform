@@ -11,8 +11,7 @@ interface Character {
 }
 interface Message { role: 'user' | 'assistant'; content: string; timestamp: string; }
 
-const hasSpeechRecognition = () =>
-  typeof window !== 'undefined' && ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window);
+// 不在 module scope 判斷 SpeechRecognition，避免 SSR hydration mismatch
 
 // ── Perlin Noise ──
 function buildNoise() {
@@ -60,7 +59,11 @@ export default function VoicePage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [endDone, setEndDone] = useState(false);
   const [insightCount, setInsightCount] = useState(0);
-  const [usingSpeechAPI] = useState(hasSpeechRecognition);
+  const [usingSpeechAPI, setUsingSpeechAPI] = useState(false);
+  useEffect(() => {
+    const w = window as any;
+    setUsingSpeechAPI(!!(w.SpeechRecognition || w.webkitSpeechRecognition));
+  }, []);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const flowRef = useRef<FlowParams>({ ...FLOW.idle });
