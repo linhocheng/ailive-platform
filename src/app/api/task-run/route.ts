@@ -543,6 +543,48 @@ ${soulRef}
       if (taskType === 'learn' || taskType === 'reflect' || taskType === 'explore') {
         await updateHitCounts(db, recentInsightIds);
       }
+
+      // learn 任務：若 intent / description 含有貼文意圖，接著生一篇 IG 草稿
+      if (taskType === 'learn') {
+        // 從 Firestore 讀任務的 description（scheduler 只傳 intent，description 要自己讀）
+        let taskDescription = '';
+        if (taskId) {
+          try {
+            const taskDoc = await db.collection('platform_tasks').doc(taskId).get();
+            if (taskDoc.exists) taskDescription = String(taskDoc.data()?.description || '');
+          } catch { /* 不阻斷 */ }
+        }
+        const combinedText = `${intent || ''} ${taskDescription}`.toLowerCase();
+        const wantsPost = ['貼文','ig','草稿','post','draft','發文'].some(kw => combinedText.includes(kw));
+        if (wantsPost && result.content) {
+          try {
+            const postPrompt = `你是 ${char.name || '這個角色'}。剛才你有了這個洞察：
+
+標題：${result.title || ''}
+內容：${result.content}
+
+現在把這個洞察轉化成一篇 IG 貼文草稿。用你自己的聲音，不是在整理摘要，是在說你真的有感覺的東西。可以從書的一個核心點出發，延伸到你自己的觀察，最後給讀者一個落腳點。
+
+輸出格式（JSON，只輸出 JSON）：
+{"topic":"主題一句話","content":"完整貼文文案（含 hashtag，150-250字）"}`;
+
+            const postRes = await client.messages.create({
+              model: 'claude-haiku-4-5-20251001',
+              max_tokens: 600,
+              system: systemPrompt,
+              messages: [{ role: 'user', content: postPrompt }],
+            });
+            await trackCost(characterId, 'claude-haiku-4-5-20251001', postRes.usage?.input_tokens ?? 0, postRes.usage?.output_tokens ?? 0);
+            const postRaw = (postRes.content[0] as Anthropic.TextBlock).text.trim()
+              .replace(/^```[\w]*\n?/m, '').replace(/\n?```$/m, '').trim();
+            const postResult = JSON.parse(postRaw);
+            await savePostDraft(db, characterId, postResult.content || '', postResult.topic || result.title || '', today);
+            console.log('[task-run] learn → post draft 生成完成：', postResult.topic);
+          } catch (postErr) {
+            console.error('[task-run] learn → post draft 失敗，不阻斷：', postErr);
+          }
+        }
+      }
     }
 
     return NextResponse.json({
