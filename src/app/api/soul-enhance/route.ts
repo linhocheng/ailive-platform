@@ -10,6 +10,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
+import { redis } from '@/lib/redis';
 import { getFirestore } from '@/lib/firebase-admin';
 import { trackCost } from '@/lib/cost-tracker';
 
@@ -136,6 +137,7 @@ export async function POST(req: NextRequest) {
       soulVersion: newVersion,
       updatedAt: new Date().toISOString(),
     });
+    try { await redis.del(`char:${characterId}`); } catch (_e) { /* 不阻斷 */ }
 
     // 費用追蹤
     if (!skipForge) {

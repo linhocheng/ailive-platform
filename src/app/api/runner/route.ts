@@ -15,6 +15,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
+import { redis } from '@/lib/redis';
 import { getFirestore } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 import { trackCost } from '@/lib/cost-tracker';
