@@ -5,441 +5,374 @@ import { useParams } from 'next/navigation';
 type VoiceState = 'idle' | 'recording' | 'processing' | 'playing' | 'ending';
 
 interface Character {
-  id: string;
-  name: string;
-  mission: string;
-  type: string;
+  id: string; name: string; mission: string; type: string;
   voiceId?: string;
+  visualIdentity?: { characterSheet?: string };
 }
-
-interface Message {
-  role: 'user' | 'assistant';
-  content: string;
-  timestamp: string;
-}
-
-function WaveBar({ active, index }: { active: boolean; index: number }) {
-  const heights = [20, 35, 50, 65, 80, 65, 50, 35, 20, 30, 55, 70, 45, 60, 35];
-  const h = heights[index % heights.length];
-  return (
-    <div style={{
-      width: 4, borderRadius: 4,
-      background: active ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.25)',
-      height: active ? `${h}px` : '8px',
-      transition: active
-        ? `height ${0.3 + (index % 5) * 0.07}s ease ${(index % 7) * 0.04}s, background 0.3s`
-        : 'height 0.4s ease, background 0.3s',
-    }} />
-  );
-}
+interface Message { role: 'user' | 'assistant'; content: string; timestamp: string; }
 
 const hasSpeechRecognition = () =>
-  typeof window !== 'undefined' &&
-  ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window);
+  typeof window !== 'undefined' && ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window);
+
+// ── Perlin Noise ──
+function buildNoise() {
+  const perm = new Uint8Array(512);
+  const p = new Uint8Array(256);
+  for (let i = 0; i < 256; i++) p[i] = i;
+  for (let i = 255; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [p[i], p[j]] = [p[j], p[i]]; }
+  for (let i = 0; i < 512; i++) perm[i] = p[i & 255];
+  const fade = (t: number) => t * t * t * (t * (t * 6 - 15) + 10);
+  const lerp = (t: number, a: number, b: number) => a + t * (b - a);
+  const grad = (hash: number, x: number, y: number, z: number) => {
+    const h = hash & 15, u = h < 8 ? x : y, v = h < 4 ? y : (h === 12 || h === 14 ? x : z);
+    return ((h & 1) === 0 ? u : -u) + ((h & 2) === 0 ? v : -v);
+  };
+  return (x: number, y: number, z: number) => {
+    const X = Math.floor(x) & 255, Y = Math.floor(y) & 255, Z = Math.floor(z) & 255;
+    x -= Math.floor(x); y -= Math.floor(y); z -= Math.floor(z);
+    const u = fade(x), v = fade(y), w = fade(z);
+    const A = perm[X]+Y, AA = perm[A]+Z, AB = perm[A+1]+Z, B = perm[X+1]+Y, BA = perm[B]+Z, BB = perm[B+1]+Z;
+    return lerp(w, lerp(v, lerp(u, grad(perm[AA],x,y,z), grad(perm[BA],x-1,y,z)), lerp(u, grad(perm[AB],x,y-1,z), grad(perm[BB],x-1,y-1,z))),
+      lerp(v, lerp(u, grad(perm[AA+1],x,y,z-1), grad(perm[BA+1],x-1,y,z-1)), lerp(u, grad(perm[AB+1],x,y-1,z-1), grad(perm[BB+1],x-1,y-1,z-1))));
+  };
+}
+
+type FlowParams = { noiseScale:number; speed:number; attraction:number; vortex:number; lineWidth:number; noiseZStep:number; colorAlpha:number; hueBase:number; };
+
+const FLOW: Record<string, FlowParams> = {
+  idle:       { noiseScale:0.002,  speed:0.8,  attraction:0,    vortex:0.1, lineWidth:0.4, noiseZStep:0.002, colorAlpha:0.08, hueBase:190 },
+  recording:  { noiseScale:0.005,  speed:3.5,  attraction:1.2,  vortex:0.5, lineWidth:0.7, noiseZStep:0.015, colorAlpha:0.25, hueBase:0   },
+  processing: { noiseScale:0.05,   speed:0.3,  attraction:3.5,  vortex:0.3, lineWidth:1.0, noiseZStep:0.12,  colorAlpha:0.22, hueBase:280 },
+  playing:    { noiseScale:0.0015, speed:2.5,  attraction:-0.4, vortex:1.8, lineWidth:2.0, noiseZStep:0.008, colorAlpha:0.35, hueBase:170 },
+  ending:     { noiseScale:0.002,  speed:0.5,  attraction:0,    vortex:0.05,lineWidth:0.4, noiseZStep:0.003, colorAlpha:0.06, hueBase:190 },
+};
+
+const STATE_LABEL: Record<VoiceState, string> = {
+  idle: '( 通話 )', recording: '( 錄音中 )', processing: '( 思考中 )', playing: '( 播放中 )', ending: '( 整理中 )',
+};
 
 export default function VoicePage() {
   const { id: characterId } = useParams<{ id: string }>();
   const [char, setChar] = useState<Character | null>(null);
   const [state, setState] = useState<VoiceState>('idle');
   const [interimText, setInterimText] = useState('');
-  const [reply, setReply] = useState('');
-  const [statusText, setStatusText] = useState('按下開始說話');
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [endDone, setEndDone] = useState(false);
   const [insightCount, setInsightCount] = useState(0);
   const [usingSpeechAPI] = useState(hasSpeechRecognition);
 
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const flowRef = useRef<FlowParams>({ ...FLOW.idle });
+  const rafRef = useRef<number>(0);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const speechRecRef = useRef<any>(null);
-  const finalTextRef = useRef(''); // 累積最終辨識結果
+  const finalTextRef = useRef('');
 
+  // ── 粒子 Canvas ──
   useEffect(() => {
-    fetch(`/api/characters/${characterId}`)
-      .then(r => r.json())
-      .then(d => setChar(d.character));
+    const canvas = canvasRef.current; if (!canvas) return;
+    const ctx = canvas.getContext('2d')!;
+    const perlin = buildNoise();
+    type Pt = { x:number; y:number; prevX:number; prevY:number; velX:number; velY:number; maxSpeed:number; };
+    let width = 0, height = 0, particles: Pt[] = [], zOff = 0;
+    const mkPt = (): Pt => ({ x: Math.random()*width, y: Math.random()*height, prevX:0, prevY:0, velX:0, velY:0, maxSpeed: 1+Math.random()*2 });
+    const resize = () => {
+      width = canvas.width = window.innerWidth; height = canvas.height = window.innerHeight;
+      particles = Array.from({length:4000}, mkPt);
+      particles.forEach(p => { p.prevX=p.x; p.prevY=p.y; });
+      ctx.fillStyle='#000'; ctx.fillRect(0,0,width,height);
+    };
+    const animate = () => {
+      const p = flowRef.current;
+      const isThinking = flowRef.current.hueBase === 280;
+      ctx.fillStyle = `rgba(0,0,0,${isThinking ? 0.25 : 0.07})`; ctx.fillRect(0,0,width,height);
+      zOff += p.noiseZStep;
+      particles.forEach(pt => {
+        let angle = perlin(pt.x*p.noiseScale, pt.y*p.noiseScale, zOff) * Math.PI * 4;
+        if (isThinking) angle += (Math.random()-0.5)*1.5;
+        let accX = Math.cos(angle)*0.4, accY = Math.sin(angle)*0.4;
+        const dx = width/2-pt.x, dy = height/2-pt.y, dist = Math.sqrt(dx*dx+dy*dy)||1;
+        if (p.attraction !== 0) { accX += (dx/dist)*p.attraction; accY += (dy/dist)*p.attraction; }
+        if (p.vortex !== 0) { accX += (-dy/dist)*p.vortex; accY += (dx/dist)*p.vortex; }
+        pt.velX += accX; pt.velY += accY;
+        let maxSpd = pt.maxSpeed*p.speed;
+        if (isThinking) maxSpd *= (0.8+Math.random()*0.4);
+        const spd = Math.sqrt(pt.velX**2+pt.velY**2);
+        if (spd > maxSpd) { pt.velX=(pt.velX/spd)*maxSpd; pt.velY=(pt.velY/spd)*maxSpd; }
+        pt.prevX=pt.x; pt.prevY=pt.y; pt.x+=pt.velX; pt.y+=pt.velY;
+        const isActive = p.hueBase !== 190 || p.speed > 1;
+        if (pt.x<-100||pt.x>width+100||pt.y<-100||pt.y>height+100) {
+          if (isActive) { pt.x=width/2+(Math.random()-0.5)*50; pt.y=height/2+(Math.random()-0.5)*50; }
+          else { pt.x=Math.random()*width; pt.y=Math.random()*height; }
+          pt.prevX=pt.x; pt.prevY=pt.y; pt.velX=0; pt.velY=0;
+        }
+        ctx.beginPath(); ctx.moveTo(pt.prevX,pt.prevY); ctx.lineTo(pt.x,pt.y);
+        ctx.strokeStyle=`hsla(${p.hueBase+(Math.sqrt(pt.velX**2+pt.velY**2)*15)},80%,65%,${p.colorAlpha})`;
+        ctx.lineWidth=p.lineWidth; ctx.stroke();
+      });
+      rafRef.current = requestAnimationFrame(animate);
+    };
+    resize(); animate();
+    window.addEventListener('resize', resize);
+    return () => { window.removeEventListener('resize', resize); cancelAnimationFrame(rafRef.current); };
+  }, []);
+
+  // 同步 flow 參數
+  const setVoiceState = useCallback((s: VoiceState) => {
+    setState(s);
+    flowRef.current = { ...FLOW[s] };
+  }, []);
+
+  // 載入角色
+  useEffect(() => {
+    fetch(`/api/characters/${characterId}`).then(r=>r.json()).then(d=>setChar(d.character));
     const saved = localStorage.getItem(`conv-${characterId}`);
     if (saved) setConversationId(saved);
   }, [characterId]);
+  useEffect(() => () => { streamRef.current?.getTracks().forEach(t=>t.stop()); }, []);
 
-  useEffect(() => {
-    return () => { streamRef.current?.getTracks().forEach(t => t.stop()); };
-  }, []);
-
-  // ===== 共用：送文字給角色（Claude Streaming + TTS）=====
+  // ── 送出對話 ──
   const sendToDialogue = useCallback(async (userText: string) => {
-    if (!userText.trim()) {
-      setState('idle');
-      setStatusText('沒有聽到內容，再試一次');
-      return;
-    }
-
-    setState('processing');
+    if (!userText.trim()) { setVoiceState('idle'); return; }
     setInterimText('');
-    setStatusText(`你說：${userText.slice(0, 30)}${userText.length > 30 ? '...' : ''}`);
-
+    setVoiceState('processing');
     try {
-      await new Promise(r => setTimeout(r, 200));
-      setStatusText(`${char?.name || '角色'} 思考中...`);
-
-      // ✅ voice-stream：Claude streaming + TTS pipeline
       const res = await fetch('/api/voice-stream', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          characterId,
-          userId: `voice-${characterId}`,
-          message: userText,
-          conversationId,
-        }),
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ characterId, userId:`voice-${characterId}`, message: userText, conversationId }),
       });
+      if (!res.ok || !res.body) throw new Error('voice-stream 失敗');
 
-      if (!res.ok || !res.body) throw new Error('voice-stream 連線失敗');
-
-      // ✅ 音訊播放佇列（句子按順序播）
-      let mediaSource: MediaSource | null = null;
-      let sourceBuffer: SourceBuffer | null = null;
-      let audio: HTMLAudioElement | null = null;
-      const audioQueue: Uint8Array[] = [];
-      let isAppending = false;
-      let streamDone = false;
-      let pendingSentences = 0;
-      let playedSentences = 0;
-      let fullReplyText = '';
+      let mediaSource: MediaSource|null=null, sourceBuffer: SourceBuffer|null=null;
+      let audio: HTMLAudioElement|null=null;
+      const audioQueue: Uint8Array[]=[];
+      let isAppending=false, streamDone=false, fullReplyText='';
 
       const initAudio = () => {
         if (audio) return;
         mediaSource = new MediaSource();
-        const url = URL.createObjectURL(mediaSource);
-        audio = new Audio(url);
+        audio = new Audio(URL.createObjectURL(mediaSource));
         audioRef.current = audio;
-
         mediaSource.addEventListener('sourceopen', () => {
-          try {
-            sourceBuffer = mediaSource!.addSourceBuffer('audio/mpeg');
-            sourceBuffer.addEventListener('updateend', drainQueue);
-            drainQueue();
-          } catch (_e) {}
-        }, { once: true });
-
-        audio.play().catch(() => {});
-        setState('playing');
-        setStatusText(`${char?.name || '角色'} 說話中...`);
+          try { sourceBuffer = mediaSource!.addSourceBuffer('audio/mpeg'); sourceBuffer.addEventListener('updateend', drainQueue); drainQueue(); } catch {}
+        }, {once:true});
+        audio.play().catch(()=>{});
+        setVoiceState('playing');
       };
-
       const drainQueue = () => {
-        if (isAppending || !sourceBuffer || sourceBuffer.updating) return;
-        if (audioQueue.length === 0) {
-          if (streamDone && mediaSource && mediaSource.readyState === 'open') {
-            try { mediaSource.endOfStream(); } catch (_e) {}
-          }
-          return;
-        }
-        isAppending = true;
-        const chunk = audioQueue.shift()!;
-        try {
-          sourceBuffer!.appendBuffer(chunk.buffer as ArrayBuffer);
-        } catch (_e) {}
-        isAppending = false;
+        if (isAppending||!sourceBuffer||sourceBuffer.updating) return;
+        if (audioQueue.length===0) { if (streamDone&&mediaSource&&mediaSource.readyState==='open') { try{mediaSource.endOfStream();}catch{} } return; }
+        isAppending=true;
+        try { sourceBuffer!.appendBuffer(audioQueue.shift()!.buffer as ArrayBuffer); } catch {}
+        isAppending=false;
       };
 
-      // ✅ 讀 SSE stream
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let sseBuffer = '';
-
+      const reader = res.body.getReader(); const dec = new TextDecoder(); let sseBuf='';
       while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        sseBuffer += decoder.decode(value, { stream: true });
-
-        const lines = sseBuffer.split('\n');
-        sseBuffer = lines.pop() || '';
-
+        const {done,value} = await reader.read(); if (done) break;
+        sseBuf += dec.decode(value,{stream:true});
+        const lines = sseBuf.split('\n'); sseBuf = lines.pop()||'';
         for (const line of lines) {
           if (!line.startsWith('data: ')) continue;
           try {
-            const event = JSON.parse(line.slice(6)) as {
-              type: string; content?: string; chunk?: string;
-              index?: number; fullText?: string; conversationId?: string; message?: string;
-            };
-
-            if (event.type === 'text' && event.content) {
-              // 第一句文字到 → 初始化音訊
-              if (!audio) initAudio();
-              pendingSentences++;
-              setReply(prev => prev + event.content);
-              fullReplyText += event.content;
+            const ev = JSON.parse(line.slice(6)) as {type:string;content?:string;chunk?:string;conversationId?:string;fullText?:string;message?:string};
+            if (ev.type==='text'&&ev.content) { if (!audio) initAudio(); fullReplyText+=ev.content; }
+            if (ev.type==='audio'&&ev.chunk) { const b=atob(ev.chunk); const arr=new Uint8Array(b.length); for(let i=0;i<b.length;i++)arr[i]=b.charCodeAt(i); audioQueue.push(arr); drainQueue(); }
+            if (ev.type==='done') {
+              if (ev.conversationId) { setConversationId(ev.conversationId); localStorage.setItem(`conv-${characterId}`,ev.conversationId); }
+              const now=new Date().toISOString();
+              setMessages(prev=>[...prev,{role:'user',content:userText,timestamp:now},{role:'assistant',content:fullReplyText||ev.fullText||'',timestamp:now}]);
+              streamDone=true; drainQueue();
             }
-
-            if (event.type === 'audio' && event.chunk) {
-              // base64 音訊 chunk → 推進播放佇列
-              const binary = atob(event.chunk);
-              const bytes = new Uint8Array(binary.length);
-              for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-              audioQueue.push(bytes);
-              drainQueue();
-              playedSentences++;
-            }
-
-            if (event.type === 'done') {
-              if (event.conversationId) {
-                setConversationId(event.conversationId);
-                localStorage.setItem(`conv-${characterId}`, event.conversationId);
-              }
-              const now = new Date().toISOString();
-              setMessages(prev => [...prev,
-                { role: 'user', content: userText, timestamp: now },
-                { role: 'assistant', content: fullReplyText || event.fullText || '', timestamp: now },
-              ]);
-              streamDone = true;
-              drainQueue();
-            }
-
-            if (event.type === 'error') throw new Error(event.message || 'stream 錯誤');
-
-          } catch (parseErr) {
-            if (parseErr instanceof SyntaxError) continue;
-            throw parseErr;
-          }
+            if (ev.type==='error') throw new Error(ev.message);
+          } catch(e){ if(e instanceof SyntaxError) continue; throw e; }
         }
       }
+      if (audio) await new Promise<void>(resolve=>{
+        const check=()=>{ if(!audio||audio.ended||(streamDone&&audioQueue.length===0&&!sourceBuffer?.updating)){resolve();}else{setTimeout(check,200);}};
+        (audio as HTMLAudioElement).addEventListener('ended',()=>resolve(),{once:true}); setTimeout(check,500);
+      });
+      setVoiceState('idle');
+    } catch { setVoiceState('idle'); }
+  }, [characterId, conversationId, setVoiceState]);
 
-      // 等音訊播完
-      if (audio) {
-        await new Promise<void>(resolve => {
-          const checkEnd = () => {
-            if (!audio) { resolve(); return; }
-            if (audio.ended || (streamDone && audioQueue.length === 0 && !sourceBuffer?.updating)) {
-              resolve();
-            } else {
-              setTimeout(checkEnd, 200);
-            }
-          };
-          const audioEl = audio; if (audioEl) audioEl.addEventListener('ended', () => resolve(), { once: true });
-          setTimeout(checkEnd, 500);
-        });
-      }
-
-      setState('idle');
-      setStatusText('按下繼續說話');
-      setEndDone(false);
-
-    } catch (err) {
-      setState('idle');
-      setStatusText(`⚠️ ${err instanceof Error ? err.message : '發生錯誤'}`);
-    }
-  }, [char, characterId, conversationId]);
-
-  // ===== Web Speech API =====
+  // ── Web Speech API ──
   const startWebSpeech = useCallback(() => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const w = window as any;
-    const SR = w.SpeechRecognition || w.webkitSpeechRecognition;
-    if (!SR) return false;
-
-    finalTextRef.current = '';
-    setInterimText('');
-    setReply('');
-    setEndDone(false);
-
-    const rec = new SR();
-    rec.lang = 'zh-TW';
-    rec.interimResults = true;
-    rec.continuous = true; // ✅ 持續辨識，不自動停
-    rec.maxAlternatives = 1;
-    speechRecRef.current = rec;
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    rec.onresult = (e: any) => {
-      let interim = '';
-      for (let i = e.resultIndex; i < e.results.length; i++) {
-        if (e.results[i].isFinal) {
-          finalTextRef.current += e.results[i][0].transcript;
-        } else {
-          interim += e.results[i][0].transcript;
-        }
-      }
-      setInterimText(interim);
-    };
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    rec.onerror = (e: any) => {
-      if (e.error === 'no-speech') return; // 靜默不算錯
-      setState('idle');
-      setStatusText(`⚠️ 辨識錯誤：${e.error}`);
-    };
-
-    rec.start();
-    setState('recording');
-    setStatusText('錄音中... 再按一下送出');
-    return true;
-  }, []);
+    const w=window as any; const SR=w.SpeechRecognition||w.webkitSpeechRecognition; if(!SR) return false;
+    finalTextRef.current=''; setInterimText(''); setEndDone(false);
+    const rec=new SR(); rec.lang='zh-TW'; rec.interimResults=true; rec.continuous=true; rec.maxAlternatives=1;
+    speechRecRef.current=rec;
+    rec.onresult=(e:any)=>{ let interim=''; for(let i=e.resultIndex;i<e.results.length;i++){if(e.results[i].isFinal){finalTextRef.current+=e.results[i][0].transcript;}else{interim+=e.results[i][0].transcript;}} setInterimText(interim); };
+    rec.onerror=(e:any)=>{ if(e.error==='no-speech') return; setVoiceState('idle'); };
+    rec.start(); setVoiceState('recording'); return true;
+  }, [setVoiceState]);
 
   const stopWebSpeechAndSend = useCallback(() => {
-    const rec = speechRecRef.current;
-    if (rec) {
-      try { rec.stop(); } catch { /* already stopped */ }
-      speechRecRef.current = null;
-    }
-    // ✅ 關鍵修正：直接讀已有的文字，不等 onend
-    const text = (finalTextRef.current + ' ' + interimText).trim();
-    sendToDialogue(text);
+    const rec=speechRecRef.current; if(rec){try{rec.stop();}catch{} speechRecRef.current=null;}
+    sendToDialogue((finalTextRef.current+' '+interimText).trim());
   }, [interimText, sendToDialogue]);
 
-  // ===== Gemini STT fallback =====
+  // ── Gemini STT fallback ──
   const startGemini = useCallback(async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      streamRef.current = stream;
-      const mr = new MediaRecorder(stream, { mimeType: 'audio/webm' });
-      chunksRef.current = [];
-      mr.ondataavailable = e => { if (e.data.size > 0) chunksRef.current.push(e.data); };
-      mr.start(100);
-      mediaRecorderRef.current = mr;
-      setState('recording');
-      setReply('');
-      setEndDone(false);
-      setStatusText('錄音中... 再按一下送出');
-    } catch {
-      setStatusText('⚠️ 請允許麥克風權限');
-    }
-  }, []);
+      const stream=await navigator.mediaDevices.getUserMedia({audio:true}); streamRef.current=stream;
+      const mr=new MediaRecorder(stream,{mimeType:'audio/webm'}); chunksRef.current=[];
+      mr.ondataavailable=e=>{if(e.data.size>0)chunksRef.current.push(e.data);}; mr.start(100);
+      mediaRecorderRef.current=mr; setVoiceState('recording'); setEndDone(false);
+    } catch { /* mic denied */ }
+  }, [setVoiceState]);
 
   const stopGeminiAndSend = useCallback(() => {
-    const mr = mediaRecorderRef.current;
-    if (!mr) return;
-    setState('processing');
-    setStatusText('轉換語音中...');
-
-    mr.onstop = async () => {
-      streamRef.current?.getTracks().forEach(t => t.stop());
-      const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
+    const mr=mediaRecorderRef.current; if(!mr) return;
+    mr.onstop=async()=>{
+      streamRef.current?.getTracks().forEach(t=>t.stop());
+      const blob=new Blob(chunksRef.current,{type:'audio/webm'});
       try {
-        const form = new FormData();
-        form.append('audio', blob, 'audio.webm');
-        const sttRes = await fetch('/api/stt', { method: 'POST', body: form });
-        const sttData = await sttRes.json() as { text?: string; error?: string };
-        if (!sttData.text) throw new Error(sttData.error || 'STT 失敗');
-        await sendToDialogue(sttData.text);
-      } catch (err) {
-        setState('idle');
-        setStatusText(`⚠️ ${err instanceof Error ? err.message : '發生錯誤'}`);
-      }
+        const form=new FormData(); form.append('audio',blob,'audio.webm');
+        const sttRes=await fetch('/api/stt',{method:'POST',body:form});
+        const sttData=await sttRes.json() as {text?:string};
+        if(sttData.text) await sendToDialogue(sttData.text);
+        else setVoiceState('idle');
+      } catch { setVoiceState('idle'); }
     };
     mr.stop();
-  }, [sendToDialogue]);
+  }, [sendToDialogue, setVoiceState]);
 
-  // ===== 主按鈕 =====
+  // ── 主按鈕 ──
   const handleMainButton = useCallback(() => {
-    if (state === 'idle') {
-      if (usingSpeechAPI) startWebSpeech();
-      else startGemini();
-    } else if (state === 'recording') {
-      if (usingSpeechAPI) stopWebSpeechAndSend();
-      else stopGeminiAndSend();
-    } else if (state === 'playing') {
-      audioRef.current?.pause();
-      setState('idle');
-      setStatusText('按下繼續說話');
-    }
-  }, [state, usingSpeechAPI, startWebSpeech, startGemini, stopWebSpeechAndSend, stopGeminiAndSend]);
+    if (state==='idle') { if(usingSpeechAPI) startWebSpeech(); else startGemini(); }
+    else if (state==='recording') { if(usingSpeechAPI) stopWebSpeechAndSend(); else stopGeminiAndSend(); }
+    else if (state==='playing') { audioRef.current?.pause(); setVoiceState('idle'); }
+  }, [state, usingSpeechAPI, startWebSpeech, startGemini, stopWebSpeechAndSend, stopGeminiAndSend, setVoiceState]);
 
-  // ===== 結束對話 =====
+  // ── 結束對話 ──
   const endConversation = useCallback(async () => {
-    if (!conversationId || state !== 'idle') return;
-    setState('ending');
-    setStatusText('整理記憶中...');
+    if (!conversationId||state!=='idle') return;
+    setVoiceState('ending');
     try {
-      const res = await fetch('/api/voice-end', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ characterId, conversationId }),
-      });
-      const data = await res.json() as { saved?: number };
-      setInsightCount(data.saved || 0);
-      setEndDone(true);
+      const res=await fetch('/api/voice-end',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({characterId,conversationId})});
+      const data=await res.json() as {saved?:number}; setInsightCount(data.saved||0); setEndDone(true);
     } catch { setEndDone(true); }
-    finally { setState('idle'); setStatusText(char?.name ? `✓ ${char.name} 記住了這次對話` : '對話已結束'); }
-  }, [conversationId, characterId, char, state]);
+    finally { setVoiceState('idle'); }
+  }, [conversationId, characterId, state, setVoiceState]);
 
-  const isWaveActive = state === 'recording' || state === 'playing';
-  const btnColor = state === 'recording' ? '#ef4444' : state === 'processing' || state === 'ending' ? '#6b7280' : state === 'playing' ? '#8b5cf6' : '#1a1a2e';
-  const btnLabel = state === 'idle' ? (messages.length === 0 ? '開始' : '繼續') : state === 'recording' ? '送出' : state === 'processing' ? '...' : state === 'playing' ? '⏸' : '...';
+  // ── 按鈕視覺 ──
+  const dotColor = state==='recording' ? '#ff3b30' : state==='processing' ? '#ffffff' : state==='playing' ? '#00f2ff' : 'white';
+  const ringColor = state==='recording' ? '#ff3b30' : state==='processing' ? 'rgba(255,255,255,0.6)' : state==='playing' ? '#00f2ff' : 'rgba(255,255,255,0.2)';
+  const btnScale = state==='recording' ? 1.1 : state==='processing' ? 0.85 : state==='playing' ? 1.2 : 1;
+  const dotScale = state==='recording' ? 1.5 : state==='processing' ? 0.7 : state==='playing' ? 1.8 : 1;
+  const disabled = state==='processing'||state==='ending';
 
-  if (!char) return (
-    <div style={{ minHeight: '100vh', background: '#0a0a1a', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <div style={{ color: 'rgba(255,255,255,0.4)', fontSize: 16 }}>載入中...</div>
-    </div>
-  );
+  const avatar = char?.visualIdentity?.characterSheet;
 
   return (
-    <div style={{ minHeight: '100vh', background: 'linear-gradient(135deg, #0a0a1a 0%, #1a1a3e 50%, #0d0d2b 100%)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', fontFamily: 'system-ui, sans-serif', padding: '24px', position: 'relative' }}>
+    <div style={{ position:'fixed', inset:0, background:'#000', overflow:'hidden', fontFamily:"'Inter', sans-serif" }}>
+      {/* 粒子 Canvas */}
+      <canvas ref={canvasRef} style={{ position:'absolute', inset:0, display:'block', filter:'contrast(1.1) brightness(1.2)' }} />
 
-      <a href={`/dashboard/${characterId}`} style={{ position: 'absolute', top: 20, left: 20, color: 'rgba(255,255,255,0.4)', textDecoration: 'none', fontSize: 14 }}>← 返回</a>
+      {/* 頂部：角色資訊 */}
+      <div style={{ position:'absolute', top:0, left:0, right:0, display:'flex', alignItems:'center', justifyContent:'space-between', padding:'24px 24px 0' }}>
+        <a href={`/dashboard/${characterId}`} style={{ color:'rgba(255,255,255,0.2)', textDecoration:'none', fontSize:10, letterSpacing:'0.2em', fontWeight:200 }}>← BACK</a>
 
-      <div style={{ position: 'absolute', top: 22, right: 20, fontSize: 11, color: 'rgba(255,255,255,0.2)' }}>
-        {usingSpeechAPI ? '⚡ 即時辨識' : '☁️ 雲端辨識'}
+        <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:8 }}>
+          {avatar
+            ? <img src={avatar} alt="" style={{ width:32, height:32, borderRadius:'50%', objectFit:'cover', border:'1px solid rgba(255,255,255,0.2)' }} />
+            : <div style={{ width:32, height:32, borderRadius:'50%', border:'1px solid rgba(255,255,255,0.2)', display:'flex', alignItems:'center', justifyContent:'center', color:'rgba(255,255,255,0.3)', fontSize:12, fontWeight:200 }}>{char?.name?.[0]||'…'}</div>
+          }
+          <div style={{ fontSize:9, letterSpacing:'0.4em', textTransform:'uppercase', color:'rgba(255,255,255,0.35)', fontWeight:200 }}>{char?.name||'…'}</div>
+        </div>
+
+        <div style={{ fontSize:9, color:'rgba(255,255,255,0.15)', letterSpacing:'0.1em', fontWeight:200 }}>
+          {usingSpeechAPI ? 'LIVE' : 'CLOUD'}
+        </div>
       </div>
 
-      {/* 角色名稱 */}
-      <div style={{ textAlign: 'center', marginBottom: 48 }}>
-        <div style={{ color: 'rgba(255,255,255,0.5)', fontSize: 13, marginBottom: 6, letterSpacing: 2 }}>與</div>
-        <div style={{ color: '#fff', fontSize: 28, fontWeight: 700 }}>{char.name}</div>
-        <div style={{ color: 'rgba(255,255,255,0.35)', fontSize: 13, marginTop: 4 }}>{char.mission?.slice(0, 40)}</div>
-      </div>
+      {/* 中心：按鈕 */}
+      <div style={{ position:'absolute', inset:0, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', pointerEvents:'none' }}>
 
-      {/* 聲波 */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 5, height: 100, marginBottom: 48 }}>
-        {Array.from({ length: 15 }).map((_, i) => <WaveBar key={i} active={isWaveActive} index={i} />)}
-      </div>
+        {/* ping 圈（playing 時） */}
+        {state==='playing' && (
+          <div style={{ position:'absolute', width:180, height:180, borderRadius:'50%', border:'1px solid rgba(0,242,255,0.12)', animation:'ping 1.8s ease-out infinite' }} />
+        )}
 
-      {/* 主按鈕 */}
-      <button onClick={handleMainButton} disabled={state === 'processing' || state === 'ending'}
-        style={{ width: 140, height: 140, borderRadius: '50%', background: btnColor, border: `4px solid ${state === 'recording' ? 'rgba(239,68,68,0.4)' : 'rgba(255,255,255,0.1)'}`, color: '#fff', fontSize: 20, fontWeight: 700, cursor: state === 'processing' || state === 'ending' ? 'default' : 'pointer', boxShadow: isWaveActive ? `0 0 60px ${state === 'recording' ? 'rgba(239,68,68,0.5)' : 'rgba(139,92,246,0.5)'}` : '0 0 30px rgba(26,26,46,0.8)', transition: 'all 0.3s ease' }}>
-        {btnLabel}
-      </button>
-
-      {/* 即時文字 / 狀態 */}
-      <div style={{ marginTop: 28, textAlign: 'center', minHeight: 44, maxWidth: 300 }}>
-        {state === 'recording' && (finalTextRef.current || interimText) ? (
-          <div style={{ color: 'rgba(255,255,255,0.75)', fontSize: 15, lineHeight: 1.6 }}>
-            {finalTextRef.current}{interimText && <span style={{ color: 'rgba(255,255,255,0.4)' }}>{interimText}</span>}
+        <div
+          onClick={disabled ? undefined : handleMainButton}
+          style={{ position:'relative', width:160, height:160, display:'flex', alignItems:'center', justifyContent:'center', pointerEvents:'auto', cursor: disabled ? 'default' : 'pointer' }}
+        >
+          <div style={{
+            width:120, height:120, borderRadius:'50%',
+            background:'rgba(255,255,255,0.04)',
+            backdropFilter:'blur(20px)',
+            border:`1px solid ${ringColor}`,
+            display:'flex', alignItems:'center', justifyContent:'center',
+            transform:`scale(${btnScale})`,
+            transition:'all 0.8s cubic-bezier(0.16,1,0.3,1)',
+            animation: state==='processing' ? 'breathe 1s infinite alternate' : 'none',
+          }}>
+            <div style={{
+              width:20, height:20, borderRadius:'50%',
+              background: dotColor,
+              boxShadow:`0 0 24px ${dotColor}`,
+              transform:`scale(${dotScale})`,
+              transition:'all 0.6s ease',
+            }} />
           </div>
-        ) : (
-          <div style={{ color: 'rgba(255,255,255,0.5)', fontSize: 14 }}>{statusText}</div>
+        </div>
+
+        {/* 狀態文字 */}
+        <div style={{
+          marginTop:32,
+          fontSize:10,
+          letterSpacing: state==='processing' ? '1em' : '0.8em',
+          textTransform:'uppercase',
+          fontWeight:200,
+          color: state==='idle' ? 'rgba(255,255,255,0.25)' : state==='recording' ? '#ff3b30' : state==='processing' ? '#ffffff' : state==='playing' ? '#00f2ff' : 'rgba(255,255,255,0.25)',
+          transition:'all 0.8s ease',
+        }}>
+          {STATE_LABEL[state]}
+        </div>
+      </div>
+
+      {/* 底部：輪數 / 結束 / 沉澱結果 */}
+      <div style={{ position:'absolute', bottom:32, left:0, right:0, display:'flex', flexDirection:'column', alignItems:'center', gap:12 }}>
+        {endDone ? (
+          <div style={{ fontSize:10, letterSpacing:'0.3em', fontWeight:200, color:'rgba(52,211,153,0.7)', textTransform:'uppercase' }}>
+            ✓ {insightCount > 0 ? `${insightCount} MEMORIES` : 'SAVED'}
+          </div>
+        ) : messages.length >= 2 && state==='idle' && (
+          <button onClick={endConversation} style={{
+            background:'transparent', border:'1px solid rgba(255,255,255,0.1)',
+            color:'rgba(255,255,255,0.3)', fontSize:9,
+            letterSpacing:'0.3em', textTransform:'uppercase',
+            fontWeight:200, padding:'8px 20px', borderRadius:20, cursor:'pointer',
+            fontFamily:"'Inter', sans-serif",
+          }}>
+            END · {char?.name}
+          </button>
+        )}
+
+        {messages.length > 0 && (
+          <div style={{ fontSize:9, color:'rgba(255,255,255,0.12)', letterSpacing:'0.2em', fontWeight:200 }}>
+            {messages.length / 2} TURNS
+          </div>
         )}
       </div>
 
-      {/* 角色回覆 */}
-      {reply && (
-        <div style={{ marginTop: 20, background: 'rgba(255,255,255,0.06)', borderRadius: 16, padding: '16px 20px', maxWidth: 320, color: 'rgba(255,255,255,0.8)', fontSize: 14, lineHeight: 1.7, textAlign: 'center', border: '1px solid rgba(255,255,255,0.08)' }}>
-          {reply.slice(0, 150)}{reply.length > 150 ? '...' : ''}
-        </div>
-      )}
-
-      {/* 結束對話 */}
-      {messages.length >= 2 && !endDone && state === 'idle' && (
-        <button onClick={endConversation} style={{ marginTop: 32, padding: '10px 24px', borderRadius: 24, border: '1px solid rgba(255,255,255,0.15)', background: 'transparent', color: 'rgba(255,255,255,0.5)', fontSize: 13, cursor: 'pointer' }}>
-          結束對話，讓{char.name}帶走記憶
-        </button>
-      )}
-
-      {endDone && (
-        <div style={{ marginTop: 28, padding: '12px 24px', borderRadius: 24, background: 'rgba(52,211,153,0.1)', border: '1px solid rgba(52,211,153,0.3)', color: 'rgba(52,211,153,0.9)', fontSize: 13, textAlign: 'center' }}>
-          ✓ {insightCount > 0 ? `沉澱了 ${insightCount} 條記憶` : '對話已結束'}
-        </div>
-      )}
-
-      {messages.length > 0 && (
-        <div style={{ position: 'absolute', bottom: 24, color: 'rgba(255,255,255,0.2)', fontSize: 12 }}>
-          {messages.length / 2} 輪對話
-        </div>
-      )}
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100;200;400&display=swap');
+        @keyframes breathe {
+          from { opacity:0.4; box-shadow:0 0 20px rgba(255,255,255,0.1); }
+          to   { opacity:1;   box-shadow:0 0 60px rgba(255,255,255,0.4); }
+        }
+        @keyframes ping {
+          0%   { transform:scale(1);   opacity:0.3; }
+          100% { transform:scale(1.6); opacity:0; }
+        }
+      `}</style>
     </div>
   );
 }
