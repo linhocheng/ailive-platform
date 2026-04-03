@@ -10,10 +10,10 @@ interface Character {
 }
 interface Post {
   id: string; content: string; imageUrl?: string; topic: string;
-  status: string; createdAt: string;
+  status: string; createdAt: string; igPostId?: string;
 }
 interface Task {
-  id: string; type: string; description: string; enabled: boolean;
+  id: string; type: string; description: string; intent?: string; enabled: boolean;
   run_hour: number; run_minute: number; days: string[]; last_run?: string;
 }
 interface KnowledgeItem {
@@ -35,23 +35,28 @@ const Ic = {
   X:        () => <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>,
   Close:    () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>,
   Lock:     () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>,
+  Image:    () => <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>,
+  Hash:     () => <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><line x1="4" y1="9" x2="20" y2="9"/><line x1="4" y1="15" x2="20" y2="15"/><line x1="10" y1="3" x2="8" y2="21"/><line x1="16" y1="3" x2="14" y2="21"/></svg>,
 };
 
-// ── 共用樣式 ──
 const S = {
-  card:    { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-lg)', padding: 20 } as React.CSSProperties,
-  btn:     (active=true) => ({ display:'flex', alignItems:'center', gap:5, padding:'7px 14px', border:'1px solid var(--border)', borderRadius:'var(--r-sm)', background: active ? 'var(--text-primary)' : 'transparent', color: active ? '#fff' : 'var(--text-secondary)', fontSize:13, fontWeight:500, cursor:'pointer', transition:'all 0.15s' }) as React.CSSProperties,
-  input:   { width:'100%', border:'1px solid var(--border)', borderRadius:'var(--r-sm)', padding:'8px 11px', fontSize:13, outline:'none', background:'var(--surface)', color:'var(--text-primary)', boxSizing:'border-box' } as React.CSSProperties,
-  label:   { fontSize:11, fontWeight:600, letterSpacing:'0.08em', color:'var(--text-muted)', marginBottom:5, display:'block' } as React.CSSProperties,
+  card:  { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-lg)', padding: 20 } as React.CSSProperties,
+  btn:   (active=true) => ({ display:'flex', alignItems:'center', gap:5, padding:'7px 14px', border:'1px solid var(--border)', borderRadius:'var(--r-sm)', background: active ? 'var(--text-primary)' : 'transparent', color: active ? '#fff' : 'var(--text-secondary)', fontSize:13, fontWeight:500, cursor:'pointer', transition:'all 0.15s' }) as React.CSSProperties,
+  input: { width:'100%', border:'1px solid var(--border)', borderRadius:'var(--r-sm)', padding:'8px 11px', fontSize:13, outline:'none', background:'var(--surface)', color:'var(--text-primary)', boxSizing:'border-box' } as React.CSSProperties,
+  label: { fontSize:11, fontWeight:600, letterSpacing:'0.08em', color:'var(--text-muted)', marginBottom:5, display:'block' } as React.CSSProperties,
 };
 
-const DAYS_LABEL: Record<string, string> = { mon:'一',tue:'二',wed:'三',thu:'四',fri:'五',sat:'六',sun:'日' };
+const DAYS_LABEL: Record<string,string> = { mon:'一',tue:'二',wed:'三',thu:'四',fri:'五',sat:'六',sun:'日' };
 const ALL_DAYS = ['mon','tue','wed','thu','fri','sat','sun'];
-const STATUS: Record<string, { bg:string; color:string; label:string }> = {
-  draft:     { bg:'var(--amber-bg)',  color:'var(--amber)',  label:'草稿' },
-  scheduled: { bg:'var(--green-bg)', color:'var(--green)',  label:'已排程' },
+const STATUS: Record<string,{bg:string;color:string;label:string}> = {
+  draft:     { bg:'var(--amber-bg)',     color:'var(--amber)',  label:'草稿' },
+  scheduled: { bg:'var(--green-bg)',     color:'var(--green)',  label:'已排程' },
   published: { bg:'var(--accent-light)', color:'var(--accent)', label:'已發佈' },
-  rejected:  { bg:'var(--red-bg)',   color:'var(--red)',    label:'已拒絕' },
+  rejected:  { bg:'var(--red-bg)',       color:'var(--red)',    label:'已拒絕' },
+};
+const TYPE_LABEL: Record<string,string> = {
+  post:'生成草稿', reflect:'每日省思', learn:'主動學習',
+  explore:'探索學習', sleep:'作夢沉澱', engage:'互動',
 };
 
 // ══════════════════════════════════════
@@ -62,7 +67,7 @@ function PasswordGate({ charName, avatar, onUnlock }: { charName:string; avatar?
   const [error, setError] = useState('');
   const [checking, setChecking] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
-  useEffect(() => { inputRef.current?.focus(); }, []);
+  useEffect(()=>{ inputRef.current?.focus(); },[]);
 
   const submit = async () => {
     if (!pw.trim()) return;
@@ -83,8 +88,7 @@ function PasswordGate({ charName, avatar, onUnlock }: { charName:string; avatar?
         <div style={{ fontSize:13, color:'var(--text-muted)', marginBottom:24 }}>請輸入存取密碼</div>
         <input ref={inputRef} type="password" value={pw}
           onChange={e=>setPw(e.target.value)} onKeyDown={e=>e.key==='Enter'&&submit()}
-          placeholder="密碼"
-          style={{ ...S.input, marginBottom:10, textAlign:'center', letterSpacing:'0.2em' }}
+          placeholder="密碼" style={{ ...S.input, marginBottom:10, textAlign:'center', letterSpacing:'0.2em' }}
           onFocus={e=>(e.target.style.borderColor='var(--text-secondary)')}
           onBlur={e=>(e.target.style.borderColor='var(--border)')}
         />
@@ -99,36 +103,44 @@ function PasswordGate({ charName, avatar, onUnlock }: { charName:string; avatar?
 }
 
 // ══════════════════════════════════════
-// PostsTab
+// PostsTab — 完整同步後台
 // ══════════════════════════════════════
 function PostsTab({ charId }: { charId:string }) {
   const [posts, setPosts] = useState<Post[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('draft');
   const [acting, setActing] = useState<string|null>(null);
+  // 文案編輯
   const [editingId, setEditingId] = useState<string|null>(null);
-  const [editValue, setEditValue] = useState('');
+  const [editContent, setEditContent] = useState('');
+  // topic 編輯
+  const [editTopicId, setEditTopicId] = useState<string|null>(null);
+  const [editTopic, setEditTopic] = useState('');
+  // imageUrl 編輯
+  const [editImgId, setEditImgId] = useState<string|null>(null);
+  const [editImg, setEditImg] = useState('');
   const [saving, setSaving] = useState(false);
 
-  const load = useCallback(() => {
+  const load = useCallback(()=>{
     setLoading(true);
     fetch(`/api/posts?characterId=${charId}&limit=50`).then(r=>r.json()).then(d=>{setPosts(d.posts||[]);setLoading(false);});
-  }, [charId]);
+  },[charId]);
   useEffect(()=>{load();},[load]);
 
-  const saveContent = async (id:string) => {
-    setSaving(true);
-    await fetch('/api/posts',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,content:editValue})});
-    setSaving(false); setEditingId(null); load();
+  const patch = async (id:string, fields:Record<string,unknown>) => {
+    await fetch('/api/posts',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,...fields})});
+    load();
   };
-  const approve = async (id:string) => {
+
+  const saveContent = async (id:string) => { setSaving(true); await patch(id,{content:editContent}); setSaving(false); setEditingId(null); };
+  const saveTopic   = async (id:string) => { setSaving(true); await patch(id,{topic:editTopic});   setSaving(false); setEditTopicId(null); };
+  const saveImg     = async (id:string) => { setSaving(true); await patch(id,{imageUrl:editImg});  setSaving(false); setEditImgId(null); };
+  const approve     = async (id:string) => { setActing(id); await patch(id,{status:'scheduled'}); setActing(null); };
+  const reject      = async (id:string) => { setActing(id); await patch(id,{status:'rejected'});  setActing(null); };
+  const del         = async (id:string) => {
+    if (!confirm('確定刪除這篇草稿？')) return;
     setActing(id);
-    await fetch('/api/posts',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,status:'scheduled'})});
-    setActing(null); load();
-  };
-  const reject = async (id:string) => {
-    setActing(id);
-    await fetch('/api/posts',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,status:'rejected'})});
+    await fetch('/api/posts',{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})});
     setActing(null); load();
   };
 
@@ -137,21 +149,18 @@ function PostsTab({ charId }: { charId:string }) {
 
   return (
     <div>
-      {/* Filter pills */}
       <div style={{display:'flex',gap:6,marginBottom:16,flexWrap:'wrap'}}>
         {(['draft','scheduled','published','rejected','all'] as const).map(s=>(
           <button key={s} onClick={()=>setFilter(s)} style={{
-            padding:'4px 12px', border:'1px solid var(--border)', borderRadius:20, fontSize:12,
+            padding:'4px 12px',border:'1px solid var(--border)',borderRadius:20,fontSize:12,
             background:filter===s?'var(--text-primary)':'transparent',
-            color:filter===s?'#fff':'var(--text-muted)',
-            cursor:'pointer', fontWeight:filter===s?600:400,
-            display:'flex', alignItems:'center', gap:4,
+            color:filter===s?'#fff':'var(--text-muted)',cursor:'pointer',fontWeight:filter===s?600:400,
+            display:'flex',alignItems:'center',gap:4,
           }}>
             {s==='all'?'全部':STATUS[s]?.label||s}
             {s==='draft'&&draftCount>0&&<span style={{background:'var(--red)',color:'#fff',borderRadius:20,padding:'0 5px',fontSize:10,fontWeight:700}}>{draftCount}</span>}
           </button>
         ))}
-        {filter==='draft'&&<span style={{fontSize:11,color:'var(--text-muted)',marginLeft:4,display:'flex',alignItems:'center',gap:3}}><Ic.Edit/>點擊內文可編輯</span>}
       </div>
 
       {loading ? <div style={{color:'var(--text-muted)',fontSize:13}}>載入中…</div>
@@ -161,18 +170,43 @@ function PostsTab({ charId }: { charId:string }) {
           const isDraft = post.status==='draft';
           return (
             <div key={post.id} style={{...S.card,marginBottom:10}}>
+              {/* Header row */}
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
-                <div style={{display:'flex',gap:6,alignItems:'center'}}>
+                <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
                   <span style={{background:sc.bg,color:sc.color,padding:'2px 9px',borderRadius:20,fontSize:11,fontWeight:600}}>{sc.label}</span>
-                  {post.topic&&<span style={{color:'var(--text-muted)',fontSize:11}}>#{post.topic}</span>}
+                  {post.igPostId && <span style={{background:'var(--accent-light)',color:'var(--accent)',padding:'2px 8px',borderRadius:20,fontSize:10,fontWeight:600}}>IG 已發佈</span>}
+                  {/* Topic 編輯 */}
+                  {editTopicId===post.id ? (
+                    <div style={{display:'flex',gap:4,alignItems:'center'}}>
+                      <input value={editTopic} onChange={e=>setEditTopic(e.target.value)}
+                        style={{...S.input,width:120,padding:'3px 8px',fontSize:12}}
+                        onFocus={e=>(e.target.style.borderColor='var(--accent)')} onBlur={e=>(e.target.style.borderColor='var(--border)')}/>
+                      <button onClick={()=>saveTopic(post.id)} disabled={saving} style={{...S.btn(true),padding:'3px 8px',fontSize:11}}><Ic.Check/></button>
+                      <button onClick={()=>setEditTopicId(null)} style={{...S.btn(false),padding:'3px 8px',fontSize:11}}><Ic.X/></button>
+                    </div>
+                  ) : (
+                    <button onClick={()=>{setEditTopicId(post.id);setEditTopic(post.topic||'');}}
+                      style={{display:'flex',alignItems:'center',gap:3,background:'none',border:'none',color:'var(--text-muted)',cursor:'pointer',fontSize:12,padding:0}}>
+                      <Ic.Hash/>{post.topic||'加 topic'}
+                    </button>
+                  )}
                 </div>
-                <span style={{fontSize:11,color:'var(--text-muted)'}}>{new Date(post.createdAt).toLocaleDateString('zh-TW')}</span>
+                <div style={{display:'flex',gap:6,alignItems:'center'}}>
+                  <span style={{fontSize:11,color:'var(--text-muted)'}}>{new Date(post.createdAt).toLocaleDateString('zh-TW')}</span>
+                  <button onClick={()=>del(post.id)} disabled={!!acting}
+                    style={{background:'none',border:'none',color:'var(--text-muted)',cursor:'pointer',display:'flex',alignItems:'center',padding:0,transition:'color 0.15s'}}
+                    onMouseEnter={e=>(e.currentTarget.style.color='var(--red)')}
+                    onMouseLeave={e=>(e.currentTarget.style.color='var(--text-muted)')}>
+                    <Ic.Trash/>
+                  </button>
+                </div>
               </div>
 
+              {/* 文案編輯 */}
               {isDraft&&editingId===post.id ? (
                 <div style={{marginBottom:10}}>
-                  <textarea value={editValue} onChange={e=>setEditValue(e.target.value)}
-                    rows={Math.max(3,editValue.split('\n').length+1)}
+                  <textarea value={editContent} onChange={e=>setEditContent(e.target.value)}
+                    rows={Math.max(3,editContent.split('\n').length+1)}
                     style={{...S.input,resize:'vertical',lineHeight:1.7,marginBottom:8,borderColor:'var(--accent)'}}/>
                   <div style={{display:'flex',gap:6}}>
                     <button onClick={()=>saveContent(post.id)} disabled={saving} style={S.btn(true)}>{saving?'儲存中…':'儲存'}</button>
@@ -180,7 +214,7 @@ function PostsTab({ charId }: { charId:string }) {
                   </div>
                 </div>
               ) : (
-                <div onClick={()=>{if(isDraft){setEditingId(post.id);setEditValue(post.content);}}}
+                <div onClick={()=>{if(isDraft){setEditingId(post.id);setEditContent(post.content);}}}
                   style={{fontSize:13,color:'var(--text-primary)',lineHeight:1.8,whiteSpace:'pre-wrap',
                     background:'var(--bg)',borderRadius:'var(--r-sm)',padding:12,marginBottom:10,
                     cursor:isDraft?'text':'default',border:'1px solid transparent',transition:'border 0.15s'}}
@@ -190,14 +224,34 @@ function PostsTab({ charId }: { charId:string }) {
                 </div>
               )}
 
-              {post.imageUrl&&<img src={post.imageUrl} alt="" style={{maxWidth:160,borderRadius:'var(--r-sm)',marginBottom:10,border:'1px solid var(--border)',display:'block'}}/>}
+              {/* 圖片 + imageUrl 編輯 */}
+              <div style={{marginBottom:10}}>
+                {post.imageUrl && !editImgId &&
+                  <img src={post.imageUrl} alt="" style={{maxWidth:160,borderRadius:'var(--r-sm)',marginBottom:6,border:'1px solid var(--border)',display:'block'}}/>
+                }
+                {editImgId===post.id ? (
+                  <div style={{display:'flex',gap:4,alignItems:'center'}}>
+                    <input value={editImg} onChange={e=>setEditImg(e.target.value)}
+                      placeholder="貼上圖片 URL" style={{...S.input,fontSize:12}}
+                      onFocus={e=>(e.target.style.borderColor='var(--accent)')} onBlur={e=>(e.target.style.borderColor='var(--border)')}/>
+                    <button onClick={()=>saveImg(post.id)} disabled={saving} style={{...S.btn(true),padding:'6px 10px',flexShrink:0}}><Ic.Check/></button>
+                    <button onClick={()=>setEditImgId(null)} style={{...S.btn(false),padding:'6px 10px',flexShrink:0}}><Ic.X/></button>
+                  </div>
+                ) : (
+                  isDraft && <button onClick={()=>{setEditImgId(post.id);setEditImg(post.imageUrl||'');}}
+                    style={{display:'flex',alignItems:'center',gap:4,background:'none',border:'1px solid var(--border)',borderRadius:'var(--r-sm)',color:'var(--text-muted)',cursor:'pointer',fontSize:11,padding:'4px 8px'}}>
+                    <Ic.Image/>{post.imageUrl?'換圖片':'加圖片'}
+                  </button>
+                )}
+              </div>
 
+              {/* 操作按鈕 */}
               {isDraft&&(
                 <div style={{display:'flex',gap:6,marginTop:4}}>
-                  <button onClick={()=>approve(post.id)} disabled={!!acting} style={{...S.btn(true),background:'var(--green)',borderColor:'var(--green)',gap:4}}>
+                  <button onClick={()=>approve(post.id)} disabled={!!acting} style={{...S.btn(true),background:'var(--green)',borderColor:'var(--green)'}}>
                     <Ic.Check/>核准
                   </button>
-                  <button onClick={()=>reject(post.id)} disabled={!!acting} style={{...S.btn(true),background:'var(--red)',borderColor:'var(--red)',gap:4}}>
+                  <button onClick={()=>reject(post.id)} disabled={!!acting} style={{...S.btn(true),background:'var(--red)',borderColor:'var(--red)'}}>
                     <Ic.X/>拒絕
                   </button>
                 </div>
@@ -210,7 +264,7 @@ function PostsTab({ charId }: { charId:string }) {
 }
 
 // ══════════════════════════════════════
-// TasksTab
+// TasksTab — 完整同步後台
 // ══════════════════════════════════════
 function TasksTab({ charId }: { charId:string }) {
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -221,6 +275,7 @@ function TasksTab({ charId }: { charId:string }) {
   const [showAdd, setShowAdd] = useState(false);
   const [newType, setNewType] = useState('post');
   const [newDesc, setNewDesc] = useState('');
+  const [newIntent, setNewIntent] = useState('');
   const [newHour, setNewHour] = useState(9);
   const [newMin, setNewMin] = useState(0);
   const [newDays, setNewDays] = useState(['mon','tue','wed','thu','fri']);
@@ -236,45 +291,38 @@ function TasksTab({ charId }: { charId:string }) {
     await fetch('/api/tasks',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:taskId,...updates})});
     load();
   };
-
   const save = async () => {
     if (!editing) return;
     setSaving(true);
     await fetch('/api/tasks',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(editing)});
     setSaving(false); setEditing(null); load();
   };
-
   const del = async (taskId:string) => {
     if (!confirm('確定刪除這個排程任務？')) return;
     setDeleting(taskId);
     await fetch(`/api/tasks?id=${taskId}`,{method:'DELETE'});
     setDeleting(null); load();
   };
-
   const addTask = async () => {
     if (newDays.length===0) return;
     setAdding(true);
     await fetch('/api/tasks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
-      characterId:charId,type:newType,description:newDesc,
-      run_hour:newHour,run_minute:newMin,days:newDays,enabled:true,
+      characterId:charId, type:newType, description:newDesc, intent:newIntent,
+      run_hour:newHour, run_minute:newMin, days:newDays, enabled:true,
     })});
     setAdding(false); setShowAdd(false);
-    setNewType('post'); setNewDesc(''); setNewHour(9); setNewMin(0); setNewDays(['mon','tue','wed','thu','fri']);
+    setNewType('post'); setNewDesc(''); setNewIntent(''); setNewHour(9); setNewMin(0); setNewDays(['mon','tue','wed','thu','fri']);
     load();
   };
 
-  const TYPE_LABEL: Record<string,string> = {post:'發文',reflect:'反思',learn:'學習',engage:'互動'};
-
   return (
     <div>
-      {/* 新增按鈕 */}
       <div style={{display:'flex',justifyContent:'flex-end',marginBottom:12}}>
         <button onClick={()=>setShowAdd(v=>!v)} style={S.btn(!showAdd)}>
           {showAdd ? <><Ic.X/>取消</> : <>+ 新增任務</>}
         </button>
       </div>
 
-      {/* 新增表單 */}
       {showAdd&&(
         <div style={{...S.card,marginBottom:16,borderColor:'var(--accent-light)'}}>
           <div style={{fontSize:13,fontWeight:600,color:'var(--text-primary)',marginBottom:14}}>新增排程任務</div>
@@ -303,6 +351,12 @@ function TasksTab({ charId }: { charId:string }) {
             <input value={newDesc} onChange={e=>setNewDesc(e.target.value)} placeholder="任務說明" style={S.input}
               onFocus={e=>(e.target.style.borderColor='var(--text-secondary)')} onBlur={e=>(e.target.style.borderColor='var(--border)')}/>
           </div>
+          <div style={{marginBottom:10}}>
+            <label style={S.label}>任務意義（intent）</label>
+            <textarea value={newIntent} onChange={e=>setNewIntent(e.target.value)} rows={3}
+              placeholder="這個任務存在的意義是什麼？" style={{...S.input,resize:'vertical'}}
+              onFocus={e=>(e.target.style.borderColor='var(--text-secondary)')} onBlur={e=>(e.target.style.borderColor='var(--border)')}/>
+          </div>
           <div style={{marginBottom:14}}>
             <label style={S.label}>執行日</label>
             <div style={{display:'flex',gap:5,flexWrap:'wrap'}}>
@@ -316,7 +370,8 @@ function TasksTab({ charId }: { charId:string }) {
               })}
             </div>
           </div>
-          <button onClick={addTask} disabled={adding||newDays.length===0} style={{...S.btn(true),opacity:adding||newDays.length===0?0.5:1}}>
+          <button onClick={addTask} disabled={adding||newDays.length===0}
+            style={{...S.btn(true),opacity:adding||newDays.length===0?0.5:1}}>
             {adding?'新增中…':'新增'}
           </button>
         </div>
@@ -328,7 +383,6 @@ function TasksTab({ charId }: { charId:string }) {
           {tasks.map(task=>(
             <div key={task.id} style={{...S.card,border:`1px solid ${task.enabled?'var(--green-bg)':'var(--border)'}`,opacity:task.enabled?1:0.65}}>
               {editing?.id===task.id ? (
-                /* ── 編輯模式 ── */
                 <div>
                   <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:10}}>
                     <div>
@@ -347,6 +401,11 @@ function TasksTab({ charId }: { charId:string }) {
                     <textarea value={editing.description||''} onChange={e=>setEditing({...editing,description:e.target.value})}
                       rows={2} style={{...S.input,resize:'vertical'}}/>
                   </div>
+                  <div style={{marginBottom:10}}>
+                    <label style={S.label}>任務意義（intent）</label>
+                    <textarea value={editing.intent||''} onChange={e=>setEditing({...editing,intent:e.target.value})}
+                      rows={4} style={{...S.input,resize:'vertical'}} placeholder="這個任務存在的意義是什麼？"/>
+                  </div>
                   <div style={{marginBottom:14}}>
                     <label style={S.label}>執行日</label>
                     <div style={{display:'flex',gap:5,flexWrap:'wrap'}}>
@@ -361,41 +420,32 @@ function TasksTab({ charId }: { charId:string }) {
                     </div>
                   </div>
                   <div style={{display:'flex',gap:8}}>
-                    <button onClick={save} disabled={saving} style={{...S.btn(true),background:'var(--green)',borderColor:'var(--green)'}}>
-                      {saving?'儲存中…':'儲存'}
-                    </button>
+                    <button onClick={save} disabled={saving} style={{...S.btn(true),background:'var(--green)',borderColor:'var(--green)'}}>{saving?'儲存中…':'儲存'}</button>
                     <button onClick={()=>setEditing(null)} style={S.btn(false)}>取消</button>
                   </div>
                 </div>
               ) : (
-                /* ── 檢視模式 ── */
                 <div>
                   <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
                     <div style={{flex:1}}>
                       <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4,flexWrap:'wrap'}}>
                         <span style={{fontWeight:600,fontSize:14,color:'var(--text-primary)'}}>{TYPE_LABEL[task.type]||task.type}</span>
-                        <span style={{fontSize:12,color:'var(--text-secondary)'}}>
-                          {String(task.run_hour).padStart(2,'0')}:{String(task.run_minute).padStart(2,'0')}
-                        </span>
-                        <span style={{fontSize:11,color:'var(--text-muted)'}}>
-                          週{task.days.map(d=>DAYS_LABEL[d]||'').join('')}
-                        </span>
+                        <span style={{fontSize:12,color:'var(--text-secondary)'}}>{String(task.run_hour).padStart(2,'0')}:{String(task.run_minute).padStart(2,'0')}</span>
+                        <span style={{fontSize:11,color:'var(--text-muted)'}}>週{task.days.map(d=>DAYS_LABEL[d]||'').join('')}</span>
                       </div>
                       {task.description&&<div style={{fontSize:12,color:'var(--text-secondary)',marginBottom:4}}>{task.description}</div>}
+                      {task.intent&&<div style={{fontSize:12,color:'var(--text-secondary)',background:'var(--bg)',borderRadius:'var(--r-sm)',padding:'6px 10px',marginBottom:4,borderLeft:'2px solid var(--border)'}}>{task.intent.slice(0,140)}{task.intent.length>140?'…':''}</div>}
                       {task.last_run&&<div style={{fontSize:11,color:'var(--text-muted)'}}>上次執行：{new Date(task.last_run).toLocaleString('zh-TW')}</div>}
                     </div>
-
                     <div style={{display:'flex',gap:6,alignItems:'center',marginLeft:12,flexShrink:0}}>
-                      {/* 啟用/停用 */}
                       <button onClick={()=>patch(task.id,{enabled:!task.enabled})}
-                        style={{padding:'3px 10px',border:'1px solid var(--border)',borderRadius:20,fontSize:11,fontWeight:500,cursor:'pointer',background:task.enabled?'var(--green-bg)':'var(--bg)',color:task.enabled?'var(--green)':'var(--text-muted)'}}>
+                        style={{padding:'3px 10px',border:'1px solid var(--border)',borderRadius:20,fontSize:11,fontWeight:500,cursor:'pointer',
+                          background:task.enabled?'var(--green-bg)':'var(--bg)',color:task.enabled?'var(--green)':'var(--text-muted)'}}>
                         {task.enabled?'啟用中':'已停用'}
                       </button>
-                      {/* 編輯 */}
                       <button onClick={()=>setEditing(task)} style={{...S.btn(false),padding:'3px 10px',fontSize:11}}>
                         <Ic.Edit/>編輯
                       </button>
-                      {/* 刪除 */}
                       <button onClick={()=>del(task.id)} disabled={deleting===task.id}
                         style={{background:'none',border:'none',color:'var(--text-muted)',cursor:'pointer',display:'flex',alignItems:'center',padding:0,transition:'color 0.15s'}}
                         onMouseEnter={e=>(e.currentTarget.style.color='var(--red)')}
@@ -415,7 +465,7 @@ function TasksTab({ charId }: { charId:string }) {
 }
 
 // ══════════════════════════════════════
-// KnowledgeTab（全功能）
+// KnowledgeTab — 全功能
 // ══════════════════════════════════════
 function KnowledgeTab({ charId }: { charId:string }) {
   const [items, setItems] = useState<KnowledgeItem[]>([]);
@@ -441,22 +491,18 @@ function KnowledgeTab({ charId }: { charId:string }) {
     await fetch('/api/knowledge',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({characterId:charId,title,content,category})});
     setTitle(''); setContent(''); setAdding(false); load();
   };
-
   const del = async (id:string) => {
     await fetch(`/api/knowledge?id=${id}`,{method:'DELETE'});
     setItems(prev=>prev.filter(i=>i.id!==id));
   };
-
   const clearByCategory = async (target:'all'|string) => {
     const targets = target==='all' ? items : items.filter(i=>i.category===target);
     if (targets.length===0) return;
-    const label = target==='all' ? '全部知識' : `「${target}」的 ${targets.length} 條`;
-    if (!confirm(`確定清除${label}？此操作不可復原。`)) return;
+    if (!confirm(`確定清除？此操作不可復原。`)) return;
     setClearing(target);
     for (const item of targets) await fetch(`/api/knowledge?id=${item.id}`,{method:'DELETE'});
     setClearing(null); load();
   };
-
   const uploadFile = async (file:File) => {
     setUploadStatus('uploading'); setUploadMsg('取得上傳憑證中…');
     try {
@@ -485,10 +531,7 @@ function KnowledgeTab({ charId }: { charId:string }) {
 
   return (
     <div style={{display:'grid',gridTemplateColumns:'1fr 1.8fr',gap:16}}>
-      {/* 左欄：操作 */}
       <div style={{display:'flex',flexDirection:'column',gap:12}}>
-
-        {/* 上傳文件 */}
         <div style={S.card}>
           <div style={{fontSize:13,fontWeight:600,color:'var(--text-primary)',marginBottom:4,display:'flex',alignItems:'center',gap:6}}><Ic.Upload/>上傳文件</div>
           <div style={{fontSize:11,color:'var(--text-muted)',marginBottom:12}}>支援 .docx .pdf .md .txt</div>
@@ -500,8 +543,6 @@ function KnowledgeTab({ charId }: { charId:string }) {
           {uploadStatus==='done'&&<div style={{marginTop:8,padding:'8px 10px',background:'var(--green-bg)',borderRadius:'var(--r-sm)',fontSize:12,color:'var(--green)'}}>{uploadMsg}</div>}
           {uploadStatus==='error'&&<div style={{marginTop:8,padding:'8px 10px',background:'var(--red-bg)',borderRadius:'var(--r-sm)',fontSize:12,color:'var(--red)'}}>{uploadMsg}</div>}
         </div>
-
-        {/* 手動新增 */}
         <div style={S.card}>
           <div style={{fontSize:13,fontWeight:600,color:'var(--text-primary)',marginBottom:12,display:'flex',alignItems:'center',gap:6}}><Ic.Edit/>手動新增</div>
           <label style={S.label}>標題（選填）</label>
@@ -518,8 +559,6 @@ function KnowledgeTab({ charId }: { charId:string }) {
             {adding?'新增中…':'新增'}
           </button>
         </div>
-
-        {/* 清除工具 */}
         {items.length>0&&(
           <div style={{...S.card,borderColor:'var(--red-bg)'}}>
             <div style={{fontSize:13,fontWeight:600,color:'var(--red)',marginBottom:12,display:'flex',alignItems:'center',gap:5}}><Ic.Trash/>清除知識</div>
@@ -541,8 +580,6 @@ function KnowledgeTab({ charId }: { charId:string }) {
           </div>
         )}
       </div>
-
-      {/* 右欄：列表 */}
       <div>
         <div style={{fontSize:13,fontWeight:600,color:'var(--text-primary)',marginBottom:12}}>共 {items.length} 條知識</div>
         {loading ? <div style={{color:'var(--text-muted)',fontSize:13}}>載入中…</div>
@@ -556,13 +593,14 @@ function KnowledgeTab({ charId }: { charId:string }) {
                 </div>
                 <div style={{display:'flex',gap:8,alignItems:'center',flexShrink:0}}>
                   <span style={{fontSize:10,color:'var(--text-muted)'}}>查詢 {item.hitCount} 次</span>
-                  <button onClick={()=>del(item.id)} style={{background:'none',border:'none',color:'var(--red)',cursor:'pointer',display:'flex',alignItems:'center',padding:0}}><Ic.Trash/></button>
+                  <button onClick={()=>del(item.id)} style={{background:'none',border:'none',color:'var(--text-muted)',cursor:'pointer',display:'flex',alignItems:'center',padding:0,transition:'color 0.15s'}}
+                    onMouseEnter={e=>(e.currentTarget.style.color='var(--red)')} onMouseLeave={e=>(e.currentTarget.style.color='var(--text-muted)')}>
+                    <Ic.Trash/>
+                  </button>
                 </div>
               </div>
               {item.imageUrl&&<img src={item.imageUrl} alt={item.title} style={{maxWidth:'100%',maxHeight:120,borderRadius:'var(--r-sm)',objectFit:'contain',background:'var(--bg)',marginBottom:6,border:'1px solid var(--border)',display:'block'}}/>}
-              <div style={{fontSize:12,color:'var(--text-secondary)',lineHeight:1.6}}>
-                {item.content.slice(0,180)}{item.content.length>180?'…':''}
-              </div>
+              <div style={{fontSize:12,color:'var(--text-secondary)',lineHeight:1.6}}>{item.content.slice(0,180)}{item.content.length>180?'…':''}</div>
             </div>
           ))}
       </div>
@@ -601,84 +639,70 @@ export default function ClientPage() {
   if (!unlocked) return <PasswordGate charName={char.name} avatar={char.visualIdentity?.characterSheet} onUnlock={()=>setUnlocked(true)}/>;
 
   const TABS = [
-    {key:'posts',    label:'貼文', icon:<Ic.File/>},
-    {key:'tasks',    label:'排程', icon:<Ic.Calendar/>},
-    {key:'knowledge',label:'知識庫',icon:<Ic.Book/>},
-    {key:'chat',     label:'聊天', icon:<Ic.Chat/>},
+    {key:'posts',     label:'貼文',  icon:<Ic.File/>},
+    {key:'tasks',     label:'排程',  icon:<Ic.Calendar/>},
+    {key:'knowledge', label:'知識庫', icon:<Ic.Book/>},
+    {key:'chat',      label:'聊天',  icon:<Ic.Chat/>},
   ] as const;
+
+  const TabBar = ({fixed=false}:{fixed?:boolean}) => (
+    <div style={{display:'flex',gap:2,background:'var(--bg)',borderRadius:fixed?0:'var(--r-md)',padding:fixed?'8px 16px':3,
+      ...(fixed?{borderTop:'1px solid var(--border)'}:{})}}>
+      {TABS.map(t=>(
+        <button key={t.key} onClick={()=>setTab(t.key)} style={{
+          flex:1,padding:'7px 0',border:'none',borderRadius:'var(--r-sm)',
+          background:tab===t.key?'var(--surface)':'transparent',
+          color:tab===t.key?'var(--text-primary)':'var(--text-muted)',
+          fontWeight:tab===t.key?600:400,fontSize:fixed?12:13,cursor:'pointer',
+          boxShadow:tab===t.key&&!fixed?'var(--shadow-sm)':'none',
+          transition:'all 0.15s',display:'flex',alignItems:'center',justifyContent:'center',gap:4,
+          fontFamily:'var(--font-body)',
+        }}>{t.icon}{t.label}</button>
+      ))}
+    </div>
+  );
 
   return (
     <>
     <div style={{maxWidth:760,margin:'0 auto',padding:'0 16px 48px',fontFamily:'var(--font-body)'}}>
-
-      {/* ── Header ── */}
+      {/* Header */}
       <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'20px 0 16px',borderBottom:'1px solid var(--border)',marginBottom:20}}>
         <div style={{display:'flex',alignItems:'center',gap:12}}>
           {char.visualIdentity?.characterSheet
             ? <img src={char.visualIdentity.characterSheet} alt="" style={{width:40,height:40,borderRadius:'50%',objectFit:'cover',border:'1px solid var(--border)'}}/>
-            : <div style={{width:40,height:40,borderRadius:'50%',background:'var(--bg-alt)',display:'flex',alignItems:'center',justifyContent:'center',color:'var(--text-muted)',fontSize:16}}>{char.name[0]}</div>
+            : <div style={{width:40,height:40,borderRadius:'50%',background:'var(--bg-alt)',display:'flex',alignItems:'center',justifyContent:'center',color:'var(--text-muted)',fontSize:16,fontFamily:'var(--font-display)',fontWeight:700}}>{char.name[0]}</div>
           }
           <div>
             <div style={{fontFamily:'var(--font-display)',fontWeight:700,fontSize:17,color:'var(--text-primary)',letterSpacing:'-0.02em'}}>{char.name}</div>
             {char.mission&&<div style={{fontSize:11,color:'var(--text-muted)',marginTop:1}}>{char.mission.slice(0,48)}{char.mission.length>48?'…':''}</div>}
           </div>
         </div>
-
-        {/* 語音按鈕 */}
         <a href={`/voice/${charId}`}
-          style={{...S.btn(true),gap:5,textDecoration:'none',display:'flex',alignItems:'center'}}
+          style={{...S.btn(true),textDecoration:'none',display:'flex',alignItems:'center'}}
           onMouseEnter={e=>(e.currentTarget.style.opacity='0.85')}
-          onMouseLeave={e=>(e.currentTarget.style.opacity='1')}
-        ><Ic.Mic/>語音</a>
+          onMouseLeave={e=>(e.currentTarget.style.opacity='1')}>
+          <Ic.Mic/>語音
+        </a>
       </div>
 
-      {/* ── Tab bar ── */}
-      <div style={{display:'flex',gap:2,marginBottom:20,background:'var(--bg)',borderRadius:'var(--r-md)',padding:3}}>
-        {TABS.map(t=>(
-          <button key={t.key} onClick={()=>setTab(t.key)} style={{
-            flex:1,padding:'7px 0',border:'none',borderRadius:'var(--r-sm)',
-            background:tab===t.key?'var(--surface)':'transparent',
-            color:tab===t.key?'var(--text-primary)':'var(--text-muted)',
-            fontWeight:tab===t.key?600:400,fontSize:13,cursor:'pointer',
-            boxShadow:tab===t.key?'var(--shadow-sm)':'none',
-            transition:'all 0.15s',
-            display:'flex',alignItems:'center',justifyContent:'center',gap:5,
-            fontFamily:'var(--font-body)',
-          }}>
-            {t.icon}{t.label}
-          </button>
-        ))}
-      </div>
+      <div style={{marginBottom:20}}><TabBar/></div>
 
-      {tab==='posts'    && <PostsTab charId={charId}/>}
-      {tab==='tasks'    && <TasksTab charId={charId}/>}
-      {tab==='knowledge'&& <KnowledgeTab charId={charId}/>}
+      {tab==='posts'     && <PostsTab charId={charId}/>}
+      {tab==='tasks'     && <TasksTab charId={charId}/>}
+      {tab==='knowledge' && <KnowledgeTab charId={charId}/>}
     </div>
 
-    {/* ── 聊天全螢幕覆蓋（無關閉按鈕，tab bar 浮在上方）── */}
     {tab==='chat'&&(
       <div style={{position:'fixed',inset:0,zIndex:100,background:'#fff'}}>
         <style>{`
           .client-chat-wrap header a:first-child { display: none !important; }
           .client-chat-wrap header > div > div:nth-child(2) { display: none !important; }
         `}</style>
-        {/* Tab bar 浮層 */}
-        <div style={{position:'fixed',bottom:0,left:0,right:0,zIndex:101,background:'var(--surface)',borderTop:'1px solid var(--border)',padding:'8px 16px',display:'flex',gap:2}}>
-          {([{key:'posts',label:'貼文',icon:<Ic.File/>},{key:'tasks',label:'排程',icon:<Ic.Calendar/>},{key:'knowledge',label:'知識庫',icon:<Ic.Book/>},{key:'chat',label:'聊天',icon:<Ic.Chat/>}] as const).map(t=>(
-            <button key={t.key} onClick={()=>setTab(t.key)} style={{
-              flex:1,padding:'7px 0',border:'none',borderRadius:'var(--r-sm)',
-              background:tab===t.key?'var(--text-primary)':'transparent',
-              color:tab===t.key?'#fff':'var(--text-muted)',
-              fontWeight:tab===t.key?600:400,fontSize:12,cursor:'pointer',
-              transition:'all 0.15s',display:'flex',alignItems:'center',justifyContent:'center',gap:4,
-              fontFamily:'var(--font-body)',
-            }}>{t.icon}{t.label}</button>
-          ))}
-        </div>
         <div className="client-chat-wrap" style={{height:'calc(100dvh - 56px)'}}>
-          <Suspense>
-            <ChatPageInner/>
-          </Suspense>
+          <Suspense><ChatPageInner/></Suspense>
+        </div>
+        <div style={{position:'fixed',bottom:0,left:0,right:0,zIndex:101}}>
+          <TabBar fixed={true}/>
         </div>
       </div>
     )}
