@@ -20,6 +20,31 @@ export const maxDuration = 120;
 // ===== Markdown 分塊（按 # / ## 切，適合結構化 md 檔）=====
 // H1 = 產品名稱（parentTitle），H2 = 段落名稱
 // title 格式：「產品名稱 — 段落名稱」，讓每條知識都知道自己屬於哪個產品
+function cleanMarkdownContent(raw: string): string {
+  return raw
+    .split('\n')
+    .filter(line => {
+      // 移除純分隔線 --- 和表格分隔行 |---|
+      if (/^---+$/.test(line.trim())) return false;
+      if (/^\|[-\s|]+\|$/.test(line.trim())) return false;
+      return true;
+    })
+    .map(line => {
+      // 表格資料行 | A | B | → A：B（保留語意，去掉語法）
+      if (line.trim().startsWith('|') && line.trim().endsWith('|')) {
+        const cells = line.split('|').map(c => c.trim()).filter(c => c.length > 0);
+        if (cells.length >= 2) return cells.join('：');
+        if (cells.length === 1) return cells[0];
+        return '';
+      }
+      // 移除 ** 粗體標記，保留內容
+      return line.replace(/\*\*/g, '');
+    })
+    .filter(line => line.trim().length > 0)
+    .join('\n')
+    .trim();
+}
+
 function chunkMarkdown(md: string, filename: string): Array<{ title: string; content: string }> {
   const lines = md.split('\n');
   const chunks: Array<{ title: string; content: string }> = [];
@@ -28,12 +53,13 @@ function chunkMarkdown(md: string, filename: string): Array<{ title: string; con
   let currentContent: string[] = [];
 
   const flush = () => {
-    const c = currentContent.join('\n').trim();
-    if (c.length > 20) {
+    const raw = currentContent.join('\n').trim();
+    const cleaned = cleanMarkdownContent(raw);
+    if (cleaned.length > 20) {
       const title = parentTitle && sectionTitle
         ? `${parentTitle} — ${sectionTitle}`
         : parentTitle || sectionTitle || filename;
-      chunks.push({ title, content: c });
+      chunks.push({ title, content: cleaned });
     }
     currentContent = [];
   };
@@ -53,7 +79,7 @@ function chunkMarkdown(md: string, filename: string): Array<{ title: string; con
   flush();
 
   if (chunks.length === 0 && md.trim().length > 0) {
-    chunks.push({ title: filename, content: md.trim() });
+    chunks.push({ title: filename, content: cleanMarkdownContent(md.trim()) });
   }
 
   return chunks;

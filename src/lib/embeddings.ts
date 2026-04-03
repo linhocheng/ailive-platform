@@ -7,7 +7,7 @@
 import { GoogleAuth } from 'google-auth-library';
 
 const EMBEDDING_MODEL = 'text-embedding-004';
-const DIMENSION = 256;
+const DIMENSION = 768; // 256 太低，同品牌不同產品分不清楚
 
 let authClient: GoogleAuth | null = null;
 

@@ -70,7 +70,7 @@ export default function VoicePage() {
     return () => { streamRef.current?.getTracks().forEach(t => t.stop()); };
   }, []);
 
-  // ===== 共用：送文字給角色 =====
+  // ===== 共用：送文字給角色（Claude Streaming + TTS）=====
   const sendToDialogue = useCallback(async (userText: string) => {
     if (!userText.trim()) {
       setState('idle');
@@ -83,10 +83,11 @@ export default function VoicePage() {
     setStatusText(`你說：${userText.slice(0, 30)}${userText.length > 30 ? '...' : ''}`);
 
     try {
-      await new Promise(r => setTimeout(r, 300)); // 讓 UI 更新先顯示
+      await new Promise(r => setTimeout(r, 200));
       setStatusText(`${char?.name || '角色'} 思考中...`);
 
-      const dlgRes = await fetch('/api/dialogue', {
+      // ✅ voice-stream：Claude streaming + TTS pipeline
+      const res = await fetch('/api/voice-stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -94,46 +95,139 @@ export default function VoicePage() {
           userId: `voice-${characterId}`,
           message: userText,
           conversationId,
-          voiceMode: true,
         }),
       });
-      const dlgData = await dlgRes.json() as { reply?: string; conversationId?: string; error?: string };
-      if (!dlgData.reply) throw new Error(dlgData.error || 'dialogue 失敗');
 
-      const replyText = dlgData.reply;
-      setReply(replyText);
+      if (!res.ok || !res.body) throw new Error('voice-stream 連線失敗');
 
-      if (dlgData.conversationId) {
-        setConversationId(dlgData.conversationId);
-        localStorage.setItem(`conv-${characterId}`, dlgData.conversationId);
+      // ✅ 音訊播放佇列（句子按順序播）
+      let mediaSource: MediaSource | null = null;
+      let sourceBuffer: SourceBuffer | null = null;
+      let audio: HTMLAudioElement | null = null;
+      const audioQueue: Uint8Array[] = [];
+      let isAppending = false;
+      let streamDone = false;
+      let pendingSentences = 0;
+      let playedSentences = 0;
+      let fullReplyText = '';
+
+      const initAudio = () => {
+        if (audio) return;
+        mediaSource = new MediaSource();
+        const url = URL.createObjectURL(mediaSource);
+        audio = new Audio(url);
+        audioRef.current = audio;
+
+        mediaSource.addEventListener('sourceopen', () => {
+          try {
+            sourceBuffer = mediaSource!.addSourceBuffer('audio/mpeg');
+            sourceBuffer.addEventListener('updateend', drainQueue);
+            drainQueue();
+          } catch (_e) {}
+        }, { once: true });
+
+        audio.play().catch(() => {});
+        setState('playing');
+        setStatusText(`${char?.name || '角色'} 說話中...`);
+      };
+
+      const drainQueue = () => {
+        if (isAppending || !sourceBuffer || sourceBuffer.updating) return;
+        if (audioQueue.length === 0) {
+          if (streamDone && mediaSource && mediaSource.readyState === 'open') {
+            try { mediaSource.endOfStream(); } catch (_e) {}
+          }
+          return;
+        }
+        isAppending = true;
+        const chunk = audioQueue.shift()!;
+        try {
+          sourceBuffer!.appendBuffer(chunk.buffer as ArrayBuffer);
+        } catch (_e) {}
+        isAppending = false;
+      };
+
+      // ✅ 讀 SSE stream
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let sseBuffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        sseBuffer += decoder.decode(value, { stream: true });
+
+        const lines = sseBuffer.split('\n');
+        sseBuffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const event = JSON.parse(line.slice(6)) as {
+              type: string; content?: string; chunk?: string;
+              index?: number; fullText?: string; conversationId?: string; message?: string;
+            };
+
+            if (event.type === 'text' && event.content) {
+              // 第一句文字到 → 初始化音訊
+              if (!audio) initAudio();
+              pendingSentences++;
+              setReply(prev => prev + event.content);
+              fullReplyText += event.content;
+            }
+
+            if (event.type === 'audio' && event.chunk) {
+              // base64 音訊 chunk → 推進播放佇列
+              const binary = atob(event.chunk);
+              const bytes = new Uint8Array(binary.length);
+              for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+              audioQueue.push(bytes);
+              drainQueue();
+              playedSentences++;
+            }
+
+            if (event.type === 'done') {
+              if (event.conversationId) {
+                setConversationId(event.conversationId);
+                localStorage.setItem(`conv-${characterId}`, event.conversationId);
+              }
+              const now = new Date().toISOString();
+              setMessages(prev => [...prev,
+                { role: 'user', content: userText, timestamp: now },
+                { role: 'assistant', content: fullReplyText || event.fullText || '', timestamp: now },
+              ]);
+              streamDone = true;
+              drainQueue();
+            }
+
+            if (event.type === 'error') throw new Error(event.message || 'stream 錯誤');
+
+          } catch (parseErr) {
+            if (parseErr instanceof SyntaxError) continue;
+            throw parseErr;
+          }
+        }
       }
 
-      const now = new Date().toISOString();
-      setMessages(prev => [...prev,
-        { role: 'user', content: userText, timestamp: now },
-        { role: 'assistant', content: replyText, timestamp: now },
-      ]);
+      // 等音訊播完
+      if (audio) {
+        await new Promise<void>(resolve => {
+          const checkEnd = () => {
+            if (!audio) { resolve(); return; }
+            if (audio.ended || (streamDone && audioQueue.length === 0 && !sourceBuffer?.updating)) {
+              resolve();
+            } else {
+              setTimeout(checkEnd, 200);
+            }
+          };
+          const audioEl = audio; if (audioEl) audioEl.addEventListener('ended', () => resolve(), { once: true });
+          setTimeout(checkEnd, 500);
+        });
+      }
 
-      setState('playing');
-      setStatusText(`${char?.name || '角色'} 說話中...`);
-
-      const ttsRes = await fetch('/api/tts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: replyText, voiceId: char?.voiceId }),
-      });
-
-      if (!ttsRes.ok) throw new Error('TTS 失敗');
-      const audioUrl = URL.createObjectURL(await ttsRes.blob());
-      const audio = new Audio(audioUrl);
-      audioRef.current = audio;
-      audio.onended = () => {
-        URL.revokeObjectURL(audioUrl);
-        setState('idle');
-        setStatusText('按下繼續說話');
-        setEndDone(false);
-      };
-      await audio.play();
+      setState('idle');
+      setStatusText('按下繼續說話');
+      setEndDone(false);
 
     } catch (err) {
       setState('idle');

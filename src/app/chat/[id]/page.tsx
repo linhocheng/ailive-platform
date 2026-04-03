@@ -34,6 +34,7 @@ export default function ChatPage() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const [pendingImage, setPendingImage] = useState<{ base64: string; preview: string; mimeType?: string } | null>(null);
+  const [isNewVisit, setIsNewVisit] = useState(true);
 
   // 載入角色資料
   useEffect(() => {
@@ -120,7 +121,9 @@ export default function ChatPage() {
         userId,
         message: userContent,
         conversationId: conversationId || undefined,
+        isNewVisit,
       };
+      setIsNewVisit(false);
       if (currentImage) {
         body.image = { type: 'base64', media_type: currentImage.mimeType || 'image/jpeg', data: currentImage.base64 };
       }

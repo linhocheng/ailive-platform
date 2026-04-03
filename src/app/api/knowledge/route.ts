@@ -80,11 +80,15 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'characterId, content 必填' }, { status: 400 });
     }
 
-    // embedding 用 title + content（去掉 URL 行），語義乾淨
+    // 圖片條目（category=image 或 content 只有圖片 URL）不生成 embedding
+    // 原因：短 title 在高維空間產生假高分，污染語意搜尋結果
     const cleanedContent = (content || '').split('\n')
       .filter((line: string) => !line.startsWith('圖片網址：') && !line.startsWith('http'))
       .join(' ').trim();
-    const embedding = await generateEmbedding(`${title || ''} ${cleanedContent || content}`.slice(0, 1000));
+    const isImageEntry = category === 'image' || cleanedContent.trim().length === 0;
+    const embedding = isImageEntry
+      ? null
+      : await generateEmbedding(`${title || ''} ${cleanedContent}`.slice(0, 1000));
     const now = new Date().toISOString();
 
     // 自動生成 summary（15字以內，常駐注入用）
@@ -119,7 +123,7 @@ export async function POST(req: NextRequest) {
       ...(imageUrl ? { imageUrl } : {}),
       hitCount: 100,              // 天命初始值高，永遠優先於後天 insights
       tier: 'native',             // 原生天命，不參與升降級，不被蒸餾
-      embedding,
+      ...(embedding ? { embedding } : {}),
       createdAt: now,
     });
 
@@ -137,6 +141,43 @@ export async function DELETE(req: NextRequest) {
 
     await db.collection('platform_knowledge').doc(id).delete();
     return NextResponse.json({ success: true });
+  } catch (e: unknown) {
+    return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
+  }
+}
+
+// ===== PATCH：補 embedding（修復沒有 embedding 的舊條目）=====
+export async function PATCH(req: NextRequest) {
+  try {
+    const db = getFirestore();
+    const { characterId, force } = await req.json();
+    if (!characterId) return NextResponse.json({ error: 'characterId 必填' }, { status: 400 });
+
+    const snap = await db.collection('platform_knowledge')
+      .where('characterId', '==', characterId).get();
+
+    let fixed = 0, skipped = 0;
+    for (const doc of snap.docs) {
+      const data = doc.data();
+      // 圖片條目永遠不生成 embedding
+      if (data.category === 'image') { skipped++; continue; }
+      // force=true 強制重算（例如 embedding 維度改變時），否則有 embedding 的 skip
+      if (!force && data.embedding && Array.isArray(data.embedding)) { skipped++; continue; }
+
+      const text = `${data.title || ''} ${(data.content || '').split('\n')
+        .filter((l: string) => !l.startsWith('圖片網址：') && !l.startsWith('http'))
+        .join(' ')}`.trim().slice(0, 1000);
+
+      if (!text) { skipped++; continue; }
+
+      try {
+        const embedding = await generateEmbedding(text);
+        await doc.ref.update({ embedding });
+        fixed++;
+      } catch (_e) { skipped++; }
+    }
+
+    return NextResponse.json({ success: true, fixed, skipped });
   } catch (e: unknown) {
     return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
   }

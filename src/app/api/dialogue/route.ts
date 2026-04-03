@@ -19,6 +19,7 @@ import { generateEmbedding, cosineSimilarity } from '@/lib/embeddings';
 import { generateImageForCharacter, buildGenerateImageDescription } from '@/lib/generate-image';
 import { trackCost } from '@/lib/cost-tracker';
 import { generateImagePath } from '@/lib/image-storage';
+import { redis } from '@/lib/redis';
 
 export const maxDuration = 120;
 
@@ -225,83 +226,103 @@ async function executeTool(
   const db = getFirestore();
 
   if (toolName === 'query_knowledge_base') {
-    const query = String(toolInput.query || '');
-    const limit = Number(toolInput.limit || 5);
+    const query  = String(toolInput.query || '');
+    const limit  = Number(toolInput.limit || 10);
+    const THRESHOLD = 0.3;
 
+    // 並行拉資料
     const [knowledgeSnap, insightSnap] = await Promise.all([
-      db.collection('platform_knowledge').where('characterId', '==', characterId).limit(100).get(),
+      db.collection('platform_knowledge').where('characterId', '==', characterId).limit(200).get(),
       db.collection('platform_insights').where('characterId', '==', characterId).limit(100).get(),
     ]);
+    const knowledgeDocs: Record<string, unknown>[] = knowledgeSnap.docs.map(d => ({ _id: d.id, _type: 'knowledge', ...d.data() }));
+    const insightDocs:   Record<string, unknown>[] = insightSnap.docs.map(d  => ({ _id: d.id, _type: 'insight',   ...d.data() }));
 
-    const allDocs: Record<string, unknown>[] = [
-      ...knowledgeSnap.docs.map(d => ({ _id: d.id, _type: 'knowledge', ...d.data() })),
-      ...insightSnap.docs.map(d => ({ _id: d.id, _type: 'insight', ...d.data() })),
-    ];
+    // ── Step 1：知識（天命） ──
+    // 動態提取產品名（title 格式：「品牌 產品名 — 面向」）
+    const productNames = Array.from(new Set(
+      knowledgeDocs
+        .map(d => String(d.title || '').split('—')[0].trim())
+        .filter(n => n.length > 2)
+    ));
 
-    const withEmb = allDocs.filter(d => d.embedding && Array.isArray(d.embedding));
-    const firstKnowledge = knowledgeSnap.docs[0]?.data();
-    const firstEmb = firstKnowledge?.embedding;
-    console.log(`[query_kb] allDocs=${allDocs.length} withEmb=${withEmb.length} firstEmbType=${typeof firstEmb} isArray=${Array.isArray(firstEmb)} firstEmbLen=${Array.isArray(firstEmb) ? (firstEmb as number[]).length : 'N/A'}`);
-    if (withEmb.length === 0) {
-      return '（記憶庫目前是空的）';
-    }
+    // 偵測 query 是否含有產品名（含/不含品牌前綴皆算）
+    const matchedProduct = productNames.find(p => {
+      if (query.includes(p)) return true;
+      const shortName = p.includes(' ') ? p.split(' ').slice(1).join(' ') : p;
+      return shortName.length > 2 && query.includes(shortName);
+    });
 
-    const qEmb = await generateEmbedding(query);
-    const scored = withEmb
-      .map(d => ({ d, score: cosineSimilarity(qEmb, d.embedding as number[]) }))
-      .filter(s => s.score >= 0.5)  // 品質優先：只取相似度 ≥ 0.5 的結果
-      .sort((a, b) => {
-        // knowledge（天命）永遠排在 insight 前面，相同 type 再比 score
-        const aIsKnowledge = a.d._type === 'knowledge' ? 1 : 0;
-        const bIsKnowledge = b.d._type === 'knowledge' ? 1 : 0;
-        if (bIsKnowledge !== aIsKnowledge) return bIsKnowledge - aIsKnowledge;
-        return b.score - a.score;
-      })
-      .slice(0, limit);
+    let knowledgeResults: Record<string, unknown>[] = [];
+    let queryEmbedding: number[] | null = null;
 
-    console.log(`[query_kb] qEmbLen=${qEmb.length} scored=${scored.length} topScore=${scored[0]?.score?.toFixed(3) || 'N/A'}`);
-    if (scored.length === 0) return '（沒有找到相關記憶）';
-
-    // hitCount +1（knowledge 和 insight 逐一更新，不用 batch 避免靜默失敗）
-    for (const { d } of scored) {
-      try {
-        if (d._type === 'insight' && d._id) {
-          await db.collection('platform_insights').doc(d._id as string).update({
-            hitCount: FieldValue.increment(1),
-            lastHitAt: new Date().toISOString(),
-          });
-        } else if (d._type === 'knowledge' && d._id) {
-          await db.collection('platform_knowledge').doc(d._id as string).update({
-            hitCount: FieldValue.increment(1),
-            lastHitAt: new Date().toISOString(),
-          });
-        }
-      } catch (e) {
-        console.error(`[query_kb] hitCount 更新失敗 ${d._type} ${d._id}:`, e);
+    if (matchedProduct) {
+      // 有產品名 → 結構匹配，不用 embedding，直接撈出該產品全部條目
+      // 注意：圖片條目 title 可能沒有品牌前綴，用 shortName 補判斷
+      const shortMatchName = matchedProduct.includes(' ')
+        ? matchedProduct.split(' ').slice(1).join(' ')
+        : matchedProduct;
+      knowledgeResults = knowledgeDocs.filter(d => {
+        const t = String(d.title || '');
+        return t.startsWith(matchedProduct) || t.startsWith(shortMatchName);
+      });
+    } else {
+      // 無產品名 → 語意搜尋（排除圖片條目，避免短 title 污染分數）
+      const knowledgeWithEmb = knowledgeDocs.filter(d =>
+        d.embedding && Array.isArray(d.embedding) && d.category !== 'image'
+      );
+      if (knowledgeWithEmb.length > 0) {
+        queryEmbedding = await generateEmbedding(query);
+        knowledgeResults = knowledgeWithEmb
+          .map(d => ({ ...d, _score: cosineSimilarity(queryEmbedding!, d.embedding as number[]) }))
+          .filter(d => (d._score as number) >= THRESHOLD)
+          .sort((a, b) => (b._score as number) - (a._score as number))
+          .slice(0, limit);
       }
     }
 
-    // 組原始 context 字串
-    const rawContext = scored.map(({ d, score }) => {
-      const timeLabel = (() => {
-        if (!d.eventDate) return '';
-        const diffDays = Math.floor((Date.now() - new Date(d.eventDate as string).getTime()) / 86400000);
-        if (diffDays === 0) return '（今天）';
-        if (diffDays === 1) return '（昨天）';
-        if (diffDays <= 7) return `（${diffDays}天前）`;
-        return `（${d.eventDate}）`;
-      })();
-      const tag = d._type === 'knowledge' ? `[天命・${d.category || '一般'}]` : `[記憶${timeLabel}]`;
+    // ── Step 2：記憶（insights）永遠語意搜尋 ──
+    let insightResults: Record<string, unknown>[] = [];
+    const insightWithEmb = insightDocs.filter(d => d.embedding && Array.isArray(d.embedding));
+    if (insightWithEmb.length > 0) {
+      if (!queryEmbedding) queryEmbedding = await generateEmbedding(query); // 複用或新生成
+      insightResults = insightWithEmb
+        .map(d => ({ ...d, _score: cosineSimilarity(queryEmbedding!, d.embedding as number[]) }))
+        .filter(d => (d._score as number) >= THRESHOLD)
+        .sort((a, b) => (b._score as number) - (a._score as number))
+        .slice(0, 5);
+    }
+
+    const scored = [...knowledgeResults, ...insightResults];
+    if (scored.length === 0) return '（沒有找到相關資料）';
+
+    // hitCount +1（非同步，不擋主流程）
+    void Promise.all(scored.map(item => {
+      const doc = item as Record<string, unknown>;
+      const col = doc._type === 'insight' ? 'platform_insights' : 'platform_knowledge';
+      if (!doc._id) return;
+      return db.collection(col).doc(doc._id as string).update({
+        hitCount: FieldValue.increment(1),
+        lastHitAt: new Date().toISOString(),
+      }).catch(() => {});
+    }));
+
+    // 組 context 字串
+    const rawContext = scored.map(item => {
+      const d   = item as Record<string, unknown>;
+      const score = (d._score as number) || 0;
+      const tag = d._type === 'knowledge' ? `[天命・${d.category || '一般'}]` : '[記憶]';
       const body = d._type === 'knowledge'
         ? String(d.content || d.summary || '').slice(0, 300)
         : String(d.content || '').slice(0, 150);
       const imgLine = (d._type === 'knowledge' && d.imageUrl)
         ? `\n[產品圖 imageUrl: ${d.imageUrl}]（生圖時把這個 URL 填入 reference_image_url）`
         : '';
-      return `${tag} ${d.title || ''}：${body}${imgLine} (相似度${(score * 100).toFixed(0)}%)`;
+      const scoreLabel = score > 0 ? ` (相似度${(score * 100).toFixed(0)}%)` : '';
+      return `${tag} ${d.title || ''}：${body}${imgLine}${scoreLabel}`;
     }).join('\n\n');
 
-    // Haiku 推理：從搜尋結果抽關係，回傳結構化 context
+    // Haiku 推理（2 條以上時，整合多筆結果）
     if (scored.length >= 2) {
       try {
         const Anthropic2 = (await import('@anthropic-ai/sdk')).default;
@@ -311,29 +332,22 @@ async function executeTool(
           max_tokens: 400,
           messages: [{
             role: 'user',
-            content: `以下是知識庫搜尋結果，問題是「${query}」：
-
-${rawContext}
-
-請用2-3句話整理：這些條目裡有哪些關鍵資訊？它們之間有什麼關係？有沒有可以直接用的圖片URL？直接輸出整理結果，不要標題不要列點。`,
+            content: `以下是知識庫搜尋結果，問題是「${query}」：\n\n${rawContext}\n\n請用2-3句話整理：這些條目裡有哪些關鍵資訊？有沒有可以直接用的圖片URL？直接輸出整理結果，不要標題不要列點。`,
           }],
         });
         onHaikuTokens?.(reasonRes.usage?.input_tokens ?? 0, reasonRes.usage?.output_tokens ?? 0);
         const reasoned = (reasonRes.content[0] as { text: string }).text.trim();
-        // 只附上 top 3 原始條目，不回傳全部（省 token）
-        const top3Context = scored.slice(0, 3).map(({ d, score }) => {
-          const tag = d._type === 'knowledge' ? `[天命・${d.category || '一般'}]` : `[記憶]`;
+        const top3 = scored.slice(0, 3).map(item => {
+          const d = item as Record<string, unknown>;
+          const tag  = d._type === 'knowledge' ? `[天命・${d.category || '一般'}]` : '[記憶]';
           const body = d._type === 'knowledge'
             ? String(d.content || d.summary || '').slice(0, 150)
             : String(d.content || '').slice(0, 100);
-          const imgLine = (d._type === 'knowledge' && d.imageUrl)
-            ? `\n[產品圖 imageUrl: ${d.imageUrl}]`
-            : '';
-          return `${tag} ${d.title || ''}：${body}${imgLine}`;
+          const img  = (d._type === 'knowledge' && d.imageUrl) ? `\n[產品圖 imageUrl: ${d.imageUrl}]` : '';
+          return `${tag} ${d.title || ''}：${body}${img}`;
         }).join('\n\n');
-        return `${reasoned}\n\n---\n${top3Context}`;
+        return `${reasoned}\n\n---\n${top3}`;
       } catch {
-        // 推理失敗 fallback 原始結果
         return rawContext;
       }
     }
@@ -713,7 +727,7 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const db = getFirestore();
-    const { characterId, userId, message, conversationId, image, voiceMode } = await req.json();
+    const { characterId, userId, message, conversationId, image, voiceMode, isNewVisit } = await req.json();
 
     // ===== 謀師快速通道：偵測「引導 [名字]」指令，程式層直接執行 =====
     if (characterId === MENTOR_CHARACTER_ID && message) {
@@ -785,27 +799,42 @@ ${awakeningResult}`,
       ...(characterId === MENTOR_CHARACTER_ID ? MENTOR_TOOLS : []),
     ];
 
-    // 2. 讀/建 conversation
+    // 2. 讀/建 conversation（Redis session cache → Firestore fallback）
     let convRef;
     let convData: Record<string, unknown> = { messages: [], messageCount: 0 };
 
     if (conversationId) {
       convRef = db.collection('platform_conversations').doc(conversationId);
-      const convDoc = await convRef.get();
-      if (convDoc.exists) {
-        convData = convDoc.data()!;
-      } else {
-        // doc 不存在（例如 scheduler 首次使用固定 conversationId）→ 自動建立
-        await convRef.set({
-          characterId,
-          userId: userId || 'scheduler',
-          messages: [],
-          summary: '',
-          messageCount: 0,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        });
-      }
+
+      // ── Gateway：先查 Redis，命中就跳過 Firestore read ──
+      let cacheHit = false;
+      try {
+        const cached = await redis.get(`conv:${conversationId}`);
+        if (cached) {
+          convData = JSON.parse(cached);
+          cacheHit = true;
+          console.log(`✅ Gateway cache HIT: ${conversationId}`);
+        }
+      } catch (_e) { /* Redis 壞掉 → fallback Firestore */ }
+
+      if (!cacheHit) {
+        console.log(`🔄 Gateway cache MISS: ${conversationId}`);
+        const convDoc = await convRef.get();
+        if (convDoc.exists) {
+          convData = convDoc.data()!;
+        } else {
+          // doc 不存在（例如 scheduler 首次使用固定 conversationId）→ 自動建立
+          await convRef.set({
+            characterId,
+            userId: userId || 'scheduler',
+            messages: [],
+            summary: '',
+            messageCount: 0,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          });
+        }
+      } // end if (!cacheHit)
     } else {
       convRef = db.collection('platform_conversations').doc();
       await convRef.set({
@@ -914,7 +943,27 @@ ${awakeningResult}`,
 - 說完後可以自然問：「你覺得呢？」讓對話有來有往
 - 不用條列式，說人話，像朋友在聊天` : '';
 
-    const systemPrompt = `${mentorInjection}${soulText}${skillsBlock}${episodicBlock}${voiceModeBlock}
+    // 時間感知：只在新訪問且有過對話記錄且間隔 > 10 分鐘時注入
+    const formatGap = (ms: number): string => {
+      const min = ms / 60000;
+      if (min < 60)    return `約 ${Math.round(min)} 分鐘`;
+      if (min < 1440)  return `約 ${Math.round(min / 60)} 小時`;
+      if (min < 10080) return `約 ${Math.round(min / 1440)} 天`;
+      return `約 ${Math.round(min / 10080)} 週`;
+    };
+    let gapInjection = '';
+    if (isNewVisit && convData.messageCount && Number(convData.messageCount) > 0) {
+      const lastAt = convData.updatedAt ? new Date(String(convData.updatedAt)).getTime() : null;
+      if (lastAt && !isNaN(lastAt)) {
+        const gap = Date.now() - lastAt;
+        if (gap > 10 * 60 * 1000) {
+          const duration = formatGap(gap);
+          gapInjection = `\n\n---\n【時間感知】距離上次對話過了 ${duration}\n（可能說出來、也可能什麼都不說，又或者接續自己想要的）`;
+        }
+      }
+    }
+
+    const systemPrompt = `${mentorInjection}${soulText}${skillsBlock}${episodicBlock}${voiceModeBlock}${gapInjection}
 
 ---
 現在時間（台北）：${taipeiTime}
@@ -1062,6 +1111,14 @@ ${convData.summary ? `對話摘要（上次回顧）：\n${convData.summary}` : 
       messageCount: newCount,
       updatedAt: new Date().toISOString(),
     });
+
+    // ── Gateway：寫回 Redis cache（30 分鐘 TTL）──
+    if (conversationId) {
+      try {
+        const updatedConvData = { ...convData, messages: newMessages, messageCount: newCount };
+        await redis.set(`conv:${conversationId}`, JSON.stringify(updatedConvData), 60 * 30);
+      } catch (_e) { /* Redis 壞掉不影響主流程 */ }
+    }
 
     // 7. 更新 growthMetrics + 費用追蹤
     await db.collection('platform_characters').doc(characterId).update({
