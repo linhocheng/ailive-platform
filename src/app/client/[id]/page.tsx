@@ -677,7 +677,7 @@ export default function ClientPage() {
             {char.mission&&<div style={{fontSize:11,color:'var(--text-muted)',marginTop:1}}>{char.mission.slice(0,48)}{char.mission.length>48?'…':''}</div>}
           </div>
         </div>
-        <a href={`/voice/${charId}`} target="_blank" rel="noopener noreferrer"
+        <a href={`/voice/${charId}`}
           style={{...S.btn(true),textDecoration:'none',display:'flex',alignItems:'center'}}
           onMouseEnter={e=>(e.currentTarget.style.opacity='0.85')}
           onMouseLeave={e=>(e.currentTarget.style.opacity='1')}>
