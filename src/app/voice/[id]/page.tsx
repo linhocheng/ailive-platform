@@ -295,7 +295,7 @@ export default function VoicePage() {
 
       {/* 頂部：角色資訊 */}
       <div style={{ position:'absolute', top:0, left:0, right:0, display:'flex', alignItems:'center', justifyContent:'space-between', padding:'24px 24px 0' }}>
-        <a href={`/dashboard/${characterId}`} style={{ color:'rgba(255,255,255,0.55)', textDecoration:'none', fontSize:18, letterSpacing:'0.15em', fontWeight:200 }}>←</a>
+        <div />
 
         <div />
 
