@@ -18,6 +18,7 @@
 import { NextRequest } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
 import { getFirestore } from '@/lib/firebase-admin';
+import { FieldValue } from 'firebase-admin/firestore';
 import { trackCost } from '@/lib/cost-tracker';
 import { redis } from '@/lib/redis';
 import { generateEmbedding, cosineSimilarity } from '@/lib/embeddings';
@@ -221,29 +222,10 @@ export async function POST(req: NextRequest) {
 
         const history = ((convData.messages as Array<{ role: string; content: string }>) || []).slice(-10);
 
-        // 3. 語義搜尋知識庫（非同步，不擋主流程）
-        let memoryContext = '';
-        try {
-          const embedding = await generateEmbedding(message);
-          const insightsSnap = await db.collection('platform_insights')
-            .where('characterId', '==', characterId).limit(30).get();
-          type InsightDoc = { _id: string; embedding?: number[]; content?: string; [k: string]: unknown };
-          const hits = (insightsSnap.docs
-            .map(d => ({ ...d.data(), _id: d.id } as InsightDoc))
-            .filter(d => d.embedding)
-            .map(d => ({ ...d, score: cosineSimilarity(embedding, d.embedding as number[]) }))
-            .filter(d => d.score > 0.7)
-            .sort((a, b) => b.score - a.score)
-            .slice(0, 3)) as Array<InsightDoc & { score: number }>;
-          if (hits.length > 0) {
-            memoryContext = '\n\n【相關記憶】\n' + hits.map(h => `- ${h.content ?? ''}`).join('\n');
-          }
-        } catch (_e) {}
-
-        // 4. 組 systemPrompt（語音模式）
+        // 3. 組 systemPrompt（語音模式）
         const taipeiTime = new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' });
         const summaryBlock = convData.summary ? `\n\n對話摘要：${convData.summary}` : '';
-        const systemPrompt = `${soulText}${summaryBlock}${memoryContext}
+        const systemPrompt = `${soulText}${summaryBlock}
 
 ---
 現在時間（台北）：${taipeiTime}
@@ -254,19 +236,137 @@ export async function POST(req: NextRequest) {
 - 說完一個完整的想法，可以延伸、可以深入，不要刻意截短
 - 說完後自然問一個問題讓對話有來有往`;
 
-        // 5. 組歷史 messages
-        const messages: Anthropic.MessageParam[] = [
+        // 4. 工具定義
+        const VOICE_TOOLS: Anthropic.Tool[] = [
+          {
+            name: 'query_knowledge_base',
+            description: '查知識庫和記憶，找我記得什麼、知道什麼。說任何事之前先查。',
+            input_schema: { type: 'object' as const, properties: { query: { type: 'string' }, limit: { type: 'number' } }, required: ['query'] },
+          },
+          {
+            name: 'remember',
+            description: '把重要資訊存入長期記憶。對方說了名字/目標/需求、我有了洞察，立即呼叫。',
+            input_schema: { type: 'object' as const, properties: { title: { type: 'string' }, content: { type: 'string' }, importance: { type: 'number', description: '1-3，預設 2' } }, required: ['title', 'content'] },
+          },
+          {
+            name: 'query_tasks',
+            description: '查看自己的排程任務清單。',
+            input_schema: { type: 'object' as const, properties: { enabled_only: { type: 'boolean' } } },
+          },
+          {
+            name: 'update_task',
+            description: '調整排程任務。先用 query_tasks 查到任務 ID 再來改。',
+            input_schema: { type: 'object' as const, properties: { task_id: { type: 'string' }, enabled: { type: 'boolean' }, run_hour: { type: 'number' }, run_minute: { type: 'number' }, description: { type: 'string' }, intent: { type: 'string' } }, required: ['task_id'] },
+          },
+        ];
+        const WEB_SEARCH = { type: 'web_search_20250305', name: 'web_search' } as unknown as Anthropic.Tool;
+
+        // 5. 工具執行
+        const execVoiceTool = async (toolName: string, toolInput: Record<string, unknown>): Promise<string> => {
+          if (toolName === 'query_knowledge_base') {
+            const query = String(toolInput.query || '');
+            const limit = Number(toolInput.limit || 5);
+            const THRESHOLD = 0.3;
+            const [knowledgeSnap, insightSnap] = await Promise.all([
+              db.collection('platform_knowledge').where('characterId', '==', characterId).limit(200).get(),
+              db.collection('platform_insights').where('characterId', '==', characterId).limit(100).get(),
+            ]);
+            const knowledgeDocs: Record<string,unknown>[] = knowledgeSnap.docs.map(d => ({ _id: d.id, _type: 'knowledge', ...d.data() }));
+            const insightDocs: Record<string,unknown>[]   = insightSnap.docs.map(d  => ({ _id: d.id, _type: 'insight',   ...d.data() }));
+            let queryEmb: number[] | null = null;
+            const productNames = Array.from(new Set(knowledgeDocs.map(d => String(d.title || '').split('—')[0].trim()).filter(n => n.length > 2)));
+            const matchedProduct = productNames.find(p => query.includes(p) || (p.includes(' ') && query.includes(p.split(' ').slice(1).join(' '))));
+            let knowledgeResults: Record<string, unknown>[] = [];
+            if (matchedProduct) {
+              const short = matchedProduct.includes(' ') ? matchedProduct.split(' ').slice(1).join(' ') : matchedProduct;
+              knowledgeResults = knowledgeDocs.filter(d => { const t = String(d.title||''); return t.startsWith(matchedProduct)||t.startsWith(short); });
+            } else {
+              const withEmb = knowledgeDocs.filter(d => d.embedding && Array.isArray(d.embedding) && d.category !== 'image');
+              if (withEmb.length > 0) {
+                queryEmb = await generateEmbedding(query);
+                knowledgeResults = withEmb.map(d => ({ ...d, _score: cosineSimilarity(queryEmb!, d.embedding as number[]) })).filter(d => (d._score as number) >= THRESHOLD).sort((a,b)=>(b._score as number)-(a._score as number)).slice(0, limit);
+              }
+            }
+            const insightWithEmb = insightDocs.filter(d => d.embedding && Array.isArray(d.embedding));
+            let insightResults: Record<string, unknown>[] = [];
+            if (insightWithEmb.length > 0) {
+              if (!queryEmb) queryEmb = await generateEmbedding(query);
+              insightResults = insightWithEmb.map(d => ({ ...d, _score: cosineSimilarity(queryEmb!, d.embedding as number[]) })).filter(d => (d._score as number) >= THRESHOLD).sort((a,b)=>(b._score as number)-(a._score as number)).slice(0, 5);
+            }
+            const scored = [...knowledgeResults, ...insightResults];
+            if (scored.length === 0) return '（沒有找到相關資料）';
+            void Promise.all(scored.map(item => { const d = item as Record<string, unknown>; const col = d._type==='insight'?'platform_insights':'platform_knowledge'; if(!d._id) return; return db.collection(col).doc(d._id as string).update({ hitCount: FieldValue.increment(1), lastHitAt: new Date().toISOString() }).catch(()=>{}); }));
+            return scored.map(item => { const d = item as Record<string, unknown>; const tag = d._type==='knowledge'?`[知識・${d.category||'一般'}]`:'[記憶]'; const body = String(d.content||d.summary||'').slice(0,200); return `${tag} ${d.title||''}：${body}`; }).join('\n\n');
+          }
+          if (toolName === 'remember') {
+            const title = String(toolInput.title||''); const content = String(toolInput.content||''); const importance = Number(toolInput.importance??2);
+            const embedding = await generateEmbedding(`${title} ${content}`);
+            await db.collection('platform_insights').add({ characterId, title, content, importance, source: 'voice', tier: 'fresh', hitCount: importance>=3?2:0, lastHitAt: null, embedding, createdAt: new Date().toISOString() });
+            await db.collection('platform_characters').doc(characterId).update({ 'growthMetrics.totalInsights': FieldValue.increment(1) });
+            return `已記住：${title}`;
+          }
+          if (toolName === 'query_tasks') {
+            const enabledOnly = toolInput.enabled_only !== false;
+            const snap = await db.collection('platform_tasks').where('characterId','==',characterId).get();
+            const tasks = snap.docs.map(d=>({id:d.id,...d.data()})) as Record<string,unknown>[];
+            const filtered = enabledOnly ? tasks.filter(t=>t.enabled) : tasks;
+            if (filtered.length===0) return '沒有排程任務。';
+            const DL: Record<string,string> = {sun:'日',mon:'一',tue:'二',wed:'三',thu:'四',fri:'五',sat:'六'};
+            return filtered.map(t=>`[ID:${t.id}] ${t.enabled?'✅':'⏸'} ${t.type} | ${String(t.run_hour??'?').padStart(2,'0')}:${String(t.run_minute??0).padStart(2,'0')} | 週${(t.days as string[]||[]).map(d=>DL[d]||d).join('')}${t.description?' | '+t.description:''}`).join('\n');
+          }
+          if (toolName === 'update_task') {
+            const taskId = String(toolInput.task_id||''); if (!taskId) return '需要 task_id。';
+            const updates: Record<string,unknown> = {};
+            if (toolInput.enabled!==undefined) updates.enabled=Boolean(toolInput.enabled);
+            if (toolInput.run_hour!==undefined) updates.run_hour=Number(toolInput.run_hour);
+            if (toolInput.run_minute!==undefined) updates.run_minute=Number(toolInput.run_minute);
+            if (toolInput.description!==undefined) updates.description=String(toolInput.description);
+            if (toolInput.intent!==undefined) updates.intent=String(toolInput.intent);
+            if (Object.keys(updates).length===0) return '沒有要修改的欄位。';
+            await db.collection('platform_tasks').doc(taskId).update(updates);
+            return `任務已更新：${JSON.stringify(updates)}`;
+          }
+          return '未知工具';
+        };
+
+        // 6. Tool-use loop（最多 3 輪）再進入 streaming
+        const client = new Anthropic({ apiKey: anthropicKey });
+        let loopMessages: Anthropic.MessageParam[] = [
           ...history.map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
           { role: 'user', content: message },
         ];
 
-        // 6. Claude streaming
-        const client = new Anthropic({ apiKey: anthropicKey });
+        for (let turn = 0; turn < 3; turn++) {
+          const toolChoice = turn === 0
+            ? { type: 'tool' as const, name: 'query_knowledge_base' }
+            : { type: 'auto' as const };
+          const preRes = await client.messages.create({
+            model: 'claude-sonnet-4-6', max_tokens: 800,
+            system: systemPrompt, messages: loopMessages,
+            tools: [WEB_SEARCH, ...VOICE_TOOLS], tool_choice: toolChoice,
+          });
+          if (preRes.stop_reason !== 'tool_use') {
+            // 不需要工具了，把這輪文字加入歷史後進 streaming
+            loopMessages.push({ role: 'assistant', content: preRes.content });
+            break;
+          }
+          const toolBlocks = preRes.content.filter(b => b.type === 'tool_use') as Anthropic.ToolUseBlock[];
+          const toolResults: Anthropic.ToolResultBlockParam[] = await Promise.all(
+            toolBlocks.map(async b => ({
+              type: 'tool_result' as const,
+              tool_use_id: b.id,
+              content: await execVoiceTool(b.name, b.input as Record<string, unknown>),
+            }))
+          );
+          loopMessages = [...loopMessages, { role: 'assistant', content: preRes.content }, { role: 'user', content: toolResults }];
+        }
+
+        // 7. Claude streaming（帶工具結果的完整 context）
         const claudeStream = await client.messages.stream({
           model: 'claude-sonnet-4-6',
           max_tokens: 1500,
           system: systemPrompt,
-          messages,
+          messages: loopMessages,
         });
 
         // 7. 累積句子，每句完整就送 TTS
