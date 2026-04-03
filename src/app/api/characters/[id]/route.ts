@@ -5,6 +5,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getFirestore } from '@/lib/firebase-admin';
+import { redis } from '@/lib/redis';
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -33,6 +34,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     }
 
     await db.collection('platform_characters').doc(id).update(updates);
+    // 清 Redis cache，避免 voice-stream 讀到舊版靈魂
+    try { await redis.del(`char:${id}`); } catch (_e) { /* 不阻斷 */ }
     return NextResponse.json({ success: true });
   } catch (e: unknown) {
     return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
