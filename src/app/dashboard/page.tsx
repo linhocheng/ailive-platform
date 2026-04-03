@@ -181,6 +181,14 @@ export default function DashboardPage() {
                   <StatPill label="發文" value={c.growthMetrics?.totalPosts ?? 0} />
                 </div>
 
+                {/* ── 花費 ── */}
+                {(c.costMetrics?.totalCostUSD ?? 0) > 0 && (
+                  <div style={{ fontSize:11, color:'var(--text-muted)', marginBottom:12, display:'flex', alignItems:'center', gap:4 }}>
+                    <span style={{ color:'var(--text-secondary)' }}>NT${((c.costMetrics?.totalCostUSD ?? 0) * 32).toFixed(2)}</span>
+                    <span style={{ color:'var(--text-muted)' }}>累計花費</span>
+                  </div>
+                )}
+
                 {/* ── Footer ── */}
                 <div style={{
                   display: 'flex', justifyContent: 'space-between', alignItems: 'center',

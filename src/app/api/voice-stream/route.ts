@@ -18,6 +18,7 @@
 import { NextRequest } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
 import { getFirestore } from '@/lib/firebase-admin';
+import { trackCost } from '@/lib/cost-tracker';
 import { redis } from '@/lib/redis';
 import { generateEmbedding, cosineSimilarity } from '@/lib/embeddings';
 
@@ -362,6 +363,12 @@ export async function POST(req: NextRequest) {
             await redis.set(convCacheKey, JSON.stringify(updatedConv), 60 * 30);
           } catch (e) { console.error('save error:', e); }
         })();
+
+        // 追蹤語音費用（Claude Sonnet streaming）
+        try {
+          const finalMsg = await claudeStream.finalMessage();
+          await trackCost(characterId, 'claude-sonnet-4-6', finalMsg.usage?.input_tokens ?? 0, finalMsg.usage?.output_tokens ?? 0);
+        } catch { /* 不阻斷 */ }
 
         send({ type: 'done', fullText, conversationId: convId });
 
