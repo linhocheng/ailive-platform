@@ -18,6 +18,53 @@ interface Character {
   visualIdentity?: { characterSheet?: string };
 }
 
+// ── SVG 線條圖示（strokeWidth 1.5，無 fill）──
+const IconImage = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/>
+    <polyline points="21 15 16 10 5 21"/>
+  </svg>
+);
+
+const IconRefresh = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="23 4 23 10 17 10"/>
+    <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+  </svg>
+);
+
+const IconPlus = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+    <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+  </svg>
+);
+
+const IconSend = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <line x1="22" y1="2" x2="11" y2="13"/>
+    <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+  </svg>
+);
+
+const IconClose = () => (
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+    <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+  </svg>
+);
+
+const IconUser = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+    <circle cx="12" cy="7" r="4"/>
+  </svg>
+);
+
+const IconBack = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="15 18 9 12 15 6"/>
+  </svg>
+);
+
 export default function ChatPage() {
   const { id: characterId } = useParams<{ id: string }>();
   const [char, setChar] = useState<Character | null>(null);
@@ -36,17 +83,14 @@ export default function ChatPage() {
   const [pendingImage, setPendingImage] = useState<{ base64: string; preview: string; mimeType?: string } | null>(null);
   const [isNewVisit, setIsNewVisit] = useState(true);
 
-  // 載入角色資料
   useEffect(() => {
     fetch(`/api/characters/${characterId}`)
       .then(r => r.json())
       .then(d => setChar(d.character));
   }, [characterId]);
 
-  // 恢復 conversationId：URL ?cid= 優先，其次 localStorage
   useEffect(() => {
     if (cidFromUrl) {
-      // URL 帶了 cid（來自 LINE 共享連結）→ 存入 localStorage 並載入歷史
       localStorage.setItem(`conv-${characterId}`, cidFromUrl);
       loadHistory(cidFromUrl);
     } else {
@@ -58,7 +102,6 @@ export default function ChatPage() {
     }
   }, [characterId]);
 
-  // 自動滾到底
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, loading]);
@@ -70,10 +113,9 @@ export default function ChatPage() {
       const d = await r.json();
       if (d.messages?.length > 0) {
         setMessages(d.messages.map((m: Message) => ({
-          role: m.role,
-          content: m.content,
+          role: m.role, content: m.content,
           timestamp: m.timestamp || new Date().toISOString(),
-          imageUrl: m.imageUrl,  // 歷史載入時帶出 imageUrl，圖片才能正確顯示
+          imageUrl: m.imageUrl,
         })));
       }
     } catch { /* ignore */ }
@@ -93,7 +135,6 @@ export default function ChatPage() {
     reader.onload = () => {
       const dataUrl = reader.result as string;
       const base64 = dataUrl.split(',')[1];
-      // 從實際檔案 MIME type 推斷，不寫死 jpeg
       const mimeMatch = dataUrl.match(/^data:([^;]+);/);
       const mimeType = mimeMatch ? mimeMatch[1] : (file.type || 'image/jpeg');
       setPendingImage({ base64, preview: dataUrl, mimeType });
@@ -104,10 +145,8 @@ export default function ChatPage() {
 
   const send = useCallback(async () => {
     if ((!input.trim() && !pendingImage) || loading) return;
-
     const userContent = input.trim() || '（傳了一張圖）';
     const currentImage = pendingImage;
-
     const userMsg: Message = { role: 'user', content: userContent, timestamp: new Date().toISOString(), imageUrl: currentImage?.preview };
     setMessages(prev => [...prev, userMsg]);
     setInput('');
@@ -117,35 +156,23 @@ export default function ChatPage() {
 
     try {
       const body: Record<string, unknown> = {
-        characterId,
-        userId,
-        message: userContent,
-        conversationId: conversationId || undefined,
-        isNewVisit,
+        characterId, userId, message: userContent,
+        conversationId: conversationId || undefined, isNewVisit,
       };
       setIsNewVisit(false);
       if (currentImage) {
         body.image = { type: 'base64', media_type: currentImage.mimeType || 'image/jpeg', data: currentImage.base64 };
       }
-
       const r = await fetch('/api/dialogue', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
       const d = await r.json();
-
       if (!d.success) throw new Error(d.error || '對話失敗');
-
-      // 儲存 conversationId
       if (d.conversationId && !conversationId) {
         setConversationId(d.conversationId);
         localStorage.setItem(`conv-${characterId}`, d.conversationId);
       }
-
-      // 解析生圖 URL（支援兩種格式）
-      // 格式1: IMAGE_URL:https://...
-      // 格式2: ![...](https://...) markdown
       const replyText = d.reply || '';
       const urlMatch1 = replyText.match(/IMAGE_URL:(https?:\/\/[^\s]+)/);
       const urlMatch2 = replyText.match(/!\[.*?\]\((https?:\/\/[^)]+)\)/);
@@ -154,21 +181,16 @@ export default function ChatPage() {
         .replace(/IMAGE_URL:https?:\/\/[^\s]+/g, '')
         .replace(/!\[.*?\]\(https?:\/\/[^)]+\)/g, '')
         .trim();
-
       setMessages(prev => [...prev, {
-        role: 'assistant',
-        content: cleanReply || '（圖片已生成）',
-        timestamp: new Date().toISOString(),
-        imageUrl: extractedImageUrl,
+        role: 'assistant', content: cleanReply || '（圖片已生成）',
+        timestamp: new Date().toISOString(), imageUrl: extractedImageUrl,
       }]);
     } catch (err) {
       setMessages(prev => [...prev, {
-        role: 'assistant', content: `⚠ ${String(err)}`, timestamp: new Date().toISOString(),
+        role: 'assistant', content: String(err), timestamp: new Date().toISOString(),
       }]);
-    } finally {
-      setLoading(false);
-    }
-  }, [input, pendingImage, loading, characterId, userId, conversationId]);
+    } finally { setLoading(false); }
+  }, [input, pendingImage, loading, characterId, userId, conversationId, isNewVisit]);
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
@@ -178,20 +200,53 @@ export default function ChatPage() {
   const avatar = char?.visualIdentity?.characterSheet;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100dvh', background: '#0f0f13', fontFamily: 'system-ui, sans-serif' }}>
+    <div style={{
+      display: 'flex', flexDirection: 'column', height: '100dvh',
+      background: '#FFFFFF',
+      fontFamily: 'var(--font-body, "DM Sans", system-ui, sans-serif)',
+    }}>
 
-      {/* Header */}
-      <header style={{ padding: '14px 20px', borderBottom: '1px solid #1e1e28', background: '#13131a', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
+      {/* ── Header ── */}
+      <header style={{
+        padding: '0 20px', height: 56,
+        borderBottom: '1px solid var(--border, #E4E2DC)',
+        background: '#FFFFFF',
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        flexShrink: 0, position: 'sticky', top: 0, zIndex: 10,
+      }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <a href={`/dashboard/${characterId}`} style={{
+            width: 30, height: 30, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            color: 'var(--text-muted, #9C9A95)',
+            borderRadius: 6,
+            transition: 'background 0.15s, color 0.15s',
+          }}
+            onMouseEnter={e => { e.currentTarget.style.background = 'var(--bg-alt, #EDECEA)'; e.currentTarget.style.color = 'var(--text-primary, #1A1916)'; }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--text-muted, #9C9A95)'; }}
+          ><IconBack /></a>
+
+          <div style={{ width: 1, height: 20, background: 'var(--border, #E4E2DC)' }} />
+
           {avatar ? (
-            <img src={avatar} alt="" style={{ width: 36, height: 36, borderRadius: '50%', objectFit: 'cover', border: '1px solid #2a2a38' }} />
+            <img src={avatar} alt="" style={{ width: 30, height: 30, borderRadius: '50%', objectFit: 'cover', border: '1px solid var(--border, #E4E2DC)' }} />
           ) : (
-            <div style={{ width: 36, height: 36, borderRadius: '50%', background: '#1e1e2e', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6c63ff', fontSize: 16 }}>⟁</div>
+            <div style={{
+              width: 30, height: 30, borderRadius: '50%',
+              background: 'var(--bg-alt, #EDECEA)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              color: 'var(--text-muted, #9C9A95)',
+            }}><IconUser /></div>
           )}
+
           <div>
-            <div style={{ fontSize: 15, fontWeight: 600, color: '#e8e8f0' }}>{charName}</div>
-            <div style={{ fontSize: 10, color: '#555', letterSpacing: '0.15em', textTransform: 'uppercase' }}>
-              {conversationId ? `#${conversationId.slice(-6)}` : 'new conversation'}
+            <div style={{
+              fontSize: 14, fontWeight: 600,
+              color: 'var(--text-primary, #1A1916)',
+              fontFamily: 'var(--font-display, "Syne", sans-serif)',
+              letterSpacing: '-0.01em',
+            }}>{charName}</div>
+            <div style={{ fontSize: 10, color: 'var(--text-muted, #9C9A95)', letterSpacing: '0.08em' }}>
+              {conversationId ? `#${conversationId.slice(-6)}` : '新對話'}
             </div>
           </div>
         </div>
@@ -199,101 +254,165 @@ export default function ChatPage() {
         <div style={{ display: 'flex', gap: 6 }}>
           {conversationId && (
             <button onClick={() => loadHistory(conversationId)} disabled={loadingHistory}
-              style={{ padding: '5px 12px', background: 'transparent', border: '1px solid #2a2a38', borderRadius: 20, color: '#888', fontSize: 11, cursor: 'pointer', letterSpacing: '0.05em' }}>
-              {loadingHistory ? '載入中' : '↻ 重新載入'}
+              style={{
+                padding: '6px 12px', display: 'flex', alignItems: 'center', gap: 5,
+                background: 'transparent', border: '1px solid var(--border, #E4E2DC)',
+                borderRadius: 6, color: 'var(--text-muted, #9C9A95)',
+                fontSize: 12, cursor: 'pointer',
+                transition: 'border-color 0.15s, color 0.15s',
+              }}
+              onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--text-secondary)'; e.currentTarget.style.color = 'var(--text-secondary)'; }}
+              onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.color = 'var(--text-muted)'; }}
+            >
+              <IconRefresh />
+              {loadingHistory ? '載入中' : '重新整理'}
             </button>
           )}
           <button onClick={newConversation}
-            style={{ padding: '5px 12px', background: 'transparent', border: '1px solid #2a2a38', borderRadius: 20, color: '#888', fontSize: 11, cursor: 'pointer', letterSpacing: '0.05em' }}>
-            + 新對話
+            style={{
+              padding: '6px 12px', display: 'flex', alignItems: 'center', gap: 5,
+              background: 'transparent', border: '1px solid var(--border, #E4E2DC)',
+              borderRadius: 6, color: 'var(--text-muted, #9C9A95)',
+              fontSize: 12, cursor: 'pointer',
+              transition: 'border-color 0.15s, color 0.15s',
+            }}
+            onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--text-secondary)'; e.currentTarget.style.color = 'var(--text-secondary)'; }}
+            onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.color = 'var(--text-muted)'; }}
+          >
+            <IconPlus /> 新對話
           </button>
         </div>
       </header>
 
-      {/* Messages */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '24px 20px', display: 'flex', flexDirection: 'column', gap: 0 }}>
+      {/* ── Messages ── */}
+      <div style={{
+        flex: 1, overflowY: 'auto',
+        padding: '28px 0',
+        display: 'flex', flexDirection: 'column',
+        background: '#FFFFFF',
+      }}>
 
         {loadingHistory && (
-          <div style={{ textAlign: 'center', color: '#444', fontSize: 11, letterSpacing: '0.2em', padding: 40 }}>載入對話記錄中…</div>
+          <div style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: 12, padding: 40 }}>載入對話記錄中…</div>
         )}
 
         {!loadingHistory && messages.length === 0 && char && (
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 16, padding: 40 }}>
-            {avatar && <img src={avatar} alt="" style={{ width: 72, height: 72, borderRadius: '50%', objectFit: 'cover', border: '2px solid #2a2a38' }} />}
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14, padding: 40 }}>
+            {avatar
+              ? <img src={avatar} alt="" style={{ width: 64, height: 64, borderRadius: '50%', objectFit: 'cover', border: '1px solid var(--border)' }} />
+              : <div style={{ width: 64, height: 64, borderRadius: '50%', background: 'var(--bg-alt)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)' }}><IconUser /></div>
+            }
             <div style={{ textAlign: 'center' }}>
-              <div style={{ fontSize: 20, fontWeight: 600, color: '#e8e8f0', marginBottom: 6 }}>{charName}</div>
-              <div style={{ fontSize: 13, color: '#555', maxWidth: 280, lineHeight: 1.6 }}>{char.mission || '開始對話'}</div>
+              <div style={{
+                fontFamily: 'var(--font-display, "Syne", sans-serif)',
+                fontSize: 18, fontWeight: 700,
+                color: 'var(--text-primary)', marginBottom: 6,
+                letterSpacing: '-0.02em',
+              }}>{charName}</div>
+              <div style={{ fontSize: 13, color: 'var(--text-muted)', maxWidth: 260, lineHeight: 1.65 }}>{char.mission || '開始對話'}</div>
             </div>
           </div>
         )}
 
-        {messages.map((msg, i) => {
-          const isUser = msg.role === 'user';
-          const time = msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' }) : '';
-          return (
-            <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: isUser ? 'flex-end' : 'flex-start', marginBottom: 24 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 5 }}>
-                {!isUser && avatar && <img src={avatar} alt="" style={{ width: 20, height: 20, borderRadius: '50%', objectFit: 'cover' }} />}
-                <span style={{ fontSize: 10, letterSpacing: '0.2em', fontWeight: 700, textTransform: 'uppercase', color: isUser ? '#444' : '#6c63ff' }}>
-                  {isUser ? 'You' : charName}
-                </span>
-                <span style={{ fontSize: 10, color: '#333' }}>{time}</span>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 0, padding: '0 20px', maxWidth: 760, margin: '0 auto', width: '100%' }}>
+          {messages.map((msg, i) => {
+            const isUser = msg.role === 'user';
+            const time = msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' }) : '';
+            return (
+              <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: isUser ? 'flex-end' : 'flex-start', marginBottom: 20 }}>
+                {/* Name + time */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                  {!isUser && avatar && (
+                    <img src={avatar} alt="" style={{ width: 18, height: 18, borderRadius: '50%', objectFit: 'cover', border: '1px solid var(--border)' }} />
+                  )}
+                  <span style={{
+                    fontSize: 11, fontWeight: 600, letterSpacing: '0.06em',
+                    color: isUser ? 'var(--text-muted)' : 'var(--text-secondary)',
+                    textTransform: 'uppercase',
+                  }}>{isUser ? 'You' : charName}</span>
+                  <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>{time}</span>
+                </div>
+
+                {/* Bubble */}
+                <div style={{
+                  maxWidth: '72%', padding: '11px 15px',
+                  borderRadius: isUser ? '14px 14px 3px 14px' : '14px 14px 14px 3px',
+                  background: isUser ? 'var(--bg-alt, #EDECEA)' : 'var(--surface-2, #FAFAF8)',
+                  border: '1px solid var(--border, #E4E2DC)',
+                  color: 'var(--text-primary, #1A1916)',
+                  fontSize: 14, lineHeight: 1.7, fontWeight: 400,
+                  whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                }}>
+                  {msg.imageUrl && (
+                    <img src={msg.imageUrl} alt="" style={{ maxWidth: '100%', borderRadius: 8, display: 'block', marginBottom: msg.content ? 8 : 0, border: '1px solid var(--border)' }} />
+                  )}
+                  {msg.content}
+                </div>
+              </div>
+            );
+          })}
+
+          {/* Typing indicator */}
+          {loading && (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', marginBottom: 20 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                {avatar && <img src={avatar} alt="" style={{ width: 18, height: 18, borderRadius: '50%', objectFit: 'cover' }} />}
+                <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.06em', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>{charName}</span>
               </div>
               <div style={{
-                maxWidth: '75%', padding: '12px 16px',
-                borderRadius: isUser ? '18px 18px 4px 18px' : '18px 18px 18px 4px',
-                background: isUser ? '#1a1a2e' : '#16161f',
-                border: isUser ? '1px solid #2a2a4a' : '1px solid #6c63ff33',
-                color: isUser ? '#c8c8e8' : '#e0e0f0',
-                fontSize: 14, lineHeight: 1.75, fontWeight: 300,
-                whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                padding: '12px 16px',
+                background: 'var(--surface-2)', border: '1px solid var(--border)',
+                borderRadius: '14px 14px 14px 3px',
+                display: 'flex', gap: 4, alignItems: 'center',
               }}>
-                {msg.imageUrl && (
-                  <img src={msg.imageUrl} alt="" style={{ maxWidth: '100%', borderRadius: 10, display: 'block', marginBottom: msg.content ? 8 : 0 }} />
-                )}
-                {msg.content}
+                {[0, 1, 2].map(j => (
+                  <div key={j} style={{
+                    width: 5, height: 5, borderRadius: '50%',
+                    background: 'var(--text-muted)',
+                    animation: `typing-dot 1.2s ${j * 0.2}s ease-in-out infinite`,
+                  }} />
+                ))}
               </div>
             </div>
-          );
-        })}
-
-        {/* 打字動畫 */}
-        {loading && (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', marginBottom: 24 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 5 }}>
-              {avatar && <img src={avatar} alt="" style={{ width: 20, height: 20, borderRadius: '50%', objectFit: 'cover' }} />}
-              <span style={{ fontSize: 10, letterSpacing: '0.2em', fontWeight: 700, textTransform: 'uppercase', color: '#6c63ff' }}>{charName}</span>
-            </div>
-            <div style={{ padding: '14px 18px', background: '#16161f', border: '1px solid #6c63ff33', borderRadius: '18px 18px 18px 4px', display: 'flex', gap: 5, alignItems: 'center' }}>
-              {[0, 1, 2].map(j => (
-                <div key={j} style={{ width: 5, height: 5, borderRadius: '50%', background: '#6c63ff', opacity: 0.6, animation: `pulse 1.2s ${j * 0.2}s ease-in-out infinite` }} />
-              ))}
-            </div>
-          </div>
-        )}
+          )}
+        </div>
 
         <div ref={bottomRef} />
       </div>
 
-      {/* Input area */}
-      <div style={{ padding: '12px 16px 20px', borderTop: '1px solid #1e1e28', background: '#13131a', flexShrink: 0 }}>
-
-        {/* 圖片預覽 */}
+      {/* ── Input ── */}
+      <div style={{
+        padding: '12px 20px 16px',
+        borderTop: '1px solid var(--border, #E4E2DC)',
+        background: '#FFFFFF',
+        flexShrink: 0,
+      }}>
         {pendingImage && (
-          <div style={{ maxWidth: 680, margin: '0 auto 8px', display: 'flex', alignItems: 'center', gap: 8 }}>
-            <img src={pendingImage.preview} alt="" style={{ height: 44, borderRadius: 8, border: '1px solid #2a2a38' }} />
-            <span style={{ fontSize: 11, color: '#555' }}>圖片已選擇</span>
-            <button onClick={() => setPendingImage(null)} style={{ fontSize: 11, color: '#555', background: 'none', border: '1px solid #2a2a38', borderRadius: 4, padding: '2px 6px', cursor: 'pointer' }}>✕</button>
+          <div style={{ maxWidth: 720, margin: '0 auto 8px', display: 'flex', alignItems: 'center', gap: 8 }}>
+            <img src={pendingImage.preview} alt="" style={{ height: 40, borderRadius: 6, border: '1px solid var(--border)' }} />
+            <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>圖片已選取</span>
+            <button onClick={() => setPendingImage(null)} style={{
+              width: 22, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              color: 'var(--text-muted)', background: 'none',
+              border: '1px solid var(--border)', borderRadius: 4, cursor: 'pointer',
+            }}><IconClose /></button>
           </div>
         )}
 
         <input ref={imageInputRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={handleImageSelect} />
 
-        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', maxWidth: 680, margin: '0 auto' }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', maxWidth: 720, margin: '0 auto' }}>
           <button onClick={() => imageInputRef.current?.click()} disabled={loading}
-            style={{ padding: '10px 12px', background: '#1a1a26', border: '1px solid #2a2a38', borderRadius: 12, cursor: 'pointer', fontSize: 16, lineHeight: 1, color: '#555', flexShrink: 0 }}>
-            🖼
-          </button>
+            style={{
+              width: 38, height: 38, flexShrink: 0,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              background: 'transparent', border: '1px solid var(--border)',
+              borderRadius: 8, color: 'var(--text-muted)', cursor: 'pointer',
+              transition: 'border-color 0.15s, color 0.15s',
+            }}
+            onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--text-secondary)'; e.currentTarget.style.color = 'var(--text-secondary)'; }}
+            onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.color = 'var(--text-muted)'; }}
+          ><IconImage /></button>
 
           <textarea ref={textareaRef} value={input}
             onChange={e => {
@@ -302,40 +421,56 @@ export default function ChatPage() {
               e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px';
             }}
             onKeyDown={onKeyDown}
-            placeholder={`傳訊息給 ${charName}…`}
+            placeholder={`傳訊息給 ${charName}`}
             rows={1} disabled={loading}
             style={{
-              flex: 1, background: '#1a1a26', border: '1px solid #2a2a38', borderRadius: 12,
-              padding: '10px 14px', color: '#e0e0f0', fontSize: 14, fontWeight: 300,
-              resize: 'none', outline: 'none', fontFamily: 'inherit', lineHeight: 1.5,
+              flex: 1,
+              background: 'var(--bg, #F5F4F1)',
+              border: '1px solid var(--border, #E4E2DC)',
+              borderRadius: 8,
+              padding: '9px 14px',
+              color: 'var(--text-primary)',
+              fontSize: 14, lineHeight: 1.5,
+              resize: 'none', outline: 'none',
+              fontFamily: 'inherit',
               maxHeight: 120, overflowY: 'auto',
+              transition: 'border-color 0.15s',
             }}
+            onFocus={e => (e.target.style.borderColor = 'var(--text-secondary)')}
+            onBlur={e => (e.target.style.borderColor = 'var(--border)')}
           />
 
           <button onClick={send} disabled={loading || (!input.trim() && !pendingImage)}
             style={{
-              padding: '10px 18px', flexShrink: 0,
-              background: loading || (!input.trim() && !pendingImage) ? '#1a1a26' : '#6c63ff',
-              border: 'none', borderRadius: 12,
-              color: loading || (!input.trim() && !pendingImage) ? '#444' : '#fff',
-              fontSize: 13, fontWeight: 600, cursor: loading || (!input.trim() && !pendingImage) ? 'default' : 'pointer',
-              transition: 'all 0.15s', letterSpacing: '0.05em',
-            }}>
-            發送
-          </button>
+              width: 38, height: 38, flexShrink: 0,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              background: (loading || (!input.trim() && !pendingImage)) ? 'var(--bg)' : 'var(--text-primary, #1A1916)',
+              border: '1px solid var(--border)',
+              borderRadius: 8,
+              color: (loading || (!input.trim() && !pendingImage)) ? 'var(--text-muted)' : '#fff',
+              cursor: (loading || (!input.trim() && !pendingImage)) ? 'default' : 'pointer',
+              transition: 'all 0.15s',
+            }}
+          ><IconSend /></button>
         </div>
 
-        <p style={{ textAlign: 'center', fontSize: 9, color: '#2a2a38', margin: '8px 0 0', letterSpacing: '0.2em', textTransform: 'uppercase' }}>
-          AILIVE · {charName}
-        </p>
+        <p style={{
+          textAlign: 'center', fontSize: 10,
+          color: 'var(--text-muted)', margin: '8px 0 0',
+          letterSpacing: '0.15em',
+        }}>AILIVE · {charName}</p>
       </div>
 
       <style>{`
-        @keyframes pulse { 0%,100%{opacity:0.2;transform:scale(0.8)} 50%{opacity:0.8;transform:scale(1)} }
+        @keyframes typing-dot {
+          0%, 100% { opacity: 0.25; transform: translateY(0); }
+          50% { opacity: 0.8; transform: translateY(-2px); }
+        }
         * { box-sizing: border-box; }
+        textarea::placeholder { color: var(--text-muted); }
         ::-webkit-scrollbar { width: 4px; }
         ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: #2a2a38; border-radius: 2px; }
+        ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
       `}</style>
     </div>
   );
