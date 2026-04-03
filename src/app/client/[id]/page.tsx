@@ -216,6 +216,14 @@ function TasksTab({ charId }: { charId:string }) {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<string|null>(null);
+  const [deleting, setDeleting] = useState<string|null>(null);
+  const [showAdd, setShowAdd] = useState(false);
+  const [newType, setNewType] = useState('post');
+  const [newDesc, setNewDesc] = useState('');
+  const [newHour, setNewHour] = useState(9);
+  const [newMin, setNewMin] = useState(0);
+  const [newDays, setNewDays] = useState(['mon','tue','wed','thu','fri']);
+  const [adding, setAdding] = useState(false);
 
   const load = useCallback(()=>{
     setLoading(true);
@@ -229,60 +237,151 @@ function TasksTab({ charId }: { charId:string }) {
     setSaving(null); load();
   };
 
-  const TYPE_LABEL: Record<string,string> = {post:'發文',reflect:'反思',learn:'學習',engage:'互動'};
+  const del = async (taskId:string) => {
+    if (!confirm('確定刪除這個排程任務？')) return;
+    setDeleting(taskId);
+    await fetch(`/api/tasks?id=${taskId}`,{method:'DELETE'});
+    setDeleting(null); load();
+  };
 
-  if (loading) return <div style={{color:'var(--text-muted)',fontSize:13}}>載入中…</div>;
-  if (tasks.length===0) return <div style={{color:'var(--text-muted)',textAlign:'center',padding:40,border:'1.5px dashed var(--border)',borderRadius:'var(--r-lg)',fontSize:13}}>目前沒有排程任務</div>;
+  const addTask = async () => {
+    if (newDays.length===0) return;
+    setAdding(true);
+    await fetch('/api/tasks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+      characterId:charId, type:newType, description:newDesc,
+      run_hour:newHour, run_minute:newMin, days:newDays, enabled:true,
+    })});
+    setAdding(false); setShowAdd(false);
+    setNewType('post'); setNewDesc(''); setNewHour(9); setNewMin(0); setNewDays(['mon','tue','wed','thu','fri']);
+    load();
+  };
+
+  const TYPE_LABEL: Record<string,string> = {post:'發文',reflect:'反思',learn:'學習',engage:'互動'};
+  const TYPE_OPTIONS = ['post','reflect','learn','engage'];
 
   return (
-    <div style={{display:'flex',flexDirection:'column',gap:10}}>
-      {tasks.map(task=>(
-        <div key={task.id} style={{...S.card,opacity:task.enabled?1:0.55}}>
-          <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:14}}>
+    <div>
+      {/* 新增按鈕 */}
+      <div style={{display:'flex',justifyContent:'flex-end',marginBottom:12}}>
+        <button onClick={()=>setShowAdd(v=>!v)} style={S.btn(!showAdd)}>
+          {showAdd ? <><Ic.X/>取消</> : <>+ 新增任務</>}
+        </button>
+      </div>
+
+      {/* 新增表單 */}
+      {showAdd&&(
+        <div style={{...S.card,marginBottom:16,borderColor:'var(--accent-light)'}}>
+          <div style={{fontSize:13,fontWeight:600,color:'var(--text-primary)',marginBottom:14}}>新增排程任務</div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:10}}>
             <div>
-              <div style={{fontWeight:600,fontSize:14,color:'var(--text-primary)',marginBottom:3}}>
-                {TYPE_LABEL[task.type]||task.type}
+              <label style={S.label}>任務類型</label>
+              <select value={newType} onChange={e=>setNewType(e.target.value)} style={{...S.input}}>
+                {TYPE_OPTIONS.map(t=><option key={t} value={t}>{TYPE_LABEL[t]||t}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={S.label}>執行時間</label>
+              <div style={{display:'flex',gap:6,alignItems:'center'}}>
+                <select value={newHour} onChange={e=>setNewHour(Number(e.target.value))} style={{...S.input,width:'auto',flex:1}}>
+                  {Array.from({length:24},(_,i)=><option key={i} value={i}>{String(i).padStart(2,'0')}</option>)}
+                </select>
+                <span style={{color:'var(--text-muted)',fontWeight:600}}>:</span>
+                <select value={newMin} onChange={e=>setNewMin(Number(e.target.value))} style={{...S.input,width:'auto',flex:1}}>
+                  {[0,15,30,45].map(m=><option key={m} value={m}>{String(m).padStart(2,'0')}</option>)}
+                </select>
               </div>
-              {task.description&&<div style={{fontSize:12,color:'var(--text-muted)'}}>{task.description}</div>}
-            </div>
-            {/* Toggle */}
-            <div onClick={()=>patch(task.id,{enabled:!task.enabled})}
-              style={{width:40,height:22,borderRadius:11,background:task.enabled?'var(--text-primary)':'var(--border)',cursor:'pointer',position:'relative',transition:'background 0.2s',flexShrink:0}}>
-              <div style={{position:'absolute',top:3,left:task.enabled?21:3,width:16,height:16,borderRadius:'50%',background:'#fff',transition:'left 0.2s',boxShadow:'0 1px 3px rgba(0,0,0,0.2)'}}/>
             </div>
           </div>
-
-          <div style={{display:'flex',gap:8,alignItems:'center',marginBottom:12,flexWrap:'wrap'}}>
-            <span style={{fontSize:12,color:'var(--text-muted)'}}>時間</span>
-            <select value={task.run_hour} onChange={e=>patch(task.id,{run_hour:Number(e.target.value)})}
-              style={{...S.input,width:'auto',padding:'4px 8px',fontSize:13}}>
-              {Array.from({length:24},(_,i)=><option key={i} value={i}>{String(i).padStart(2,'0')}</option>)}
-            </select>
-            <span style={{color:'var(--text-muted)',fontWeight:600}}>:</span>
-            <select value={task.run_minute} onChange={e=>patch(task.id,{run_minute:Number(e.target.value)})}
-              style={{...S.input,width:'auto',padding:'4px 8px',fontSize:13}}>
-              {[0,15,30,45].map(m=><option key={m} value={m}>{String(m).padStart(2,'0')}</option>)}
-            </select>
-            {saving===task.id&&<span style={{fontSize:11,color:'var(--accent)'}}>儲存中…</span>}
+          <div style={{marginBottom:10}}>
+            <label style={S.label}>描述（選填）</label>
+            <input value={newDesc} onChange={e=>setNewDesc(e.target.value)} placeholder="任務說明" style={S.input}
+              onFocus={e=>(e.target.style.borderColor='var(--text-secondary)')} onBlur={e=>(e.target.style.borderColor='var(--border)')}/>
           </div>
-
-          <div style={{display:'flex',gap:5,flexWrap:'wrap'}}>
-            {ALL_DAYS.map(d=>{
-              const active=task.days.includes(d);
-              return (
-                <button key={d} onClick={()=>{const next=active?task.days.filter(x=>x!==d):[...task.days,d];if(next.length>0)patch(task.id,{days:next});}}
-                  style={{width:30,height:30,borderRadius:'50%',border:'1px solid var(--border)',
-                    background:active?'var(--text-primary)':'transparent',
-                    color:active?'#fff':'var(--text-muted)',
-                    fontSize:12,fontWeight:active?600:400,cursor:'pointer',transition:'all 0.15s'}}>
-                  {DAYS_LABEL[d]}
-                </button>
-              );
-            })}
+          <div style={{marginBottom:14}}>
+            <label style={S.label}>執行日</label>
+            <div style={{display:'flex',gap:5,flexWrap:'wrap'}}>
+              {ALL_DAYS.map(d=>{
+                const active=newDays.includes(d);
+                return (
+                  <button key={d} onClick={()=>setNewDays(prev=>active?prev.filter(x=>x!==d):[...prev,d])}
+                    style={{width:30,height:30,borderRadius:'50%',border:'1px solid var(--border)',
+                      background:active?'var(--text-primary)':'transparent',
+                      color:active?'#fff':'var(--text-muted)',
+                      fontSize:12,fontWeight:active?600:400,cursor:'pointer',transition:'all 0.15s'}}>
+                    {DAYS_LABEL[d]}
+                  </button>
+                );
+              })}
+            </div>
           </div>
-          {task.last_run&&<div style={{fontSize:11,color:'var(--text-muted)',marginTop:10}}>上次執行：{new Date(task.last_run).toLocaleString('zh-TW')}</div>}
+          <button onClick={addTask} disabled={adding||newDays.length===0}
+            style={{...S.btn(true),opacity:adding||newDays.length===0?0.5:1}}>
+            {adding?'新增中…':'新增'}
+          </button>
         </div>
-      ))}
+      )}
+
+      {loading ? <div style={{color:'var(--text-muted)',fontSize:13}}>載入中…</div>
+        : tasks.length===0 ? <div style={{color:'var(--text-muted)',textAlign:'center',padding:40,border:'1.5px dashed var(--border)',borderRadius:'var(--r-lg)',fontSize:13}}>目前沒有排程任務</div>
+        : <div style={{display:'flex',flexDirection:'column',gap:10}}>
+          {tasks.map(task=>(
+            <div key={task.id} style={{...S.card,opacity:task.enabled?1:0.55}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:14}}>
+                <div>
+                  <div style={{fontWeight:600,fontSize:14,color:'var(--text-primary)',marginBottom:3}}>
+                    {TYPE_LABEL[task.type]||task.type}
+                  </div>
+                  {task.description&&<div style={{fontSize:12,color:'var(--text-muted)'}}>{task.description}</div>}
+                </div>
+                <div style={{display:'flex',gap:8,alignItems:'center'}}>
+                  {/* 刪除 */}
+                  <button onClick={()=>del(task.id)} disabled={deleting===task.id}
+                    style={{background:'none',border:'none',color:'var(--text-muted)',cursor:'pointer',display:'flex',alignItems:'center',padding:0,opacity:deleting===task.id?0.4:1,transition:'color 0.15s'}}
+                    onMouseEnter={e=>(e.currentTarget.style.color='var(--red)')}
+                    onMouseLeave={e=>(e.currentTarget.style.color='var(--text-muted)')}>
+                    <Ic.Trash/>
+                  </button>
+                  {/* Toggle */}
+                  <div onClick={()=>patch(task.id,{enabled:!task.enabled})}
+                    style={{width:40,height:22,borderRadius:11,background:task.enabled?'var(--text-primary)':'var(--border)',cursor:'pointer',position:'relative',transition:'background 0.2s',flexShrink:0}}>
+                    <div style={{position:'absolute',top:3,left:task.enabled?21:3,width:16,height:16,borderRadius:'50%',background:'#fff',transition:'left 0.2s',boxShadow:'0 1px 3px rgba(0,0,0,0.2)'}}/>
+                  </div>
+                </div>
+              </div>
+
+              <div style={{display:'flex',gap:8,alignItems:'center',marginBottom:12,flexWrap:'wrap'}}>
+                <span style={{fontSize:12,color:'var(--text-muted)'}}>時間</span>
+                <select value={task.run_hour} onChange={e=>patch(task.id,{run_hour:Number(e.target.value)})}
+                  style={{...S.input,width:'auto',padding:'4px 8px',fontSize:13}}>
+                  {Array.from({length:24},(_,i)=><option key={i} value={i}>{String(i).padStart(2,'0')}</option>)}
+                </select>
+                <span style={{color:'var(--text-muted)',fontWeight:600}}>:</span>
+                <select value={task.run_minute} onChange={e=>patch(task.id,{run_minute:Number(e.target.value)})}
+                  style={{...S.input,width:'auto',padding:'4px 8px',fontSize:13}}>
+                  {[0,15,30,45].map(m=><option key={m} value={m}>{String(m).padStart(2,'0')}</option>)}
+                </select>
+                {saving===task.id&&<span style={{fontSize:11,color:'var(--accent)'}}>儲存中…</span>}
+              </div>
+
+              <div style={{display:'flex',gap:5,flexWrap:'wrap'}}>
+                {ALL_DAYS.map(d=>{
+                  const active=task.days.includes(d);
+                  return (
+                    <button key={d} onClick={()=>{const next=active?task.days.filter(x=>x!==d):[...task.days,d];if(next.length>0)patch(task.id,{days:next});}}
+                      style={{width:30,height:30,borderRadius:'50%',border:'1px solid var(--border)',
+                        background:active?'var(--text-primary)':'transparent',
+                        color:active?'#fff':'var(--text-muted)',
+                        fontSize:12,fontWeight:active?600:400,cursor:'pointer',transition:'all 0.15s'}}>
+                      {DAYS_LABEL[d]}
+                    </button>
+                  );
+                })}
+              </div>
+              {task.last_run&&<div style={{fontSize:11,color:'var(--text-muted)',marginTop:10}}>上次執行：{new Date(task.last_run).toLocaleString('zh-TW')}</div>}
+            </div>
+          ))}
+        </div>
+      }
     </div>
   );
 }
@@ -528,12 +627,19 @@ export default function ClientPage() {
       {tab==='knowledge'&& <KnowledgeTab charId={charId}/>}
     </div>
 
-    {/* ── 聊天全螢幕覆蓋 ── */}
+    {/* ── 聊天全螢幕覆蓋（隱藏內部返回按鈕）── */}
     {tab==='chat'&&(
       <div style={{position:'fixed',inset:0,zIndex:100,background:'#fff'}}>
-        <Suspense>
-          <ChatPageInner/>
-        </Suspense>
+        <style>{`
+          /* 隱藏 ChatPageInner header 裡的返回按鈕（第一個 a 標籤）*/
+          .client-chat-wrap header a:first-child { display: none !important; }
+          .client-chat-wrap header > div > div:nth-child(2) { display: none !important; }
+        `}</style>
+        <div className="client-chat-wrap" style={{height:'100%'}}>
+          <Suspense>
+            <ChatPageInner/>
+          </Suspense>
+        </div>
         <button onClick={()=>setTab('posts')}
           style={{position:'fixed',top:14,right:16,zIndex:101,display:'flex',alignItems:'center',gap:4,
             background:'var(--surface)',border:'1px solid var(--border)',borderRadius:'var(--r-sm)',
