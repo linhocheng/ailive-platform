@@ -203,7 +203,7 @@ export async function POST(req: NextRequest) {
         }
 
         const voiceId = (charData.voiceId as string) || '56hCnQE2rYMllQDw3m1o';
-        const soulText = (charData.enhancedSoul as string) || (charData.soul as string) || '';
+        const soulText = (charData.system_soul as string) || (charData.soul_core as string) || (charData.enhancedSoul as string) || (charData.soul as string) || '';
 
         // 2. 讀對話歷史（Redis cache）
         const convId = conversationId || `voice-${characterId}-${userId || 'anon'}-${Date.now()}`;
