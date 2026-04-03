@@ -193,8 +193,11 @@ export default function VoicePage() {
         }
       }
       if (audio) await new Promise<void>(resolve=>{
-        const check=()=>{ if(!audio||audio.ended||(streamDone&&audioQueue.length===0&&!sourceBuffer?.updating)){resolve();}else{setTimeout(check,200);}};
-        (audio as HTMLAudioElement).addEventListener('ended',()=>resolve(),{once:true}); setTimeout(check,500);
+        // 只等 audio.ended，不用 queue 長度短路——避免 buffer 填滿但音訊還在播時提早結束
+        (audio as HTMLAudioElement).addEventListener('ended', ()=>resolve(), {once:true});
+        // 保底：如果 MediaSource 出問題導致 ended 不觸發，5 秒後強制結束
+        const fallback = setTimeout(()=>resolve(), 30000);
+        (audio as HTMLAudioElement).addEventListener('ended', ()=>clearTimeout(fallback), {once:true});
       });
       // 播完：先讓粒子慢下來再切 idle
       setVoiceState('ending');
@@ -333,6 +336,24 @@ export default function VoicePage() {
         }}>
           {STATE_LABEL[state]}
         </div>
+
+        {/* 即時辨識文字（錄音時顯示，sonic 風格）*/}
+        {state==='recording' && (finalTextRef.current || interimText) && (
+          <div style={{
+            marginTop:20,
+            maxWidth:280,
+            textAlign:'center',
+            fontSize:14,
+            fontWeight:200,
+            letterSpacing:'0.05em',
+            lineHeight:1.7,
+            color:'rgba(255,80,60,0.85)',
+            transition:'opacity 0.3s ease',
+          }}>
+            {finalTextRef.current}
+            {interimText && <span style={{color:'rgba(255,80,60,0.45)'}}>{interimText}</span>}
+          </div>
+        )}
       </div>
 
       {/* 底部：輪數 / 結束 / 沉澱結果 */}
