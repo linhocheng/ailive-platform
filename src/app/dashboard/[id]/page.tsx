@@ -30,17 +30,28 @@ interface Character {
 
 export function CharNav({ id, active }: { id: string; active: string }) {
   return (
-    <nav style={{ display: 'flex', gap: 4, marginBottom: 24, borderBottom: '1px solid #e0e0e0', paddingBottom: 0 }}>
+    <nav style={{
+      display: 'flex', gap: 2, marginBottom: 28,
+      borderBottom: '1px solid var(--border)',
+      overflowX: 'auto', paddingBottom: 0,
+    }}>
       {NAV_ITEMS.map(item => {
         const href = `/dashboard/${id}${item.href}`;
         const isActive = active === item.href;
         return (
           <a key={item.href} href={href} style={{
-            padding: '8px 14px', textDecoration: 'none', fontSize: 14,
-            color: isActive ? '#1a1a2e' : '#666',
-            borderBottom: isActive ? '2px solid #1a1a2e' : '2px solid transparent',
-            fontWeight: isActive ? 700 : 400,
-          }}>{item.label}</a>
+            padding: '8px 14px',
+            textDecoration: 'none',
+            fontSize: 13,
+            fontWeight: isActive ? 600 : 400,
+            color: isActive ? 'var(--text-primary)' : 'var(--text-muted)',
+            borderBottom: isActive ? '2px solid var(--text-primary)' : '2px solid transparent',
+            whiteSpace: 'nowrap',
+            transition: 'color 0.15s',
+          }}
+            onMouseEnter={e => { if (!isActive) e.currentTarget.style.color = 'var(--text-secondary)'; }}
+            onMouseLeave={e => { if (!isActive) e.currentTarget.style.color = 'var(--text-muted)'; }}
+          >{item.label}</a>
         );
       })}
     </nav>
