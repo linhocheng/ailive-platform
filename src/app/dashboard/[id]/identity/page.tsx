@@ -60,6 +60,7 @@ export default function IdentityPage() {
     fixedElements: [], referenceImages: [], refs: [],
   });
   const [mission, setMission] = useState('');
+  const [voiceId, setVoiceId] = useState('');
   const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState('');
@@ -79,6 +80,7 @@ export default function IdentityPage() {
       const c = d.character;
       setChar(c);
       setMission(c?.mission || '');
+      setVoiceId(c?.voiceId || '');
       setChannels({
         lineChannelToken: c?.lineChannelToken || '',
         lineChannelSecret: c?.lineChannelSecret || '',
@@ -210,7 +212,7 @@ export default function IdentityPage() {
     await fetch(`/api/characters/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mission, visualIdentity: finalVi }),
+      body: JSON.stringify({ mission, visualIdentity: finalVi, voiceId: voiceId.trim() || null }),
     });
     setVi(finalVi);
     setSaving(false);
@@ -304,6 +306,15 @@ export default function IdentityPage() {
             <input value={mission} onChange={e => setMission(e.target.value)}
               style={{ width: '100%', border: '1px solid #e0e0e0', borderRadius: 6, padding: '9px 11px', fontSize: 14, boxSizing: 'border-box' }}
               placeholder="這個角色存在是為了什麼" />
+          </div>
+
+          {/* VOICE ID */}
+          <div style={{ background: '#fff', border: '1px solid #e7e5e4', padding: 20 }}>
+            <p style={{ fontSize: 10, letterSpacing: '0.2em', color: '#a8a29e', fontWeight: 700, margin: '0 0 6px' }}>VOICE ID</p>
+            <p style={{ fontSize: 11, color: '#a8a29e', margin: '0 0 10px', lineHeight: 1.6 }}>ElevenLabs Voice ID。留空則使用預設女聲。</p>
+            <input value={voiceId} onChange={e => setVoiceId(e.target.value)}
+              style={{ width: '100%', border: '1px solid #e0e0e0', borderRadius: 6, padding: '9px 11px', fontSize: 13, boxSizing: 'border-box', fontFamily: 'monospace' }}
+              placeholder="56hCnQE2rYMllQDw3m1o（預設女聲）" />
           </div>
 
           {/* FIXED ELEMENTS */}
