@@ -346,8 +346,7 @@ export async function POST(req: NextRequest) {
             tools: [WEB_SEARCH, ...VOICE_TOOLS], tool_choice: toolChoice,
           });
           if (preRes.stop_reason !== 'tool_use') {
-            // 不需要工具了，把這輪文字加入歷史後進 streaming
-            loopMessages.push({ role: 'assistant', content: preRes.content });
+            // 不需要工具了，直接進 streaming（不把 assistant 再 push，保持最後是 user）
             break;
           }
           const toolBlocks = preRes.content.filter(b => b.type === 'tool_use') as Anthropic.ToolUseBlock[];
