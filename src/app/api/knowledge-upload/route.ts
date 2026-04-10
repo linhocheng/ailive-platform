@@ -1,44 +1,167 @@
 /**
- * /api/knowledge-upload — 文件上傳解析入知識庫
+ * /api/knowledge-upload — 文件上傳解析入知識庫 V2
  *
  * POST multipart/form-data
  *   file: .docx / .pdf / .md / .txt
  *   characterId: string
  *   category: string（選填，預設 'document'）
  *
- * 流程：
- *   .docx → mammoth（文字 + 圖片 base64）
- *   .pdf  → pdf-parse（文字）
- *   .md   → 直接走 chunkMarkdown（按 H1/H2 分塊）
- *   .txt  → 直接走 chunkMarkdown（整份當一塊或按標題切）
- *   圖片  → 上傳 Firebase Storage（永久 URL）+ Claude Haiku 描述
- *           → 圖片獨立存成 knowledge 條目（category='image'）
- *   文字  → 按 H1/H2 分塊 → 批次存 platform_knowledge
+ * docx 流程（新範本，確定性解析，零 Haiku）：
+ *   H1 → brand + productName
+ *   H2 段落 → 直接 map 到 platform_products 各欄位
+ *   最後 table → 圖片（caption 在同 <th>/<td> 格，直接用，不猜）
+ *   產出：
+ *     platform_products（一筆完整產品主檔）
+ *     platform_knowledge × N（每 H2 一條，帶 productName）
+ *     platform_knowledge × M（每張圖一條，帶 productName + imageUrl）
  */
 import { NextRequest, NextResponse } from 'next/server';
-import Anthropic from '@anthropic-ai/sdk';
-import { getFirebaseAdmin } from '@/lib/firebase-admin';
+import { getFirebaseAdmin, getFirestore } from '@/lib/firebase-admin';
 
 export const maxDuration = 120;
 
 export const config = {
-  api: {
-    bodyParser: false,
-    responseLimit: '20mb',
-  },
+  api: { bodyParser: false, responseLimit: '20mb' },
 };
 
-// ===== 工具函式 =====
+// ── 圖片 caption → images map key ──
+function captionToKey(caption: string): string {
+  const c = caption;
+  if (c.includes('全身')) return '模特兒全身';
+  if (c.includes('半身')) return '模特兒半身';
+  if (c.includes('大頭')) return '模特兒大頭';
+  if (c.includes('斜躺')) return '純產品斜躺';
+  if (c.includes('正面')) return '純產品正面';
+  return caption.slice(-10);
+}
 
-// H1 = 產品名稱（parentTitle），H2 = 段落名稱
-// title 格式：「產品名稱 — 段落名稱」，讓每條知識都知道自己屬於哪個產品
+// ── 上傳圖片到 Firebase Storage ──
+async function uploadImageToStorage(
+  base64Data: string,
+  contentType: string,
+  characterId: string,
+  index: number,
+): Promise<string> {
+  const admin = getFirebaseAdmin();
+  const bucket = admin.storage().bucket();
+  const ext = contentType.includes('png') ? 'png' : contentType.includes('webp') ? 'webp' : 'jpg';
+  const date = new Date().toISOString().slice(0, 10);
+  const path = `knowledge-images/${characterId}/${date}/img_${index}_${Math.random().toString(36).slice(2, 8)}.${ext}`;
+  const buffer = Buffer.from(base64Data, 'base64');
+  const file = bucket.file(path);
+  await file.save(buffer, { metadata: { contentType } });
+  await file.makePublic();
+  return `https://storage.googleapis.com/${bucket.name}/${path}`;
+}
+
+// ── 儲存 knowledge 條目 ──
+async function saveKnowledge(
+  baseUrl: string,
+  characterId: string,
+  title: string,
+  content: string,
+  category: string,
+  imageUrl?: string,
+  productName?: string,
+): Promise<string | null> {
+  try {
+    const body: Record<string, string> = { characterId, title, content, category };
+    if (imageUrl) body.imageUrl = imageUrl;
+    if (productName) body.productName = productName;
+    const res = await fetch(`${baseUrl}/api/knowledge`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    return data.id || null;
+  } catch { return null; }
+}
+
+// ── 從 HTML 解析產品文件（確定性，零 Haiku）──
+interface ProductData {
+  brand: string;
+  productName: string;
+  productType: string;
+  positioning: string;
+  ingredients: Array<{ name: string; effect: string }>;
+  effects: string[];
+  usage: string[];
+  suitableFor: string[];
+  cautions: string[];
+  sections: Array<{ title: string; content: string }>;
+}
+
+function parseProductHtml(html: string): ProductData {
+  // 去除 anchor tags，壓扁換行（讓 regex 不需要 s flag）
+  const clean = html.replace(/<a[^>]*>|<\/a>/g, '').replace(/\n/g, ' ');
+
+  // H1 → brand + productName
+  const h1Match = clean.match(/<h1[^>]*>([^<]*(?:<(?!\/h1>)[^<]*)*)<\/h1>/);
+  const h1Text = h1Match ? h1Match[1].replace(/<[^>]+>/g, '').trim() : '';
+  // "AVIVA 完美淨顏慕絲花" → brand:"AVIVA", productName:"完美淨顏慕絲花"
+  const spaceIdx = h1Text.indexOf(' ');
+  const brand = spaceIdx > 0 ? h1Text.slice(0, spaceIdx).trim() : '';
+  const productName = spaceIdx > 0 ? h1Text.slice(spaceIdx + 1).trim() : h1Text;
+
+  // H2 段落切片
+  const h2Splits = [...clean.matchAll(/<h2[^>]*>(.*?)<\/h2>/g)];
+  const sectionMap: Record<string, string> = {};
+  const sections: Array<{ title: string; content: string }> = [];
+  for (let i = 0; i < h2Splits.length; i++) {
+    const title = h2Splits[i][1].replace(/<[^>]+>/g, '').trim();
+    const start = h2Splits[i].index! + h2Splits[i][0].length;
+    const end = i + 1 < h2Splits.length ? h2Splits[i + 1].index! : clean.length;
+    const contentHtml = clean.slice(start, end);
+    const text = contentHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    sectionMap[title] = text;
+    if (text.length > 5) sections.push({ title: `${productName} — ${title}`, content: text });
+  }
+
+  // 成分 table 結構化解析（核心成分 H2 下的 table）
+  const ingredients: Array<{ name: string; effect: string }> = [];
+  const ingSection = h2Splits.find(m => m[1].replace(/<[^>]+>/g, '').trim() === '核心成分');
+  if (ingSection) {
+    const secStart = ingSection.index! + ingSection[0].length;
+    const secIdx = h2Splits.indexOf(ingSection);
+    const secEnd = secIdx + 1 < h2Splits.length ? h2Splits[secIdx + 1].index! : clean.length;
+    const secHtml = clean.slice(secStart, secEnd);
+    const rows = [...secHtml.matchAll(/<tr[^>]*>(.*?)<\/tr>/g)];
+    for (const row of rows.slice(1)) { // skip header row
+      const cells = [...row[1].matchAll(/<t[hd][^>]*>(.*?)<\/t[hd]>/g)];
+      if (cells.length >= 2) {
+        const name = cells[0][1].replace(/<[^>]+>/g, '').trim();
+        const effect = cells[1][1].replace(/<[^>]+>/g, '').trim();
+        if (name && effect && name !== '成分') ingredients.push({ name, effect });
+      }
+    }
+  }
+
+  // ul/ol 列表解析
+  const toList = (sectionText: string): string[] =>
+    sectionText.split(/\s{2,}/).map(s => s.trim()).filter(s => s.length > 2).slice(0, 20);
+
+  return {
+    brand,
+    productName,
+    productType: sectionMap['產品基本資訊']?.match(/產品類型\s*[：:]\s*([^\s]+)/)?.[1] || '',
+    positioning: sectionMap['產品定位'] || '',
+    ingredients,
+    effects: toList(sectionMap['功效'] || ''),
+    usage: toList(sectionMap['使用方式'] || ''),
+    suitableFor: toList(sectionMap['適合對象'] || ''),
+    cautions: toList(sectionMap['注意事項'] || ''),
+    sections,
+  };
+}
+
+// ── chunkMarkdown（非 docx 用）──
 function chunkMarkdown(md: string, filename: string): Array<{ title: string; content: string }> {
   const lines = md.split('\n');
   const chunks: Array<{ title: string; content: string }> = [];
   let parentTitle = '';
   let sectionTitle = '';
   let currentContent: string[] = [];
-
   const flush = () => {
     const c = currentContent.join('\n').trim();
     if (c.length > 20) {
@@ -49,110 +172,14 @@ function chunkMarkdown(md: string, filename: string): Array<{ title: string; con
     }
     currentContent = [];
   };
-
   for (const line of lines) {
-    if (line.startsWith('# ')) {
-      flush();
-      parentTitle = line.replace(/^#\s+/, '').trim();
-      sectionTitle = '';
-    } else if (line.startsWith('## ')) {
-      flush();
-      sectionTitle = line.replace(/^##\s+/, '').trim();
-    } else {
-      currentContent.push(line);
-    }
+    if (line.startsWith('# ')) { flush(); parentTitle = line.replace(/^#\s+/, '').trim(); sectionTitle = ''; }
+    else if (line.startsWith('## ')) { flush(); sectionTitle = line.replace(/^##\s+/, '').trim(); }
+    else { currentContent.push(line); }
   }
   flush();
-
-  if (chunks.length === 0 && md.trim().length > 0) {
-    chunks.push({ title: filename, content: md.trim() });
-  }
-
+  if (chunks.length === 0 && md.trim().length > 0) chunks.push({ title: filename, content: md.trim() });
   return chunks;
-}
-
-/**
- * 上傳圖片 base64 到 Firebase Storage → 永久 URL
- */
-async function uploadImageToStorage(
-  base64Data: string,
-  contentType: string,
-  characterId: string,
-  index: number,
-): Promise<string> {
-  const admin = getFirebaseAdmin();
-  const bucket = admin.storage().bucket();
-  const ext = contentType.includes('png') ? 'png' : contentType.includes('gif') ? 'gif' : contentType.includes('webp') ? 'webp' : 'jpg';
-  const date = new Date().toISOString().slice(0, 10);
-  const path = `knowledge-images/${characterId}/${date}/img_${index}_${Math.random().toString(36).slice(2, 8)}.${ext}`;
-  const buffer = Buffer.from(base64Data, 'base64');
-  const file = bucket.file(path);
-  await file.save(buffer, { metadata: { contentType } });
-  await file.makePublic();
-  return `https://storage.googleapis.com/${bucket.name}/${path}`;
-}
-
-/**
- * Claude Haiku 描述圖片（繁中）
- */
-async function describeImage(
-  client: Anthropic,
-  base64Data: string,
-  contentType: string,
-): Promise<string> {
-  try {
-    const res = await client.messages.create({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 60,
-      messages: [{
-        role: 'user',
-        content: [
-          {
-            type: 'image',
-            source: {
-              type: 'base64',
-              media_type: contentType as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp',
-              data: base64Data,
-            },
-          },
-          {
-            type: 'text',
-            text: '請用繁體中文詳細描述這張圖片的內容，包括：產品外觀、文字、顏色、圖表數據、圖示等所有重要資訊。150字以內。',
-          },
-        ],
-      }],
-    });
-    return (res.content[0] as Anthropic.TextBlock).text.trim();
-  } catch {
-    return '圖片內容無法識別';
-  }
-}
-
-/**
- * 儲存一筆 knowledge 條目（呼叫 /api/knowledge POST）
- */
-async function saveKnowledge(
-  baseUrl: string,
-  characterId: string,
-  title: string,
-  content: string,
-  category: string,
-  imageUrl?: string,
-): Promise<string | null> {
-  try {
-    const body: Record<string, string> = { characterId, title, content, category };
-    if (imageUrl) body.imageUrl = imageUrl;
-
-    const res = await fetch(`${baseUrl}/api/knowledge`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    const data = await res.json();
-    return data.id || null;
-  } catch {
-    return null;
-  }
 }
 
 // ===== 主流程 =====
@@ -173,92 +200,113 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: '只支援 .pdf、.docx、.md、.txt' }, { status: 400 });
     }
 
-    const apiKey = process.env.ANTHROPIC_API_KEY || '';
-    const client = new Anthropic({ apiKey });
     const buffer = Buffer.from(await file.arrayBuffer());
     const baseUrl = req.nextUrl.origin;
+    const db = getFirestore();
 
-    let markdown = '';
     const imageIds: string[] = [];
     let imageFailed = 0;
+    const textIds: string[] = [];
+    let textFailed = 0;
+    let productCardId: string | null = null;
 
     if (ext === 'docx') {
-      // ===== DOCX：文字 + 圖片獨立建檔 =====
+      // ===== DOCX V2：確定性解析，產出產品主檔 =====
       const mammoth = await import('mammoth');
 
-      // 先拿純文字（給後面文字分塊用）
-      const rawResult = await mammoth.extractRawText({ buffer });
-      markdown = rawResult.value;
-
-      // 轉 HTML，帶完整 base64（圖說與圖片在同一個 <th>/<td> 裡）
-      // 用 HTML 解析同一格的圖說 + base64，對應絕對準確
+      // convertToHtml with base64 images
+      // convertToHtml 預設就把圖片 inline 為 base64 data URI
       const htmlResult = await mammoth.convertToHtml({ buffer });
       const htmlStr = htmlResult.value;
 
-      // 從 <th> 或 <td> 裡同時抽圖說文字和 base64 圖片
-      // 格式：<th><p>圖說文字<img src="data:image/png;base64,..." /></p></th>
-      const cellRegex = /<t[hd][^>]*>([\s\S]*?)<\/t[hd]>/gi;
-      const imgSrcRegex = /src="data:(image\/[^;]+);base64,([A-Za-z0-9+/=]+)"/;
-      const textRegex = /<[^>]+>/g;
+      // 解析產品結構
+      const product = parseProductHtml(htmlStr);
 
-      let cellMatch;
-      let imgIndex = 0;
-      while ((cellMatch = cellRegex.exec(htmlStr)) !== null) {
-        const cellHtml = cellMatch[1];
-        const imgMatch = imgSrcRegex.exec(cellHtml);
-        if (!imgMatch) continue; // 沒有圖片的格跳過
+      // ── 圖片：從最後的 table 抽 caption + base64 ──
+      const imageMap: Record<string, string> = {};
+      const tables = [...htmlStr.matchAll(/<table[^>]*>(.*?)<\/table>/g)];
+      if (tables.length > 0) {
+        const lastTableHtml = tables[tables.length - 1][1];
+        const cellRegex = /<t[hd][^>]*>([\s\S]*?)<\/t[hd]>/gi;
+        const imgSrcRegex = /src="data:(image\/[^;]+);base64,([A-Za-z0-9+/=]+)"/;
+        const textRegex = /<[^>]+>/g;
+        let cellMatch;
+        let imgIndex = 0;
+        while ((cellMatch = cellRegex.exec(lastTableHtml)) !== null) {
+          const cellHtml = cellMatch[1];
+          const imgMatch = imgSrcRegex.exec(cellHtml);
+          if (!imgMatch) continue;
+          imgIndex++;
+          try {
+            const contentType = imgMatch[1];
+            const base64 = imgMatch[2];
+            const rawText = cellHtml.replace(imgSrcRegex, '').replace(textRegex, ' ').replace(/\s+/g, ' ').trim();
+            const caption = rawText.replace(/\s*\u00a0\s*/g, ' ').trim();
+            const imageUrl = await uploadImageToStorage(base64, contentType, characterId, imgIndex);
+            const title = caption || `${product.productName} — 圖片 ${imgIndex}`;
+            const id = await saveKnowledge(baseUrl, characterId, title, `圖片網址：${imageUrl}`, 'image', imageUrl, product.productName);
+            if (id) imageIds.push(id);
+            else imageFailed++;
+            // images map（供產品主檔用）
+            const key = captionToKey(caption);
+            imageMap[key] = imageUrl;
+          } catch { imageFailed++; }
+        }
+      }
 
-        imgIndex++;
-        try {
-          const contentType = imgMatch[1]; // e.g. image/png
-          const base64 = imgMatch[2];
+      // ── 文字段落存 knowledge（每個 H2 一條，帶 productName）──
+      for (const section of product.sections) {
+        const id = await saveKnowledge(baseUrl, characterId, section.title, section.content, category, undefined, product.productName);
+        if (id) textIds.push(id);
+        else textFailed++;
+      }
 
-          // 抽圖說文字：移除 HTML 標籤，取純文字
-          const rawText = cellHtml.replace(imgSrcRegex, '').replace(textRegex, ' ').replace(/\s+/g, ' ').trim();
-          const caption = rawText.replace(/\s* \s*/g, ' ').trim(); // 移除 &nbsp;
+      // ── 產品主檔存 platform_products ──
+      if (product.productName) {
+        // 先刪舊的（重複上傳時更新）
+        const existSnap = await db.collection('platform_products')
+          .where('characterId', '==', characterId)
+          .where('productName', '==', product.productName)
+          .limit(1).get();
+        if (!existSnap.empty) await existSnap.docs[0].ref.delete();
 
-          // 上傳圖片到 Firebase Storage
-          const imageUrl = await uploadImageToStorage(base64, contentType, characterId, imgIndex);
-
-          // 圖片獨立存成 knowledge 條目
-          // title = 圖說文字（同格，絕對準確），沒有才用 filename — 圖片 N
-          const title = caption || `${file.name} — 圖片 ${imgIndex}`;
-          const knowledgeContent = `圖片網址：${imageUrl}`;
-          const id = await saveKnowledge(baseUrl, characterId, title, knowledgeContent, 'image', imageUrl);
-          if (id) imageIds.push(id);
-          else imageFailed++;
-        } catch { imageFailed++; }
-      } // end while cellMatch
+        const ref = await db.collection('platform_products').add({
+          characterId,
+          productName: product.productName,
+          brand: product.brand,
+          productType: product.productType,
+          positioning: product.positioning,
+          ingredients: product.ingredients,
+          effects: product.effects,
+          usage: product.usage,
+          suitableFor: product.suitableFor,
+          cautions: product.cautions,
+          images: imageMap,
+          knowledgeIds: [...textIds, ...imageIds],
+          sourceFile: file.name,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        });
+        productCardId = ref.id;
+      }
 
     } else if (ext === 'md' || ext === 'txt') {
-      // ===== Markdown / 純文字：直接讀取，不需要額外解析器 =====
-      markdown = buffer.toString('utf-8');
+      const markdown = buffer.toString('utf-8');
+      const chunks = chunkMarkdown(markdown, file.name);
+      for (const chunk of chunks) {
+        const id = await saveKnowledge(baseUrl, characterId, chunk.title, chunk.content, category);
+        if (id) textIds.push(id); else textFailed++;
+      }
 
     } else {
-      // ===== PDF：pdf-parse（純文字）=====
+      // PDF
       const pdfParse = await import('pdf-parse');
       const pdfParser = (pdfParse as unknown as { default: (buf: Buffer) => Promise<{ text: string }> }).default || pdfParse;
       const data = await pdfParser(buffer);
-      markdown = data.text;
-    }
-
-    // ===== 文字分塊存知識庫 =====
-    const textIds: string[] = [];
-    let textFailed = 0;
-
-    if (markdown.trim()) {
-      const chunks = chunkMarkdown(markdown, file.name);
-      for (let i = 0; i < chunks.length; i++) {
-        const chunk = chunks[i];
-        const id = await saveKnowledge(
-          baseUrl,
-          characterId,
-          chunk.title || `${file.name} — 段落 ${i + 1}`,
-          chunk.content,
-          category,
-        );
-        if (id) textIds.push(id);
-        else textFailed++;
+      const chunks = chunkMarkdown(data.text, file.name);
+      for (const chunk of chunks) {
+        const id = await saveKnowledge(baseUrl, characterId, chunk.title, chunk.content, category);
+        if (id) textIds.push(id); else textFailed++;
       }
     }
 
@@ -266,6 +314,7 @@ export async function POST(req: NextRequest) {
       success: true,
       filename: file.name,
       format: ext,
+      productCard: productCardId ? { id: productCardId } : null,
       text: { chunks: textIds.length, failed: textFailed, ids: textIds },
       images: { chunks: imageIds.length, failed: imageFailed, ids: imageIds },
     });

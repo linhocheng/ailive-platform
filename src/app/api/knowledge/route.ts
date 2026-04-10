@@ -74,7 +74,7 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const db = getFirestore();
-    const { characterId, title, content, category, imageUrl } = await req.json();
+    const { characterId, title, content, category, imageUrl, productName } = await req.json();
 
     if (!characterId || !content) {
       return NextResponse.json({ error: 'characterId, content 必填' }, { status: 400 });
@@ -121,6 +121,7 @@ export async function POST(req: NextRequest) {
       summary,                    // 15字核心觀點，常駐注入用
       category: category || 'general',
       ...(imageUrl ? { imageUrl } : {}),
+      ...(productName ? { productName: String(productName) } : {}),
       hitCount: 100,              // 天命初始值高，永遠優先於後天 insights
       tier: 'native',             // 原生天命，不參與升降級，不被蒸餾
       ...(embedding ? { embedding } : {}),

@@ -162,6 +162,17 @@ const PLATFORM_TOOLS: Anthropic.Tool[] = [
     },
   },
   {
+    name: 'query_product_card',
+    description: '查詢特定產品的完整資料，包括所有圖片URL、成分、功效、使用方法。當需要生圖、寫發文、介紹某個產品時，用這個而不是 query_knowledge_base。直接從產品主檔拿，不靠語意搜尋，結果100%精準。',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        product_name: { type: 'string', description: '產品名稱，可以只說關鍵字，例如「卸妝露」「慕斯花」「精華霜」「潤白凝霜」' },
+      },
+      required: ['product_name'],
+    },
+  },
+  {
     name: 'query_posts',
     description: '查看自己的貼文草稿列表。當想知道「我最近寫了什麼」「我的草稿在哪」「我上次發了什麼」時，呼叫這個工具查看自己的草稿。',
     input_schema: {
@@ -390,6 +401,44 @@ async function executeTool(
       'growthMetrics.totalPosts': FieldValue.increment(1),
     });
     return `草稿已存！Adam 可以在後台發文管理看到。ID: ${ref.id}`;
+  }
+
+  if (toolName === 'query_product_card') {
+    const productName = String(toolInput.product_name || '');
+    if (!productName) return '需要產品名稱。';
+    const db2 = getFirestore();
+    const snap = await db2.collection('platform_products')
+      .where('characterId', '==', characterId).get();
+    // 模糊比對：query 包含產品名 或 產品名包含 query 後四字
+    const match = snap.docs.find(doc => {
+      const name = String(doc.data().productName || '');
+      return name.includes(productName) || productName.includes(name) ||
+        (name.length >= 4 && productName.includes(name.slice(-4)));
+    });
+    if (!match) return `找不到「${productName}」的產品資料。`;
+    const card = match.data();
+    const imageList = Object.entries(card.images || {})
+      .filter(([, url]) => url)
+      .map(([angle, url]) => `  ${angle}：${url}`)
+      .join('\n');
+    const ingList = (card.ingredients || [])
+      .map((i: {name:string; effect:string}) => `${i.name}（${i.effect}）`)
+      .join('、');
+    return `【${card.productName}】
+品牌：${card.brand} ｜ 類型：${card.productType}
+
+定位：${card.positioning}
+
+成分：${ingList}
+
+功效：${(card.effects || []).join('、')}
+
+適合：${(card.suitableFor || []).join('、')}
+
+使用方式：${(card.usage || []).join(' → ')}
+
+圖片（${Object.keys(card.images || {}).length} 張，生圖時填入 reference_image_url）：
+${imageList}`;
   }
 
   if (toolName === 'query_posts') {
