@@ -985,11 +985,16 @@ ${convData.userProfile ? `【我認識這個人】\n${convData.userProfile}\n\n`
           let haikuOutputTokens = 0;
 
           for (let turn = 0; turn < 10; turn++) {
+            // Haiku 不支援 web_search server-side tool
+            const activeTools = gear === 'haiku'
+              ? dynamicTools
+              : [WEB_SEARCH_TOOL, ...dynamicTools];
+
             const streamMsg = client.messages.stream({
               model: selectedModel,
               max_tokens: selectedMaxTokens,
               system: systemBlocks as any,  // Prompt Caching blocks
-              tools: [WEB_SEARCH_TOOL, ...dynamicTools],
+              tools: activeTools,
               tool_choice: { type: 'auto' },
               messages: currentMessages,
             });
@@ -1028,7 +1033,12 @@ ${convData.userProfile ? `【我認識這個人】\n${convData.userProfile}\n\n`
               const toolResults: Anthropic.ToolResultBlockParam[] = [];
               for (const tb of toolUseBlocks) {
                 toolsUsed.push(tb.name);
-                if (tb.name === 'web_search') continue;
+                // web_search 是 server-side tool，Anthropic 自己執行，
+                // 但 tool_result 必須補上，否則下一輪 400
+                if (tb.name === 'web_search') {
+                  toolResults.push({ type: 'tool_result', tool_use_id: tb.id, content: '' });
+                  continue;
+                }
                 const result = await executeTool(
                   tb.name, tb.input as Record<string, unknown>, characterId,
                   (inp, out) => { haikuInputTokens += inp; haikuOutputTokens += out; },
