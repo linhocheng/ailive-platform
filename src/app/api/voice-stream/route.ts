@@ -241,6 +241,11 @@ export async function POST(req: NextRequest) {
             description: '（謀師專用）對指定角色發起覺醒引導。語音引導角色完成自我覺察。',
             input_schema: { type: 'object' as const, properties: { target_character_id: { type: 'string' }, target_character_name: { type: 'string' } }, required: ['target_character_id'] },
           },
+          {
+            name: 'query_product_card',
+            description: '查某款產品的完整資料（成分、功效、圖片URL）。聊到產品、要生圖、要介紹某款時，用這個而不是 query_knowledge_base。直接拿，100% 準確。',
+            input_schema: { type: 'object' as const, properties: { product_name: { type: 'string', description: '產品關鍵字，例如「卸妝露」「慕斯花」「精華霜」' } }, required: ['product_name'] },
+          },
         ];
         const WEB_SEARCH = { type: 'web_search_20250305', name: 'web_search' } as unknown as Anthropic.Tool;
 
@@ -407,6 +412,29 @@ export async function POST(req: NextRequest) {
               summary.push(`謀師：${q}\n${targetName}：${lastAnswer}`);
             }
             return `引導完成（5 輪）：\n${summary.join('\n\n')}`;
+          }
+
+          if (toolName === 'query_product_card') {
+            const productName = String(toolInput.product_name || '');
+            if (!productName) return '需要產品名稱。';
+            const { getFirestore } = await import('@/lib/firebase-admin');
+            const db2 = getFirestore();
+            const snap = await db2.collection('platform_products').where('characterId', '==', characterId).get();
+            const match = snap.docs.find((doc: FirebaseFirestore.QueryDocumentSnapshot) => {
+              const name = String(doc.data().productName || '');
+              return name.includes(productName) || productName.includes(name) ||
+                (name.length >= 4 && productName.includes(name.slice(-4)));
+            });
+            if (!match) return `找不到「${productName}」的產品資料。`;
+            const card = match.data();
+            const imageList = Object.entries(card.images || {})
+              .filter(([, url]) => url)
+              .map(([angle, url]) => `${angle}：${url}`)
+              .join('\n');
+            const ingList = (card.ingredients || [])
+              .map((i: {name:string; effect:string}) => `${i.name}（${i.effect}）`)
+              .join('、');
+            return `【${card.productName}】成分：${ingList}\n功效：${(card.effects||[]).join('、')}\n圖片：\n${imageList}`;
           }
 
           return '未知工具';
