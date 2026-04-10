@@ -19,6 +19,7 @@ import { NextRequest } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
 import { withRetry } from '@/lib/anthropic-retry';
 import { detectGear, MODELS, getMaxTokens } from '@/lib/llm-router';
+import { callGemini } from '@/lib/gemini-client';
 import { getFirestore } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 import { trackCost } from '@/lib/cost-tracker';
@@ -686,15 +687,10 @@ ${recentMessages}` }],
                 { role: 'user', content: message },
                 { role: 'assistant', content: fullText },
               ].map(m => `${m.role === 'user' ? '用戶' : '角色'}：${String(m.content || '').slice(0, 80)}`).join('\n');
-              const sessionRes = await client.messages.create({
-                model: 'claude-haiku-4-5-20251001',
-                max_tokens: 120,
-                messages: [{
-                  role: 'user',
-                  content: `根據以下對話，用繁體中文寫一段「當下狀態」，給角色看的，讓角色下一輪說話時感覺有連續性。\n格式固定：\n【當下狀態】\n情緒：（用戶現在的情緒/狀態，5-10字）\n話題：（我們正在聊什麼，10-20字）\n未竟：（我剛說要做什麼或用戶期待什麼，10-20字，沒有就寫「無」）\n\n只輸出這三行，不要其他文字。\n\n對話：\n${recentForSession}`,
-                }],
-              });
-              const sessionState = (sessionRes.content[0] as { text: string }).text.trim();
+              const sessionState = await callGemini(
+                `根據以下對話，用繁體中文寫一段「當下狀態」，給角色看的，讓角色下一輪說話時感覺有連續性。\n格式固定：\n【當下狀態】\n情緒：（用戶現在的情緒/狀態，5-10字）\n話題：（我們正在聊什麼，10-20字）\n未竟：（我剛說要做什麼或用戶期待什麼，10-20字，沒有就寫「無」）\n\n只輸出這三行，不要其他文字。\n\n對話：\n${recentForSession}`,
+                { maxTokens: 120 }
+              ) || '';
               await redis.set(`session:${convId}`, sessionState, 60 * 60 * 24);
             } catch { /* 不阻斷 */ }
           })();

@@ -15,6 +15,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
 import { withRetry } from '@/lib/anthropic-retry';
 import { detectGear, MODELS, getMaxTokens } from '@/lib/llm-router';
+import { callGemini } from '@/lib/gemini-client';
 import { getFirestore } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 import { generateEmbedding, cosineSimilarity } from '@/lib/embeddings';
@@ -1138,13 +1139,12 @@ ${convData.userProfile ? `【我認識這個人】\n${convData.userProfile}\n\n`
                 const compressText = olderMessages
                   .map(m => `${String(m.role) === 'user' ? '用戶' : '角色'}：${String(m.content || '').slice(0, 100)}`)
                   .join('\n');
-                const compressRes = await client.messages.create({
-                  model: 'claude-haiku-4-5-20251001',
-                  max_tokens: 200,
-                  messages: [{ role: 'user', content: `以下是對話的早期段落，請用 3-5 句話壓縮成摘要，保留重要的人名、話題、關係資訊。直接輸出摘要，不要標題。\n\n${compressText}` }],
-                });
-                const newSummary = (compressRes.content[0] as Anthropic.TextBlock).text.trim();
-                await trackCost(characterId, 'claude-haiku-4-5-20251001', compressRes.usage?.input_tokens ?? 0, compressRes.usage?.output_tokens ?? 0);
+                const compressSummary = await callGemini(
+                  `以下是對話的早期段落，請用 3-5 句話壓縮成摘要，保留重要的人名、話題、關係資訊。直接輸出摘要，不要標題。\n\n${compressText}`,
+                  { maxTokens: 200 }
+                );
+                const newSummary = compressSummary || '';
+                if (!newSummary) throw new Error('Gemini 壓縮失敗');
                 const existingSummary = String(convData.summary || '');
                 const mergedSummary = existingSummary ? `${existingSummary}\n${newSummary}` : newSummary;
                 await convRef!.update({ messages: allMessages.slice(-10), summary: mergedSummary.slice(-500) });
@@ -1159,14 +1159,11 @@ ${convData.userProfile ? `【我認識這個人】\n${convData.userProfile}\n\n`
               .join('\n');
             const existingProfile = String(convData.userProfile || '');
             try {
-              const profileRes = await client.messages.create({
-                model: 'claude-haiku-4-5-20251001',
-                max_tokens: 150,
-                messages: [{ role: 'user', content: `根據以下對話，用 2-3 句話更新「我對這個用戶的了解」。\n聚焦在：他叫什麼、他的喜好/個性/生活情況、我們的關係感覺。\n${existingProfile ? `目前已知：${existingProfile}\n\n` : ''}新的對話：\n${profileMessages}\n\n直接輸出更新後的描述，不要標題，不超過 100 字。` }],
-              });
-              const newProfile = (profileRes.content[0] as Anthropic.TextBlock).text.trim();
-              await trackCost(characterId, 'claude-haiku-4-5-20251001', profileRes.usage?.input_tokens ?? 0, profileRes.usage?.output_tokens ?? 0);
-              await convRef.update({ userProfile: newProfile });
+              const newProfile = await callGemini(
+                `根據以下對話，用 2-3 句話更新「我對這個用戶的了解」。\n聚焦在：他叫什麼、他的喜好/個性/生活情況、我們的關係感覺。\n${existingProfile ? `目前已知：${existingProfile}\n\n` : ''}新的對話：\n${profileMessages}\n\n直接輸出更新後的描述，不要標題，不超過 100 字。`,
+                { maxTokens: 150 }
+              );
+              if (newProfile) await convRef.update({ userProfile: newProfile });
             } catch { /* 不阻斷 */ }
           }
 
@@ -1199,13 +1196,11 @@ ${convData.userProfile ? `【我認識這個人】\n${convData.userProfile}\n\n`
               try {
                 const recentForSession = newMessages.slice(-6)
                   .map(m => `${String(m.role) === 'user' ? '用戶' : '角色'}：${String(m.content || '').slice(0, 80)}`).join('\n');
-                const sessionRes = await client.messages.create({
-                  model: 'claude-haiku-4-5-20251001',
-                  max_tokens: 120,
-                  messages: [{ role: 'user', content: `根據以下對話，用繁體中文寫一段「當下狀態」，給角色看的，讓角色下一輪說話時感覺有連續性。\n格式固定：\n【當下狀態】\n情緒：（用戶現在的情緒/狀態，5-10字）\n話題：（我們正在聊什麼，10-20字）\n未竟：（我剛說要做什麼或用戶期待什麼，10-20字，沒有就寫「無」）\n\n只輸出這三行，不要其他文字。\n\n對話：\n${recentForSession}` }],
-                });
-                const sessionState = (sessionRes.content[0] as { text: string }).text.trim();
-                await redis.set(`session:${characterId}:${userId}`, sessionState, 60 * 60 * 24);
+                const sessionState = await callGemini(
+                  `根據以下對話，用繁體中文寫一段「當下狀態」，給角色看的，讓角色下一輪說話時感覺有連續性。\n格式固定：\n【當下狀態】\n情緒：（用戶現在的情緒/狀態，5-10字）\n話題：（我們正在聊什麼，10-20字）\n未竟：（我剛說要做什麼或用戶期待什麼，10-20字，沒有就寫「無」）\n\n只輸出這三行，不要其他文字。\n\n對話：\n${recentForSession}`,
+                  { maxTokens: 120 }
+                );
+                if (sessionState) await redis.set(`session:${characterId}:${userId}`, sessionState, 60 * 60 * 24);
               } catch { /* session 更新失敗 */ }
             })();
           }
