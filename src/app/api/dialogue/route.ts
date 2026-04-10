@@ -227,134 +227,19 @@ async function executeTool(
   const db = getFirestore();
 
   if (toolName === 'query_knowledge_base') {
-    const query  = String(toolInput.query || '');
-    const limit  = Number(toolInput.limit || 10);
-    const THRESHOLD = 0.3;
-
-    // 並行拉資料
-    const [knowledgeSnap, insightSnap] = await Promise.all([
-      db.collection('platform_knowledge').where('characterId', '==', characterId).limit(200).get(),
-      db.collection('platform_insights').where('characterId', '==', characterId).limit(100).get(),
-    ]);
-    const knowledgeDocs: Record<string, unknown>[] = knowledgeSnap.docs.map(d => ({ _id: d.id, _type: 'knowledge', ...d.data() }));
-    const insightDocs:   Record<string, unknown>[] = insightSnap.docs.map(d  => ({ _id: d.id, _type: 'insight',   ...d.data() }));
-
-    // ── Step 1：知識（天命） ──
-    // 動態提取產品名（title 格式：「品牌 產品名 — 面向」）
-    const productNames = Array.from(new Set(
-      knowledgeDocs
-        .map(d => String(d.title || '').split('—')[0].trim())
-        .filter(n => n.length > 2)
-    ));
-
-    // 偵測 query 是否含有產品名（含/不含品牌前綴皆算）
-    const matchedProduct = productNames.find(p => {
-      if (query.includes(p)) return true;
-      const shortName = p.includes(' ') ? p.split(' ').slice(1).join(' ') : p;
-      return shortName.length > 2 && query.includes(shortName);
+    // 拆出到 /api/tools/knowledge-search，獨立維護
+    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'https://ailive-platform.vercel.app';
+    const res = await fetch(`${baseUrl}/api/tools/knowledge-search`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ characterId, query: toolInput.query || '', limit: toolInput.limit || 10 }),
     });
-
-    let knowledgeResults: Record<string, unknown>[] = [];
-    let queryEmbedding: number[] | null = null;
-
-    if (matchedProduct) {
-      // 有產品名 → 結構匹配，不用 embedding，直接撈出該產品全部條目
-      // 注意：圖片條目 title 可能沒有品牌前綴，用 shortName 補判斷
-      const shortMatchName = matchedProduct.includes(' ')
-        ? matchedProduct.split(' ').slice(1).join(' ')
-        : matchedProduct;
-      knowledgeResults = knowledgeDocs.filter(d => {
-        const t = String(d.title || '');
-        return t.startsWith(matchedProduct) || t.startsWith(shortMatchName);
-      });
-    } else {
-      // 無產品名 → 語意搜尋（排除圖片條目，避免短 title 污染分數）
-      const knowledgeWithEmb = knowledgeDocs.filter(d =>
-        d.embedding && Array.isArray(d.embedding) && d.category !== 'image'
-      );
-      if (knowledgeWithEmb.length > 0) {
-        queryEmbedding = await generateEmbedding(query);
-        knowledgeResults = knowledgeWithEmb
-          .map(d => ({ ...d, _score: cosineSimilarity(queryEmbedding!, d.embedding as number[]) }))
-          .filter(d => (d._score as number) >= THRESHOLD)
-          .sort((a, b) => (b._score as number) - (a._score as number))
-          .slice(0, limit);
-      }
-    }
-
-    // ── Step 2：記憶（insights）永遠語意搜尋 ──
-    let insightResults: Record<string, unknown>[] = [];
-    const insightWithEmb = insightDocs.filter(d => d.embedding && Array.isArray(d.embedding));
-    if (insightWithEmb.length > 0) {
-      if (!queryEmbedding) queryEmbedding = await generateEmbedding(query); // 複用或新生成
-      insightResults = insightWithEmb
-        .map(d => ({ ...d, _score: cosineSimilarity(queryEmbedding!, d.embedding as number[]) }))
-        .filter(d => (d._score as number) >= THRESHOLD)
-        .sort((a, b) => (b._score as number) - (a._score as number))
-        .slice(0, 5);
-    }
-
-    const scored = [...knowledgeResults, ...insightResults];
-    if (scored.length === 0) return '（沒有找到相關資料）';
-
-    // hitCount +1（非同步，不擋主流程）
-    void Promise.all(scored.map(item => {
-      const doc = item as Record<string, unknown>;
-      const col = doc._type === 'insight' ? 'platform_insights' : 'platform_knowledge';
-      if (!doc._id) return;
-      return db.collection(col).doc(doc._id as string).update({
-        hitCount: FieldValue.increment(1),
-        lastHitAt: new Date().toISOString(),
-      }).catch(() => {});
-    }));
-
-    // 組 context 字串
-    const rawContext = scored.map(item => {
-      const d   = item as Record<string, unknown>;
-      const score = (d._score as number) || 0;
-      const tag = d._type === 'knowledge' ? `[天命・${d.category || '一般'}]` : '[記憶]';
-      const body = d._type === 'knowledge'
-        ? String(d.content || d.summary || '').slice(0, 300)
-        : String(d.content || '').slice(0, 150);
-      const imgLine = (d._type === 'knowledge' && d.imageUrl)
-        ? `\n[產品圖 imageUrl: ${d.imageUrl}]（生圖時把這個 URL 填入 reference_image_url）`
-        : '';
-      const scoreLabel = score > 0 ? ` (相似度${(score * 100).toFixed(0)}%)` : '';
-      return `${tag} ${d.title || ''}：${body}${imgLine}${scoreLabel}`;
-    }).join('\n\n');
-
-    // Haiku 推理（2 條以上時，整合多筆結果）
-    if (scored.length >= 2) {
-      try {
-        const Anthropic2 = (await import('@anthropic-ai/sdk')).default;
-        const haikuClient = new Anthropic2({ apiKey: process.env.ANTHROPIC_API_KEY || '' });
-        const reasonRes = await haikuClient.messages.create({
-          model: 'claude-haiku-4-5-20251001',
-          max_tokens: 400,
-          messages: [{
-            role: 'user',
-            content: `以下是知識庫搜尋結果，問題是「${query}」：\n\n${rawContext}\n\n請用2-3句話整理：這些條目裡有哪些關鍵資訊？有沒有可以直接用的圖片URL？直接輸出整理結果，不要標題不要列點。`,
-          }],
-        });
-        onHaikuTokens?.(reasonRes.usage?.input_tokens ?? 0, reasonRes.usage?.output_tokens ?? 0);
-        const reasoned = (reasonRes.content[0] as { text: string }).text.trim();
-        const top3 = scored.slice(0, 3).map(item => {
-          const d = item as Record<string, unknown>;
-          const tag  = d._type === 'knowledge' ? `[天命・${d.category || '一般'}]` : '[記憶]';
-          const body = d._type === 'knowledge'
-            ? String(d.content || d.summary || '').slice(0, 150)
-            : String(d.content || '').slice(0, 100);
-          const img  = (d._type === 'knowledge' && d.imageUrl) ? `\n[產品圖 imageUrl: ${d.imageUrl}]` : '';
-          return `${tag} ${d.title || ''}：${body}${img}`;
-        }).join('\n\n');
-        return `${reasoned}\n\n---\n${top3}`;
-      } catch {
-        return rawContext;
-      }
-    }
-
-    return rawContext;
+    if (!res.ok) return '（知識庫查詢失敗）';
+    const data = await res.json() as { result?: string; haikuTokens?: { input: number; output: number } };
+    if (data.haikuTokens) onHaikuTokens?.(data.haikuTokens.input, data.haikuTokens.output);
+    return data.result || '（沒有找到相關資料）';
   }
+
 
   if (toolName === 'remember') {
     const title = String(toolInput.title || '');
