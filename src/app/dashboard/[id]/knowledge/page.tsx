@@ -26,6 +26,8 @@ export default function KnowledgePage() {
 
   const [uploadStatus, setUploadStatus] = useState<'idle' | 'uploading' | 'parsing' | 'done' | 'error'>('idle');
   const [uploadMsg, setUploadMsg] = useState('');
+  const [resourceStatus, setResourceStatus] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
+  const [resourceMsg, setResourceMsg] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const load = () => {
@@ -122,6 +124,26 @@ export default function KnowledgePage() {
 
   const isUploading = uploadStatus === 'uploading' || uploadStatus === 'parsing';
 
+  const triggerResourceAwareness = async () => {
+    setResourceStatus('running');
+    setResourceMsg('掃描中...');
+    try {
+      const res = await fetch('/api/tools/resource-awareness', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ characterId: id }),
+      });
+      const data = await res.json() as { success?: boolean; summary?: { images: number; products: number; textDocs: number; urlCount: number }; error?: string };
+      if (!data.success) throw new Error(data.error || '失敗');
+      const s = data.summary!;
+      setResourceStatus('done');
+      setResourceMsg(`✅ 已更新：${s.products} 款產品、${s.images} 張圖（${s.urlCount} 個 URL）、${s.textDocs} 份文件`);
+    } catch (e) {
+      setResourceStatus('error');
+      setResourceMsg(`❌ ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+
   // 統計各 category 數量
   const categoryCount = items.reduce<Record<string, number>>((acc, item) => {
     acc[item.category] = (acc[item.category] || 0) + 1;
@@ -152,6 +174,31 @@ export default function KnowledgePage() {
 
         {/* 左側 */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+
+          {/* 資源認知 */}
+          <div style={{ background: '#fff', border: '1px solid #e0e0e0', borderRadius: 12, padding: 20 }}>
+            <h3 style={{ margin: '0 0 6px', fontSize: 15 }}>🔍 資源認知</h3>
+            <p style={{ margin: '0 0 12px', fontSize: 12, color: '#888' }}>讓角色知道自己有哪些知識、圖片與 URL，下次對話時能直接調用</p>
+            <button
+              onClick={triggerResourceAwareness}
+              disabled={resourceStatus === 'running'}
+              style={{
+                width: '100%', background: resourceStatus === 'running' ? '#f5f5f5' : '#f0f8ff',
+                border: `1px solid ${resourceStatus === 'running' ? '#ddd' : '#70b8ff'}`,
+                borderRadius: 8, padding: '12px 10px',
+                cursor: resourceStatus === 'running' ? 'default' : 'pointer',
+                fontSize: 14, color: resourceStatus === 'running' ? '#999' : '#1a6cc8', fontWeight: 600,
+              }}
+            >
+              {resourceStatus === 'running' ? '⏳ 掃描中...' : '🔍 更新資源認知'}
+            </button>
+            {resourceStatus === 'done' && (
+              <div style={{ marginTop: 10, padding: '10px 12px', background: '#e8f5e9', borderRadius: 8, fontSize: 13, color: '#2e7d32' }}>{resourceMsg}</div>
+            )}
+            {resourceStatus === 'error' && (
+              <div style={{ marginTop: 10, padding: '10px 12px', background: '#ffebee', borderRadius: 8, fontSize: 13, color: '#c00' }}>{resourceMsg}</div>
+            )}
+          </div>
 
           {/* 上傳文件 */}
           <div style={{ background: '#fff', border: '1px solid #e0e0e0', borderRadius: 12, padding: 20 }}>
