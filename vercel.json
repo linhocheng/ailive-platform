@@ -8,6 +8,12 @@
   "functions": {
     "src/app/api/knowledge-upload/route.ts": {
       "maxDuration": 120
+    },
+    "src/app/api/voice-stream/route.ts": {
+      "maxDuration": 120
+    },
+    "src/app/api/dialogue/route.ts": {
+      "maxDuration": 120
     }
   }
 }

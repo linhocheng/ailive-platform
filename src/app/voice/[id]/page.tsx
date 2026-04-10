@@ -47,7 +47,7 @@ const FLOW: Record<string, FlowParams> = {
 };
 
 const STATE_LABEL: Record<VoiceState, string> = {
-  idle: '( 通話 )', recording: '( 錄音中 )', processing: '( 思考中 )', playing: '( 播放中 )', ending: '( 整理中 )',
+  idle: '( 通話 )', recording: '( 錄音中 )', processing: '', playing: '( 播放中 )', ending: '( 整理中 )',
 };
 
 export default function VoicePage() {
@@ -55,6 +55,7 @@ export default function VoicePage() {
   const [char, setChar] = useState<Character | null>(null);
   const [state, setState] = useState<VoiceState>('idle');
   const [interimText, setInterimText] = useState('');
+  const [processingLabel, setProcessingLabel] = useState('( 思考中 )');
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [endDone, setEndDone] = useState(false);
@@ -160,7 +161,10 @@ export default function VoicePage() {
   const sendToDialogue = useCallback(async (userText: string) => {
     if (!userText.trim()) { setVoiceState('idle'); return; }
     setInterimText('');
+    setProcessingLabel('( 思考中 )');
     setVoiceState('processing');
+    // 思考超過 5 秒，換成「查詢中」提示用戶知道在網路查資料
+    const thinkingTimer = setTimeout(() => setProcessingLabel('( 查詢中 )'), 5000);
     try {
       const res = await fetch('/api/voice-stream', {
         method: 'POST', headers: {'Content-Type':'application/json'},
@@ -210,6 +214,8 @@ export default function VoicePage() {
           try {
             const ev = JSON.parse(line.slice(6)) as {type:string;content?:string;chunk?:string;conversationId?:string;fullText?:string;message?:string};
             if (ev.type==='text'&&ev.content) {
+              clearTimeout(thinkingTimer);
+              setProcessingLabel('( 回應中 )');
               if (mseSupported && !audio) initMSEAudio();
               fullReplyText+=ev.content;
             }
@@ -256,8 +262,8 @@ export default function VoicePage() {
       // 播完：先讓粒子慢下來再切 idle
       setVoiceState('ending');
       setTimeout(() => setVoiceState('idle'), 800);
-    } catch { setVoiceState('idle'); }
-  }, [characterId, conversationId, setVoiceState]);
+    } catch { clearTimeout(thinkingTimer); setVoiceState('idle'); }
+  }, [characterId, conversationId, setVoiceState, setProcessingLabel]);
 
   // ── Web Speech API ──
   const isRecordingRef = useRef(false); // 追蹤「用戶是否還在錄音」，用於自動重啟判斷
@@ -444,7 +450,7 @@ export default function VoicePage() {
           color: state==='idle' ? 'rgba(255,255,255,0.6)' : state==='recording' ? '#ff3b30' : state==='processing' ? '#ffffff' : state==='playing' ? '#00f2ff' : 'rgba(255,255,255,0.6)',
           transition:'all 0.8s ease',
         }}>
-          {STATE_LABEL[state]}
+          {state === 'processing' ? processingLabel : STATE_LABEL[state]}
         </div>
 
         {/* 即時辨識文字（錄音時顯示，sonic 風格）*/}
