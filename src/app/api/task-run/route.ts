@@ -271,14 +271,13 @@ export async function POST(req: NextRequest) {
     const db = getFirestore();
     const today = getTaipeiDate();
 
-    // 防重複
+    // 防重複：只查，不寫。record 移到執行成功後才寫（失敗時不擋重試）
     if (taskId) {
       const recordId = `${characterId}-${taskId}-${today}-taskrun`;
       const recordRef = db.collection('platform_proactive_records').doc(recordId);
       if ((await recordRef.get()).exists) {
         return NextResponse.json({ success: true, skipped: true, reason: '今日已執行' });
       }
-      await recordRef.set({ characterId, taskId, taskType, date: today, executedAt: new Date().toISOString() });
     }
 
     // 讀角色資料
@@ -585,6 +584,16 @@ ${soulRef}
           }
         }
       }
+    }
+
+    // 執行成功才寫防重複 record
+    if (taskId) {
+      const recordId = `${characterId}-${taskId}-${today}-taskrun`;
+      await db.collection('platform_proactive_records').doc(recordId).set({
+        characterId, taskId, taskType, date: today,
+        status: 'success',
+        executedAt: new Date().toISOString(),
+      });
     }
 
     return NextResponse.json({
