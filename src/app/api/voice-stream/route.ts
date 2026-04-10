@@ -18,6 +18,7 @@
 import { NextRequest } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
 import { withRetry } from '@/lib/anthropic-retry';
+import { detectGear, MODELS, getMaxTokens } from '@/lib/llm-router';
 import { getFirestore } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 import { trackCost } from '@/lib/cost-tracker';
@@ -469,12 +470,18 @@ export async function POST(req: NextRequest) {
           { role: 'user', content: message },
         ];
 
+        // 變檔器：語音對話
+        const voiceGear = detectGear(message, 0);
+        const voiceModel = MODELS[voiceGear];
+        const voiceMaxTokens = getMaxTokens(voiceGear, true);
+        console.log(`[voice-stream] gear=${voiceGear} model=${voiceModel}`);
+
         for (let turn = 0; turn < 5; turn++) {  // 最多 5 輪支援多工具串接
           const toolChoice = turn === 0
             ? { type: 'tool' as const, name: 'query_knowledge_base' }
             : { type: 'auto' as const };
           const preRes = await withRetry(() => client.messages.create({
-            model: 'claude-sonnet-4-6', max_tokens: 800,
+            model: voiceModel, max_tokens: voiceMaxTokens,
             system: systemPrompt, messages: loopMessages,
             tools: [WEB_SEARCH, ...VOICE_TOOLS], tool_choice: toolChoice,
           }));
@@ -495,8 +502,8 @@ export async function POST(req: NextRequest) {
 
         // 7. Claude streaming（帶工具結果的完整 context）
         const claudeStream = client.messages.stream({
-          model: 'claude-sonnet-4-6',
-          max_tokens: 1500,
+          model: voiceModel,
+          max_tokens: voiceMaxTokens,
           system: systemPrompt,
           messages: loopMessages,
         });

@@ -14,6 +14,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
 import { withRetry } from '@/lib/anthropic-retry';
+import { detectGear, MODELS, getMaxTokens } from '@/lib/llm-router';
 import { getFirestore } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 import { generateEmbedding, cosineSimilarity } from '@/lib/embeddings';
@@ -958,6 +959,13 @@ ${convData.userProfile ? `【我認識這個人】\n${convData.userProfile}\n\n`
     ];
 
     // 5. Claude 對話（支援 tool use loop）— Streaming SSE
+    // 變檔器：根據訊息複雜度自動選模型
+    const messageCount = convData.messageCount as number || 0;
+    const gear = detectGear(message, messageCount);
+    const selectedModel = MODELS[gear];
+    const selectedMaxTokens = getMaxTokens(gear);
+    console.log(`[dialogue] gear=${gear} model=${selectedModel} msg_len=${message.length}`);
+
     const client = new Anthropic({ apiKey });
     const encoder = new TextEncoder();
 
@@ -978,8 +986,8 @@ ${convData.userProfile ? `【我認識這個人】\n${convData.userProfile}\n\n`
 
           for (let turn = 0; turn < 10; turn++) {
             const streamMsg = client.messages.stream({
-              model: 'claude-sonnet-4-6',
-              max_tokens: 4096,
+              model: selectedModel,
+              max_tokens: selectedMaxTokens,
               system: systemBlocks as any,  // Prompt Caching blocks
               tools: [WEB_SEARCH_TOOL, ...dynamicTools],
               tool_choice: { type: 'auto' },
@@ -1106,7 +1114,7 @@ ${convData.userProfile ? `【我認識這個人】\n${convData.userProfile}\n\n`
             'growthMetrics.totalConversations': FieldValue.increment(1),
             updatedAt: new Date().toISOString(),
           });
-          await trackCost(characterId, 'claude-sonnet-4-6', totalInputTokens, totalOutputTokens);
+          await trackCost(characterId, selectedModel, totalInputTokens, totalOutputTokens);
           if (haikuInputTokens + haikuOutputTokens > 0) {
             await trackCost(characterId, 'claude-haiku-4-5-20251001', haikuInputTokens, haikuOutputTokens);
           }
