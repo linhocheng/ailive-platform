@@ -13,7 +13,7 @@
  * Fallback：呼叫失敗時靜默回傳空字串，不阻斷主流程
  */
 
-const GEMINI_MODEL = 'gemini-2.0-flash';
+const GEMINI_MODEL = 'gemini-2.5-flash';  // 2.0-flash 對新帳號停用，改用 2.5-flash
 const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 
 export interface GeminiOptions {
