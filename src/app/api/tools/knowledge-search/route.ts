@@ -70,8 +70,20 @@ export async function POST(req: NextRequest) {
     const textDocs  = allKnowledge.filter(d => d.category !== 'image');
     const imageDocs = allKnowledge.filter(d => d.category === 'image');
 
+    // 從各種 title 格式提取乾淨的產品名
+    // 文字條目：「AVIVA 水光澤潤白凝霜 — 核心成分」→ split('—')
+    // 圖片條目：「水光澤潤白凝霜30g與模特兒半身手持」→ 取數字前 / 「純產品」前
+    const extractProductName = (title: string): string => {
+      if (title.includes('—')) return title.split('—')[0].trim();
+      const numMatch = title.match(/^(.+?)(?:\s*\d+[gGmLmg]+)/);
+      if (numMatch) return numMatch[1].trim();
+      for (const kw of ['純產品', '與模特兒', ' 純']) {
+        if (title.includes(kw)) return title.split(kw)[0].trim();
+      }
+      return title.trim();
+    };
     const productNames = Array.from(new Set(
-      allKnowledge.map(d => String(d.title || '').split('—')[0].trim()).filter(n => n.length > 2)
+      allKnowledge.map(d => extractProductName(String(d.title || ''))).filter(n => n.length > 2)
     ));
     const matchedProduct = productNames.find(p => {
       if (query.includes(p)) return true;
