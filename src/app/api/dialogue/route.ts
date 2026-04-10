@@ -744,6 +744,7 @@ ${awakeningResult}`,
       'reflect', 'scheduler_reflect', 'scheduler_sleep',
       'post_reflection', 'pre_publish_reflection',
       'conversation', 'awakening',
+      'resource_awareness',  // 資源認知索引，讓角色知道自己有哪些素材
     ]);
 
     let episodicBlock = '';
@@ -753,22 +754,31 @@ ${awakeningResult}`,
         .limit(50)
         .get();
 
-      const recentInsights = recentSnap.docs
+      const allFiltered = recentSnap.docs
         .map(d => ({ ...d.data(), id: d.id }))
         .filter((d: Record<string, unknown>) => {
           if (d.tier === 'archive') return false;
-          // 只取 identity 類：有 memoryType 欄位的按欄位判斷，沒有的按 source 判斷
           const mType = String(d.memoryType || '');
           if (mType === 'identity') return true;
           if (mType === 'knowledge') return false;
           return IDENTITY_SOURCES.has(String(d.source || ''));
-        })
+        });
+
+      // 資源認知獨立帶入（完整內容，不截斷，不佔記憶名額）
+      const resourceDoc = allFiltered.find((d: Record<string, unknown>) => d.source === 'resource_awareness') as Record<string, unknown> | undefined;
+      const resourceBlock = resourceDoc
+        ? `\n\n【我的資源清單】\n${String(resourceDoc.content || '')}`
+        : '';
+
+      // 一般記憶：排除資源認知，取最近 3 條
+      const recentInsights = allFiltered
+        .filter((d: Record<string, unknown>) => d.source !== 'resource_awareness')
         .sort((a: Record<string, unknown>, b: Record<string, unknown>) =>
           String(b.eventDate || '').localeCompare(String(a.eventDate || ''))
         )
         .slice(0, 3);
 
-      if (recentInsights.length > 0) {
+      if (recentInsights.length > 0 || resourceBlock) {
         const today = getTaipeiDate();
         const lines = recentInsights.map((ins: Record<string, unknown>) => {
           const eventDate = String(ins.eventDate || '');
@@ -783,7 +793,10 @@ ${awakeningResult}`,
           const tier = ins.tier === 'self' ? '[關於我自己]' : '[記憶]';
           return `- ${tier}${timeLabel} ${String(ins.title || '')}：${String(ins.content || '').slice(0, 80)}`;
         });
-        episodicBlock = `\n\n【最近的事】\n${lines.join('\n')}\n這些是我心裡還留著的片段，自然地帶進對話，不要每句都提。`;
+        const recentBlock = recentInsights.length > 0
+          ? `\n\n【最近的事】\n${lines.join('\n')}\n這些是我心裡還留著的片段，自然地帶進對話，不要每句都提。`
+          : '';
+        episodicBlock = resourceBlock + recentBlock;
       }
     } catch { /* 查不到不阻斷 */ }
 
