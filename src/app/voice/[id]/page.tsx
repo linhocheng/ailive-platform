@@ -318,8 +318,9 @@ export default function VoicePage() {
   const stopWebSpeechAndSend = useCallback(() => {
     isRecordingRef.current=false; // 先關旗，避免 onend 觸發重啟
     const rec=speechRecRef.current; if(rec){try{rec.stop();}catch{} speechRecRef.current=null;}
+    setVoiceState('processing'); // 立刻切換，不等異步
     sendToDialogue((finalTextRef.current+' '+interimText).trim());
-  }, [interimText, sendToDialogue]);
+  }, [interimText, sendToDialogue, setVoiceState]);
 
   // ── Gemini STT fallback ──
   const startGemini = useCallback(async () => {
@@ -335,6 +336,7 @@ export default function VoicePage() {
 
   const stopGeminiAndSend = useCallback(() => {
     const mr=mediaRecorderRef.current; if(!mr) return;
+    setVoiceState('processing'); // 立刻切換，不等 STT 回來
     mr.onstop=async()=>{
       streamRef.current?.getTracks().forEach(t=>t.stop());
       const blobType=mr.mimeType||'audio/webm';
