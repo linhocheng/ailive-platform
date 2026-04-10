@@ -62,7 +62,10 @@ export default function VoicePage() {
   const [usingSpeechAPI, setUsingSpeechAPI] = useState(false);
   useEffect(() => {
     const w = window as any;
-    setUsingSpeechAPI(!!(w.SpeechRecognition || w.webkitSpeechRecognition));
+    const isAndroid = /Android/i.test(navigator.userAgent);
+    // Android Web Speech API 開關有系統提示音，強制走靜音的 Gemini STT 路徑
+    const hasSpeechAPI = !!(w.SpeechRecognition || w.webkitSpeechRecognition);
+    setUsingSpeechAPI(hasSpeechAPI && !isAndroid);
   }, []);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
