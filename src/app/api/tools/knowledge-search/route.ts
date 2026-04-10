@@ -23,8 +23,18 @@ export const maxDuration = 30;
 const THRESHOLD = 0.3;
 const MAX_IMAGES = 2;
 
-function imageRank(title: string): number {
+function imageRank(title: string, query = ''): number {
   const t = title.toLowerCase();
+  const q = query.toLowerCase();
+  // query 明確要模特兒 → 模特兒圖優先
+  if (q.includes('模特兒') || q.includes('人') || q.includes('全身') || q.includes('半身')) {
+    if (t.includes('半身')) return 0;
+    if (t.includes('全身')) return 1;
+    if (t.includes('大頭')) return 2;
+    if (t.includes('純產品') && t.includes('正面')) return 3;
+    return 4;
+  }
+  // 預設：純產品正面優先
   if (t.includes('純產品') && t.includes('正面')) return 0;
   if (t.includes('純產品')) return 1;
   if (t.includes('半身')) return 2;
@@ -42,10 +52,10 @@ function extractKeywords(titles: string[]): string[] {
   )).filter(k => k.length > 2);
 }
 
-function findImages(imageDocs: Record<string, unknown>[], keywords: string[]): Record<string, unknown>[] {
+function findImages(imageDocs: Record<string, unknown>[], keywords: string[], query = ''): Record<string, unknown>[] {
   return imageDocs
     .filter(d => keywords.some(k => String(d.title || '').includes(k)))
-    .sort((a, b) => imageRank(String(a.title || '')) - imageRank(String(b.title || '')))
+    .sort((a, b) => imageRank(String(a.title || ''), query) - imageRank(String(b.title || ''), query))
     .slice(0, MAX_IMAGES);
 }
 
@@ -103,7 +113,7 @@ export async function POST(req: NextRequest) {
       });
       supplementImages = allKnowledge
         .filter(d => { const t = String(d.title || ''); return d.category === 'image' && (t.startsWith(matchedProduct) || t.startsWith(short)); })
-        .sort((a, b) => imageRank(String(a.title || '')) - imageRank(String(b.title || '')))
+        .sort((a, b) => imageRank(String(a.title || ''), query) - imageRank(String(b.title || ''), query))
         .slice(0, MAX_IMAGES);
     } else {
       const textWithEmb = textDocs.filter(d => d.embedding && Array.isArray(d.embedding));
@@ -117,7 +127,7 @@ export async function POST(req: NextRequest) {
       }
       if (knowledgeResults.length > 0) {
         const kws = extractKeywords(knowledgeResults.map(d => String(d.title || '')));
-        supplementImages = findImages(imageDocs, kws);
+        supplementImages = findImages(imageDocs, kws, query);
       }
     }
 
