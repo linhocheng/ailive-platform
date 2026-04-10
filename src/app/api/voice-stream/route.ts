@@ -23,6 +23,7 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { trackCost } from '@/lib/cost-tracker';
 import { redis } from '@/lib/redis';
 import { generateEmbedding, cosineSimilarity } from '@/lib/embeddings';
+import { generateImageForCharacter } from '@/lib/generate-image';
 import { preprocessTTS } from '@/lib/tts-preprocess';
 
 export const maxDuration = 120;
@@ -246,6 +247,14 @@ export async function POST(req: NextRequest) {
             description: '查某款產品的完整資料（成分、功效、圖片URL）。聊到產品、要生圖、要介紹某款時，用這個而不是 query_knowledge_base。直接拿，100% 準確。',
             input_schema: { type: 'object' as const, properties: { product_name: { type: 'string', description: '產品關鍵字，例如「卸妝露」「慕斯花」「精華霜」' } }, required: ['product_name'] },
           },
+          {
+            name: 'generate_image',
+            description: '生成 IG 貼文用的產品圖。有了產品圖片URL就用 reference_image_url 傳入，讓圖更精準。',
+            input_schema: { type: 'object' as const, properties: {
+              prompt: { type: 'string', description: '圖片描述（英文，場景+產品+風格）' },
+              reference_image_url: { type: 'string', description: '產品參考圖URL，從 query_product_card 拿' },
+            }, required: ['prompt'] },
+          },
         ];
         const WEB_SEARCH = { type: 'web_search_20250305', name: 'web_search' } as unknown as Anthropic.Tool;
 
@@ -437,6 +446,19 @@ export async function POST(req: NextRequest) {
             return `【${card.productName}】成分：${ingList}\n功效：${(card.effects||[]).join('、')}\n圖片：\n${imageList}`;
           }
 
+          // ── generate_image ──
+          if (toolName === 'generate_image') {
+            const prompt = String(toolInput.prompt || '');
+            if (!prompt) return '需要圖片描述才能生圖。';
+            const refUrl = toolInput.reference_image_url ? String(toolInput.reference_image_url) : undefined;
+            try {
+              const result = await generateImageForCharacter(characterId, prompt, refUrl);
+              return `IMAGE_URL:${result.imageUrl}`;
+            } catch (e: unknown) {
+              return `生圖失敗：${e instanceof Error ? e.message : String(e)}`;
+            }
+          }
+
           return '未知工具';
         };
 
@@ -447,7 +469,7 @@ export async function POST(req: NextRequest) {
           { role: 'user', content: message },
         ];
 
-        for (let turn = 0; turn < 3; turn++) {
+        for (let turn = 0; turn < 5; turn++) {  // 最多 5 輪支援多工具串接
           const toolChoice = turn === 0
             ? { type: 'tool' as const, name: 'query_knowledge_base' }
             : { type: 'auto' as const };
