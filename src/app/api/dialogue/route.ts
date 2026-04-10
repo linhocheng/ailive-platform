@@ -966,15 +966,16 @@ ${awakeningResult}`,
 
     // ── Session State：讀取角色的「當下感」──
     let sessionStateBlock = '';
-    const sessionKey = `session:${conversationId || convRef?.id || ''}`;
-    if (sessionKey !== 'session:') {
-      try {
-        const sessionRaw = await redis.get(sessionKey);
-        if (sessionRaw) sessionStateBlock = `\n\n---\n${sessionRaw}`;
-      } catch { /* 不阻斷 */ }
-    }
+    // session key 跟著「角色 × 用戶」走，跨對話保持連續感
+    const sessionKey = `session:${characterId}:${userId}`;
+    try {
+      const sessionRaw = await redis.get(sessionKey);
+      if (sessionRaw) sessionStateBlock = `\n\n---\n${sessionRaw}`;
+    } catch { /* 不阻斷 */ }
 
-    const systemPrompt = `${mentorInjection}${soulText}${skillsBlock}${episodicBlock}${voiceModeBlock}${gapInjection}${sessionStateBlock}
+    // Prompt Caching：靈魂+技能穩定，標 cache_control，每輪只收 10% input token
+    const stableBlock = `${mentorInjection}${soulText}${skillsBlock}${voiceModeBlock}`;
+    const dynamicBlock = `${episodicBlock}${gapInjection}${sessionStateBlock}
 
 ---
 現在時間（台北）：${taipeiTime}
@@ -986,6 +987,10 @@ ${awakeningResult}`,
 
 ${convData.userProfile ? `【我認識這個人】\n${convData.userProfile}\n\n` : ''}${convData.summary ? `對話摘要（上次回顧）：\n${convData.summary}` : ''}`;
 
+    const systemBlocks: Array<{type: 'text'; text: string; cache_control?: {type: 'ephemeral'}}> = [
+      { type: 'text', text: stableBlock, cache_control: { type: 'ephemeral' } },
+      { type: 'text', text: dynamicBlock },
+    ];
     // 4. 組歷史訊息（舊圖片不重傳 base64，只帶文字，避免 413）
     const history = (convData.messages as Array<{ role: string; content: string; imageUrl?: string }> || []).slice(-10);
     const messages: Anthropic.MessageParam[] = [
@@ -1028,7 +1033,7 @@ ${convData.userProfile ? `【我認識這個人】\n${convData.userProfile}\n\n`
             const streamMsg = client.messages.stream({
               model: 'claude-sonnet-4-6',
               max_tokens: 4096,
-              system: systemPrompt,
+              system: systemBlocks as any,  // Prompt Caching blocks
               tools: [WEB_SEARCH_TOOL, ...dynamicTools],
               tool_choice: { type: 'auto' },
               messages: currentMessages,
@@ -1235,7 +1240,7 @@ ${convData.userProfile ? `【我認識這個人】\n${convData.userProfile}\n\n`
                   messages: [{ role: 'user', content: `根據以下對話，用繁體中文寫一段「當下狀態」，給角色看的，讓角色下一輪說話時感覺有連續性。\n格式固定：\n【當下狀態】\n情緒：（用戶現在的情緒/狀態，5-10字）\n話題：（我們正在聊什麼，10-20字）\n未竟：（我剛說要做什麼或用戶期待什麼，10-20字，沒有就寫「無」）\n\n只輸出這三行，不要其他文字。\n\n對話：\n${recentForSession}` }],
                 });
                 const sessionState = (sessionRes.content[0] as { text: string }).text.trim();
-                await redis.set(`session:${convRef.id}`, sessionState, 60 * 60 * 24);
+                await redis.set(`session:${characterId}:${userId}`, sessionState, 60 * 60 * 24);
               } catch { /* session 更新失敗 */ }
             })();
           }
