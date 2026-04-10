@@ -177,13 +177,17 @@ export const PRONUNCIATION_MAP: Record<string, string> = {
  */
 export function preprocessTTS(text: string): string {
   let r = text;
-  // 清 Markdown
+  // 清 Markdown + URL（TTS 不念網址）
   r = r.replace(/\*\*(.+?)\*\*/g, '$1');
   r = r.replace(/\*(.+?)\*/g, '$1');
   r = r.replace(/^#{1,3}\s*/gm, '');
   r = r.replace(/^[-•·]\s*/gm, '');
   r = r.replace(/`[^`]+`/g, '');
-  r = r.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
+  r = r.replace(/!\[(?:圖片|image|img|photo)?\]\([^)]+\)/gi, '');  // ![圖片](url) → 刪除
+  r = r.replace(/!\[([^\]]*?)\]\([^)]+\)/g, '$1');   // ![alt](url) → alt 文字
+  r = r.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');      // [text](url) → text
+  r = r.replace(/https?:\/\/[^\s，。！？、）)]+/g, '');  // 裸 URL 直接刪除
+  r = r.replace(/IMAGE_URL:[^\s]+/g, '');                  // IMAGE_URL:xxx 刪除
   // 中台用語（長詞優先）
   for (const k of Object.keys(ZH_TW_MAP).sort((a, b) => b.length - a.length))
     r = r.replaceAll(k, ZH_TW_MAP[k]);
