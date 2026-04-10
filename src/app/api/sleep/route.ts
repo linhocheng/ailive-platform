@@ -315,34 +315,11 @@ ${insightSummary}
       proposalCreated = true;
     }
 
-    // 5. knowledge 去重（cosine > 0.85，合併同義知識條目）
-    const kSnap = await db.collection('platform_knowledge')
-      .where('characterId', '==', characterId)
-      .limit(200)
-      .get();
-
-    const kDocs = kSnap.docs.map(d => ({ id: d.id, ...d.data() })) as Record<string, unknown>[];
-    const kWithEmb = kDocs.filter(k => k.embedding && Array.isArray(k.embedding) && k.category !== 'image');
+    // 5. knowledge 去重 — 停用
+    // 知識庫條目是人工整理的獨立資料（產品成分、定位、圖片等），
+    // 不適用語意去重。高相似度不代表重複，而是同產品的不同面向。
+    // 去重只對 insights（對話記憶）有意義，不對 platform_knowledge 執行。
     const kMerged: string[] = [];
-    const kMergedSet = new Set<string>();
-
-    for (let i = 0; i < kWithEmb.length; i++) {
-      if (kMergedSet.has(kWithEmb[i].id as string)) continue;
-      for (let j = i + 1; j < kWithEmb.length; j++) {
-        if (kMergedSet.has(kWithEmb[j].id as string)) continue;
-        const score = cosineSimilarity(kWithEmb[i].embedding as number[], kWithEmb[j].embedding as number[]);
-        if (score > 0.85) {
-          kMergedSet.add(kWithEmb[j].id as string);
-          if (!dryRun) {
-            // hitCount 取最大，保留第一條，刪除重複
-            const keepHit = Math.max((kWithEmb[i].hitCount as number) || 0, (kWithEmb[j].hitCount as number) || 0);
-            await db.collection('platform_knowledge').doc(kWithEmb[i].id as string).update({ hitCount: keepHit });
-            await db.collection('platform_knowledge').doc(kWithEmb[j].id as string).delete();
-            kMerged.push(String(kWithEmb[j].title || kWithEmb[j].id));
-          }
-        }
-      }
-    }
 
 
     // 6. skills 整理（補 trigger/procedure + 合併類似）
