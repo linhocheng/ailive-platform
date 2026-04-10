@@ -193,7 +193,7 @@ export default function ChatPage() {
               streamingContent += ev.content;
               // 即時更新 streaming 訊息
               const idx = (streamingIdx as React.MutableRefObject<number>).current;
-              setMessages(prev => prev.map((m, i) => i === idx ? { ...m, content: streamingContent } : m));
+              setMessages(prev => prev.map((m, i) => i === idx ? { ...m, content: streamingContent.replace(/!\[.*?\]\(https?:\/\/[^)]+\)/g, '').replace(/IMAGE_URL:https?:\/\/[^\s]+/g, '').trim() } : m));
             }
             if (ev.type === 'done') {
               if (ev.conversationId && !conversationId) {
