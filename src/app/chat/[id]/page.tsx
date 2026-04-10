@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
 
 interface Message {
@@ -154,6 +154,11 @@ export default function ChatPage() {
     setLoading(true);
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
 
+    // 加一個 streaming 用的佔位訊息
+    const streamingIdx = React.createRef<number>();
+    let streamingContent = '';
+    setMessages(prev => { (streamingIdx as React.MutableRefObject<number>).current = prev.length; return [...prev, { role: 'assistant', content: '', timestamp: new Date().toISOString() }]; });
+
     try {
       const body: Record<string, unknown> = {
         characterId, userId, message: userContent,
@@ -167,28 +172,55 @@ export default function ChatPage() {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
-      const d = await r.json();
-      if (!d.success) throw new Error(d.error || '對話失敗');
-      if (d.conversationId && !conversationId) {
-        setConversationId(d.conversationId);
-        localStorage.setItem(`conv-${characterId}`, d.conversationId);
+      if (!r.ok || !r.body) throw new Error('連線失敗');
+
+      const reader = r.body.getReader();
+      const dec = new TextDecoder();
+      let sseBuf = '';
+      let extractedImageUrl: string | undefined;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        sseBuf += dec.decode(value, { stream: true });
+        const lines = sseBuf.split('\n');
+        sseBuf = lines.pop() || '';
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const ev = JSON.parse(line.slice(6)) as { type: string; content?: string; conversationId?: string; imageUrl?: string; message?: string };
+            if (ev.type === 'text' && ev.content) {
+              streamingContent += ev.content;
+              // 即時更新 streaming 訊息
+              const idx = (streamingIdx as React.MutableRefObject<number>).current;
+              setMessages(prev => prev.map((m, i) => i === idx ? { ...m, content: streamingContent } : m));
+            }
+            if (ev.type === 'done') {
+              if (ev.conversationId && !conversationId) {
+                setConversationId(ev.conversationId);
+                localStorage.setItem(`conv-${characterId}`, ev.conversationId);
+              }
+              if (ev.imageUrl) extractedImageUrl = ev.imageUrl;
+              // 清理 markdown 圖片語法，最終更新
+              const urlMatch1 = streamingContent.match(/IMAGE_URL:(https?:\/\/[^\s]+)/);
+              const urlMatch2 = streamingContent.match(/!\[.*?\]\((https?:\/\/[^)]+)\)/);
+              extractedImageUrl = extractedImageUrl || (urlMatch1 ? urlMatch1[1] : urlMatch2 ? urlMatch2[1] : undefined);
+              const cleanReply = streamingContent
+                .replace(/IMAGE_URL:https?:\/\/[^\s]+/g, '')
+                .replace(/!\[.*?\]\(https?:\/\/[^)]+\)/g, '')
+                .trim();
+              const idx = (streamingIdx as React.MutableRefObject<number>).current;
+              setMessages(prev => prev.map((m, i) => i === idx
+                ? { ...m, content: cleanReply || '（圖片已生成）', imageUrl: extractedImageUrl }
+                : m));
+            }
+            if (ev.type === 'error') throw new Error(ev.message);
+          } catch (e) { if (e instanceof SyntaxError) continue; throw e; }
+        }
       }
-      const replyText = d.reply || '';
-      const urlMatch1 = replyText.match(/IMAGE_URL:(https?:\/\/[^\s]+)/);
-      const urlMatch2 = replyText.match(/!\[.*?\]\((https?:\/\/[^)]+)\)/);
-      const extractedImageUrl = urlMatch1 ? urlMatch1[1] : urlMatch2 ? urlMatch2[1] : undefined;
-      const cleanReply = replyText
-        .replace(/IMAGE_URL:https?:\/\/[^\s]+/g, '')
-        .replace(/!\[.*?\]\(https?:\/\/[^)]+\)/g, '')
-        .trim();
-      setMessages(prev => [...prev, {
-        role: 'assistant', content: cleanReply || '（圖片已生成）',
-        timestamp: new Date().toISOString(), imageUrl: extractedImageUrl,
-      }]);
     } catch (err) {
-      setMessages(prev => [...prev, {
-        role: 'assistant', content: String(err), timestamp: new Date().toISOString(),
-      }]);
+      const idx = (streamingIdx as React.MutableRefObject<number>).current;
+      setMessages(prev => prev.map((m, i) => i === idx ? { ...m, content: String(err) } : m));
     } finally { setLoading(false); }
   }, [input, pendingImage, loading, characterId, userId, conversationId, isNewVisit]);
 

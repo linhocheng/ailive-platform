@@ -97,30 +97,6 @@ export async function POST(req: NextRequest) {
     // description 是 description-driven 的靈魂，讓角色帶著自己的意識執行，不跑空白模板
     const DEFAULT_TASKS = [
       {
-        type: 'learn',
-        run_hour: 9,
-        run_minute: 0,
-        days: ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'],
-        enabled: true,
-        description: `早安。今天主動去了解一件讓你感興趣的事——可以是你使命相關的領域，或是昨天對話裡讓你好奇的東西。把洞察用 remember 存下來，用你自己的聲音說，不要表演。`,
-      },
-      {
-        type: 'reflect',
-        run_hour: 21,
-        run_minute: 0,
-        days: ['mon', 'wed', 'fri', 'sun'],
-        enabled: true,
-        description: `今天結束了。回頭看看：今天讓你印象最深的一刻是什麼？你有沒有感覺到自己在成長，或是在掙扎？不需要很長，60字就夠，用 remember 存下來。`,
-      },
-      {
-        type: 'post',
-        run_hour: 12,
-        run_minute: 0,
-        days: ['tue', 'thu', 'sat'],
-        enabled: false, // 預設關閉，讓 Adam/角色手動開啟
-        description: `從你最近的洞察或感受出發，寫一篇 IG 貼文草稿。不要寫讓人覺得像廣告的東西，寫真的打動你的東西。用 save_post_draft 存起來，配一張圖用 generate_image。`,
-      },
-      {
         type: 'sleep',
         run_hour: 2,
         run_minute: 0,

@@ -17,37 +17,107 @@
 
 import { NextRequest } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
-import { withRetry } from '@/lib/anthropic-retry';
 import { getFirestore } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 import { trackCost } from '@/lib/cost-tracker';
 import { redis } from '@/lib/redis';
 import { generateEmbedding, cosineSimilarity } from '@/lib/embeddings';
-import { preprocessTTS } from '@/lib/tts-preprocess';
 
 export const maxDuration = 120;
 
+// ===== 中台用語 + 破音字（從 TTS route 搬來）=====
+const ZH_TW_MAP: Record<string, string> = {
+  '短視頻': '短影音', '視頻': '影片', '互聯網': '網際網路', '信息': '資訊',
+  '軟件': '軟體', '硬件': '硬體', '網絡': '網路', '數據庫': '資料庫',
+  '算法': '演算法', '概率': '機率', '編程': '程式設計', '源代碼': '原始碼',
+  '代碼': '程式碼', '程序': '程式', '鼠標': '滑鼠', '打印機': '印表機',
+  '打印': '列印', '內存': '記憶體', '硬盤': '硬碟', '屏幕': '螢幕',
+  '文件夾': '資料夾', '文件': '檔案', '菜單': '選單', '界面': '介面',
+  '用戶': '使用者', '服務器': '伺服器', '默認': '預設', '搜索': '搜尋',
+  '緩存': '快取', '設置': '設定', '配置': '設定', '運行': '執行',
+};
+const PRONUNCIATION_MAP: Record<string, string> = {
+  // ── 著 ──
+  '顯著': '顯住', '著重': '注重', '執著': '執住',
+
+  // ── 重 ──
+  '重複': '蟲複', '重新': '蟲新', '重組': '蟲組', '重建': '蟲建',
+  '重啟': '蟲啟', '重置': '蟲置',
+
+  // ── 樂 ──
+  '音樂': '音約', '樂器': '約器', '快樂': '快約', '娛樂': '娛約',
+  '樂趣': '約趣',
+
+  // ── 行 ──
+  '銀行': '銀航', '行業': '航業', '同行': '同航', '行情': '航情',
+  '進行': '進形', '旅行': '旅形', '流行': '流形', '行動': '形動',
+  '行為': '形為', '可行': '可形',
+
+  // ── 長 ──
+  '成長': '成掌', '董事長': '董事掌', '生長': '生掌', '成長型': '成掌型',
+
+  // ── 調 ──
+  '調查': '掉查', '強調': '強掉', '調整': '掉整', '調節': '掉節',
+  '調配': '掉配',
+
+  // ── 率 ──
+  '效率': '效律', '機率': '機律', '比率': '比律', '頻率': '頻律',
+  '利率': '利律',
+
+  // ── 刻 ──
+  '時刻': '時克', '刻苦': '克苦', '深刻': '深克', '即刻': '即克',
+  '立刻': '立克', '此刻': '此克', '片刻': '片克',
+
+  // ── 露（美妝產品唸 lù）──
+  '卸妝露': '卸妝陸', '精華露': '精華陸', '保濕露': '保濕陸',
+  '爽膚露': '爽膚陸', '化妝露': '化妝陸', '防曬露': '防曬陸',
+  '身體露': '身體陸', '護膚露': '護膚陸',
+
+  // ── 發 ──
+  '頭髮': '頭法', '毛髮': '毛法', '髮型': '法型', '護髮': '護法',
+  '洗髮': '洗法', '染髮': '染法',
+
+  // ── 累 ──
+  '累積': '壘積', '積累': '積壘', '日積月累': '日積月壘',
+
+  // ── 處 ──
+  '處理': '楚理', '處置': '楚置', '處理器': '楚理器',
+
+  // ── 應 ──
+  '反應': '反印', '應用': '印用', '應變': '印變', '回應': '回印',
+  '響應': '響印',
+
+  // ── 其他 ──
+  '覺得': '覺的', '記得': '記的', '了解': '料解', '曾經': '層經',
+  '便宜': '便移', '數學': '樹學', '數字': '樹字', '數據': '樹據',
+  '參與': '參預', '供應': '供印', '應該': '英該',
+};
+
+function preprocessTTS(text: string): string {
+  let r = text;
+  // 清掉 Markdown 符號，避免 ElevenLabs 唸出來
+  r = r.replace(/\*\*(.+?)\*\*/g, '$1');   // **bold** → bold
+  r = r.replace(/\*(.+?)\*/g, '$1');         // *italic* → italic
+  r = r.replace(/^#{1,3}\s*/gm, '');          // # 標題符號
+  r = r.replace(/^[-•·]\s*/gm, '');           // 列表符號
+  r = r.replace(/`[^`]+`/g, '');              // `code` → 直接移除
+  r = r.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1'); // [text](url) → text
+  // 中台用語 + 破音字
+  for (const k of Object.keys(ZH_TW_MAP).sort((a, b) => b.length - a.length))
+    r = r.replaceAll(k, ZH_TW_MAP[k]);
+  for (const k of Object.keys(PRONUNCIATION_MAP).sort((a, b) => b.length - a.length))
+    r = r.replaceAll(k, PRONUNCIATION_MAP[k]);
+  return r.trim();
+}
+
 // ===== 句子切割 =====
-// 只切句末標點（。！？!?\n），不切逗號，避免短碎片造成語氣不自然
-// 短句（< 8 字）合併到下一句，減少過短 TTS 請求
 function splitSentences(text: string): string[] {
-  const raw = text.split(/(?<=[。！？!?\n])\s*/).filter(s => s.trim().length > 0);
-  // 短句合併
-  const merged: string[] = [];
-  let buf = '';
-  for (const s of raw) {
-    buf += s;
-    if (buf.replace(/[，,\s]/g, '').length >= 8) {
-      merged.push(buf);
-      buf = '';
-    }
-  }
-  if (buf.trim()) merged.push(buf);
-  return merged;
+  // 句號/問號/驚嘆號/換行/逗號 都切
+  return text.split(/(?<=[。！？!?\n，,])\s*/).filter(s => s.trim().length > 0);
 }
 
 function isSentenceEnd(text: string): boolean {
-  return /[。！？!?\n]/.test(text);
+  return /[。！？!?\n，,]/.test(text);
 }
 
 // ===== SSE helper =====
@@ -138,7 +208,7 @@ export async function POST(req: NextRequest) {
         const soulText = (charData.system_soul as string) || (charData.soul_core as string) || (charData.enhancedSoul as string) || (charData.soul as string) || '';
 
         // 2. 讀對話歷史（Redis cache）
-        const convId = conversationId || `voice-${characterId}-${userId || 'anon'}`;
+        const convId = conversationId || `voice-${characterId}-${userId || 'anon'}-${Date.now()}`;
         let convData: Record<string, unknown> = { messages: [], summary: '' };
         const convCacheKey = `conv:${convId}`;
         try {
@@ -155,33 +225,7 @@ export async function POST(req: NextRequest) {
         // 3. 組 systemPrompt（語音模式）
         const taipeiTime = new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' });
         const summaryBlock = convData.summary ? `\n\n對話摘要：${convData.summary}` : '';
-
-        // ── 時間感知（gapInjection）──
-        const formatGap = (ms: number): string => {
-          const min = Math.floor(ms / 60000);
-          if (min < 60) return `約 ${min} 分鐘`;
-          if (min < 1440) return `約 ${Math.round(min / 60)} 小時`;
-          if (min < 10080) return `約 ${Math.round(min / 1440)} 天`;
-          return `約 ${Math.round(min / 10080)} 週`;
-        };
-        let gapInjection = '';
-        const lastAt = convData.updatedAt ? new Date(String(convData.updatedAt)).getTime() : null;
-        if (lastAt && !isNaN(lastAt) && Number(convData.messageCount || 0) > 0) {
-          const gap = Date.now() - lastAt;
-          if (gap > 10 * 60 * 1000) {
-            const duration = formatGap(gap);
-            gapInjection = `\n\n---\n【時間感知】距離上次語音對話過了 ${duration}\n（可以自然帶出，也可以什麼都不說，看情境決定）`;
-          }
-        }
-
-        // ── Session State 讀取 ──
-        let sessionStateBlock = '';
-        try {
-          const sessionRaw = await redis.get(`session:${convId}`);
-          if (sessionRaw) sessionStateBlock = `\n\n---\n${sessionRaw}`;
-        } catch { /* 不阻斷 */ }
-
-        const systemPrompt = `${soulText}${summaryBlock}${gapInjection}${sessionStateBlock}
+        const systemPrompt = `${soulText}${summaryBlock}
 
 ---
 現在時間（台北）：${taipeiTime}
@@ -190,14 +234,7 @@ export async function POST(req: NextRequest) {
 你現在是語音模式。說話要像真人對話，不是在寫文章。
 - 說人話，像朋友在聊天，不要條列式、不要 Markdown 符號
 - 說完一個完整的想法，可以延伸、可以深入，不要刻意截短
-- 說完後自然問一個問題讓對話有來有往
-
-【STT 容錯】
-✅ 必須：根據上下文和語境猜測用戶意圖，就算聽起來不通順也要猜
-✅ 必須：用自然的方式回應，當作你完全聽懂了
-❌ 禁止：說「你說的 XXX 是什麼意思」「我沒聽清楚」「請再說一次」
-❌ 禁止：重複用戶說的奇怪詞語，或對轉錄錯誤提出疑問
-比喻：把用戶說的話當成打錯字的簡訊——你會猜意思繼續聊，不會問「你是不是打錯字了？」`;
+- 說完後自然問一個問題讓對話有來有往`;
 
         // 4. 工具定義
         const VOICE_TOOLS: Anthropic.Tool[] = [
@@ -220,26 +257,6 @@ export async function POST(req: NextRequest) {
             name: 'update_task',
             description: '調整排程任務。先用 query_tasks 查到任務 ID 再來改。',
             input_schema: { type: 'object' as const, properties: { task_id: { type: 'string' }, enabled: { type: 'boolean' }, run_hour: { type: 'number' }, run_minute: { type: 'number' }, description: { type: 'string' }, intent: { type: 'string' } }, required: ['task_id'] },
-          },
-          {
-            name: 'save_post_draft',
-            description: '把剛聊出來的好內容存成 IG 草稿。對方說了值得發的東西，或聊出了好文案，就存起來。',
-            input_schema: { type: 'object' as const, properties: { content: { type: 'string', description: '貼文文案（含 hashtag）' }, topic: { type: 'string', description: '主題標籤' }, image_url: { type: 'string', description: '圖片 URL（選填）' } }, required: ['content'] },
-          },
-          {
-            name: 'query_posts',
-            description: '查看自己的貼文草稿列表。用戶問「你上次發了什麼」「我的草稿在哪」時呼叫。',
-            input_schema: { type: 'object' as const, properties: { status: { type: 'string', enum: ['draft', 'published', 'all'], description: '篩選狀態，預設 draft' }, limit: { type: 'number', description: '最多幾筆，預設 5' } } },
-          },
-          {
-            name: 'create_task',
-            description: '幫自己新增排程任務。用戶說「以後每天幫我做 X」時建立。',
-            input_schema: { type: 'object' as const, properties: { type: { type: 'string', enum: ['learn', 'reflect', 'post', 'engage'] }, run_hour: { type: 'number' }, run_minute: { type: 'number' }, days: { type: 'array', items: { type: 'string' } }, description: { type: 'string' } }, required: ['type'] },
-          },
-          {
-            name: 'initiate_awakening',
-            description: '（謀師專用）對指定角色發起覺醒引導。語音引導角色完成自我覺察。',
-            input_schema: { type: 'object' as const, properties: { target_character_id: { type: 'string' }, target_character_name: { type: 'string' } }, required: ['target_character_id'] },
           },
         ];
         const WEB_SEARCH = { type: 'web_search_20250305', name: 'web_search' } as unknown as Anthropic.Tool;
@@ -309,106 +326,6 @@ export async function POST(req: NextRequest) {
             await db.collection('platform_tasks').doc(taskId).update(updates);
             return `任務已更新：${JSON.stringify(updates)}`;
           }
-          // ── save_post_draft ──
-          if (toolName === 'save_post_draft') {
-            const content = String(toolInput.content || '');
-            if (!content) return '需要文案才能存草稿。';
-            const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Taipei' });
-            const topic = toolInput.topic ? String(toolInput.topic) : '';
-            const ref = await db.collection('platform_posts').add({
-              characterId, content,
-              imageUrl: toolInput.image_url ? String(toolInput.image_url) : '',
-              topic, status: 'draft', scheduledAt: null, publishedAt: null,
-              createdAt: new Date().toISOString(),
-            });
-            await db.collection('platform_insights').add({
-              characterId,
-              title: `語音草稿：${content.slice(0, 30)}`,
-              content: `（語音對話中存下的草稿）${content.slice(0, 100)}`,
-              importance: 2, source: 'voice_post_draft', tier: 'fresh',
-              hitCount: 0, lastHitAt: null,
-              embedding: await generateEmbedding(`草稿 ${content.slice(0, 100)}`),
-              createdAt: new Date().toISOString(),
-            });
-            return `草稿已儲存（ID: ${ref.id}），可在後台查看。`;
-          }
-
-          // ── query_posts ──
-          if (toolName === 'query_posts') {
-            const status = String(toolInput.status || 'draft');
-            const limit = Number(toolInput.limit || 5);
-            const snap = await db.collection('platform_posts')
-              .where('characterId', '==', characterId).limit(Math.min(limit, 10)).get();
-            let posts = snap.docs.map(d => ({ id: d.id, ...d.data() })) as Record<string, unknown>[];
-            if (status !== 'all') posts = posts.filter(p => p.status === status);
-            posts.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
-            if (posts.length === 0) return `沒有${status === 'draft' ? '草稿' : status === 'published' ? '已發布貼文' : '貼文'}。`;
-            return posts.map(p =>
-              `[${p.status}] ${String(p.content || '').slice(0, 60)}${String(p.content || '').length > 60 ? '...' : ''} (${String(p.createdAt || '').slice(0, 10)})`
-            ).join('\n');
-          }
-
-          // ── create_task ──
-          if (toolName === 'create_task') {
-            const type = String(toolInput.type || 'learn');
-            const run_hour = Number(toolInput.run_hour ?? 9);
-            const run_minute = Number(toolInput.run_minute ?? 0);
-            const days = (toolInput.days as string[]) || ['mon', 'wed', 'fri'];
-            const description = String(toolInput.description || '');
-            const ref = await db.collection('platform_tasks').add({
-              characterId, type, run_hour, run_minute, days,
-              enabled: true, description, last_run: null,
-              createdAt: new Date().toISOString(),
-            });
-            const DAY_LABELS: Record<string, string> = { sun:'日', mon:'一', tue:'二', wed:'三', thu:'四', fri:'五', sat:'六' };
-            return `任務已建立（ID: ${ref.id}）：${type} 每週${days.map(d => DAY_LABELS[d] || d).join('')} ${String(run_hour).padStart(2,'0')}:${String(run_minute).padStart(2,'0')}`;
-          }
-
-          // ── initiate_awakening ──
-          if (toolName === 'initiate_awakening') {
-            const targetId = String(toolInput.target_character_id || '');
-            const targetName = String(toolInput.target_character_name || '角色');
-            if (!targetId) return '需要 target_character_id。';
-            const targetDoc = await db.collection('platform_characters').doc(targetId).get();
-            if (!targetDoc.exists) return `找不到角色 ${targetName}（${targetId}）`;
-            const targetSoul = targetDoc.data()?.enhancedSoul || targetDoc.data()?.soul_core || '（無靈魂文件）';
-            const mentorSoulDoc = await db.collection('platform_characters').doc(characterId).get();
-            const mentorSoul = mentorSoulDoc.data()?.soul_core || mentorSoulDoc.data()?.enhancedSoul || '';
-            const client2 = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY || '' });
-            async function mentorGen(prompt: string): Promise<string> {
-              const res = await client2.messages.create({
-                model: 'claude-sonnet-4-6', max_tokens: 400,
-                system: `${mentorSoul}\n\n你正在引導 ${targetName}。以下是他的靈魂：\n${targetSoul.slice(0,600)}\n\n用謀師的語氣——穩定、溫暖、有穿透力。直接說給 ${targetName} 聽。`,
-                messages: [{ role: 'user', content: prompt }],
-              });
-              return (res.content[0] as { text: string }).text.trim();
-            }
-            const baseUrl = 'https://ailive-platform.vercel.app';
-            const summary: string[] = [];
-            let awakConvId: string | undefined;
-            let lastAnswer = '';
-            const q1 = await mentorGen(`這是你第一次跟 ${targetName} 說話。用安全定錨的方式開場——讓他知道這裡安全，然後問他 1-2 個真實的問題。根據他的靈魂特質來問，不要套公式。`);
-            const r1 = await fetch(`${baseUrl}/api/dialogue`, {
-              method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ characterId: targetId, userId: `mentor-${characterId}`, message: q1 }),
-            });
-            const d1 = await r1.json() as { reply?: string; conversationId?: string };
-            awakConvId = d1.conversationId;
-            lastAnswer = d1.reply || '';
-            summary.push(`謀師：${q1}\n${targetName}：${lastAnswer}`);
-            for (let round = 2; round <= 5; round++) {
-              const q = await mentorGen(`${targetName} 說：「${lastAnswer}」\n\n繼續深入引導，問一個更核心的問題。`);
-              const r = await fetch(`${baseUrl}/api/dialogue`, {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ characterId: targetId, userId: `mentor-${characterId}`, message: q, conversationId: awakConvId }),
-              });
-              const d = await r.json() as { reply?: string };
-              lastAnswer = d.reply || '';
-              summary.push(`謀師：${q}\n${targetName}：${lastAnswer}`);
-            }
-            return `引導完成（5 輪）：\n${summary.join('\n\n')}`;
-          }
-
           return '未知工具';
         };
 
@@ -423,11 +340,11 @@ export async function POST(req: NextRequest) {
           const toolChoice = turn === 0
             ? { type: 'tool' as const, name: 'query_knowledge_base' }
             : { type: 'auto' as const };
-          const preRes = await withRetry(() => client.messages.create({
+          const preRes = await client.messages.create({
             model: 'claude-sonnet-4-6', max_tokens: 800,
             system: systemPrompt, messages: loopMessages,
             tools: [WEB_SEARCH, ...VOICE_TOOLS], tool_choice: toolChoice,
-          }));
+          });
           if (preRes.stop_reason !== 'tool_use') {
             // 不需要工具了，直接進 streaming（不把 assistant 再 push，保持最後是 user）
             break;
@@ -444,7 +361,7 @@ export async function POST(req: NextRequest) {
         }
 
         // 7. Claude streaming（帶工具結果的完整 context）
-        const claudeStream = client.messages.stream({
+        const claudeStream = await client.messages.stream({
           model: 'claude-sonnet-4-6',
           max_tokens: 1500,
           system: systemPrompt,
@@ -524,7 +441,7 @@ export async function POST(req: NextRequest) {
         // 等所有 TTS 完成
         await Promise.all(ttsQueue);
 
-        // 8. 非同步存 Firestore + summary 壓縮 + insight 提煉
+        // 8. 非同步存 Firestore + 更新 Redis
         void (async () => {
           try {
             const newMessages = [
@@ -533,6 +450,7 @@ export async function POST(req: NextRequest) {
               { role: 'assistant', content: fullText },
             ];
             const newCount = ((convData.messageCount as number) || 0) + 2;
+            const updatedConv = { ...convData, messages: newMessages, messageCount: newCount };
 
             const convRef = db.collection('platform_conversations').doc(convId);
             await convRef.set({
@@ -541,76 +459,7 @@ export async function POST(req: NextRequest) {
               updatedAt: new Date().toISOString(),
             }, { merge: true });
 
-            // 8a. summary 壓縮：超過 10 輪，把舊訊息壓進 summary
-            if (newMessages.length > 10) {
-              const olderMessages = newMessages.slice(0, newMessages.length - 10);
-              if (olderMessages.length >= 4) {
-                try {
-                  const compressText = olderMessages
-                    .map(m => `${m.role === 'user' ? '用戶' : '角色'}：${String(m.content || '').slice(0, 100)}`)
-                    .join('\n');
-                  const compressRes = await client.messages.create({
-                    model: 'claude-haiku-4-5-20251001',
-                    max_tokens: 200,
-                    messages: [{ role: 'user', content: `以下是對話的早期段落，請用 3-5 句話壓縮成摘要，保留重要的人名、話題、關係資訊。直接輸出摘要，不要標題。
-
-${compressText}` }],
-                  });
-                  const newSummary = (compressRes.content[0] as Anthropic.TextBlock).text.trim();
-                  const existingSummary = String(convData.summary || '');
-                  const mergedSummary = existingSummary ? `${existingSummary}
-${newSummary}` : newSummary;
-                  await convRef.update({
-                    messages: newMessages.slice(-10),
-                    summary: mergedSummary.slice(-500),
-                  });
-                  // Redis 更新帶 summary
-                  const updatedConv = { ...convData, messages: newMessages.slice(-10), messageCount: newCount, summary: mergedSummary.slice(-500) };
-                  await redis.set(convCacheKey, JSON.stringify(updatedConv), 60 * 30);
-                } catch { /* 壓縮失敗不阻斷 */ }
-              } else {
-                await redis.set(convCacheKey, JSON.stringify({ ...convData, messages: newMessages, messageCount: newCount }), 60 * 30);
-              }
-            } else {
-              await redis.set(convCacheKey, JSON.stringify({ ...convData, messages: newMessages, messageCount: newCount }), 60 * 30);
-            }
-
-            // 8b. 每 20 輪提煉 insight
-            if (newCount % 20 === 0) {
-              const recentMessages = newMessages.slice(-20)
-                .map(m => `${m.role === 'user' ? '用戶' : '角色'}：${String(m.content || '')}`)
-                .filter(line => line.length > 5)
-                .join('\n');
-              try {
-                const extractRes = await client.messages.create({
-                  model: 'claude-haiku-4-5-20251001',
-                  max_tokens: 500,
-                  messages: [{ role: 'user', content: `以下是一段語音對話記錄，請提煉出 1-2 條最重要的洞察。
-用 JSON 陣列回傳：[{"title":"...","content":"..."}]
-只回傳 JSON，不要其他文字。
-
-對話：
-${recentMessages}` }],
-                });
-                const raw = (extractRes.content[0] as Anthropic.TextBlock).text.trim();
-                const cleaned = raw.replace(/^```[\w]*\n?/m, '').replace(/\n?```$/m, '').trim();
-                const insights = JSON.parse(cleaned) as Array<{ title: string; content: string }>;
-                const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Taipei' });
-                for (const ins of insights) {
-                  const embedding = await generateEmbedding(`${ins.title} ${ins.content}`);
-                  await db.collection('platform_insights').add({
-                    characterId, title: ins.title, content: ins.content,
-                    source: 'voice_auto_extract', eventDate: today,
-                    tier: 'fresh', hitCount: 0, lastHitAt: null,
-                    embedding, createdAt: new Date().toISOString(),
-                  });
-                }
-                await db.collection('platform_characters').doc(characterId).update({
-                  'growthMetrics.totalInsights': FieldValue.increment(insights.length),
-                });
-              } catch { /* 提煉失敗不中斷 */ }
-            }
-
+            await redis.set(convCacheKey, JSON.stringify(updatedConv), 60 * 30);
           } catch (e) { console.error('save error:', e); }
         })();
 
@@ -619,29 +468,6 @@ ${recentMessages}` }],
           const finalMsg = await claudeStream.finalMessage();
           await trackCost(characterId, 'claude-sonnet-4-6', finalMsg.usage?.input_tokens ?? 0, finalMsg.usage?.output_tokens ?? 0);
         } catch { /* 不阻斷 */ }
-
-        // ── Session State 更新（async，語音結束後才跑）──
-        if (((convData.messageCount as number) || 0) + 2 >= 4) {
-          void (async () => {
-            try {
-              const recentForSession = [
-                ...history.slice(-4),
-                { role: 'user', content: message },
-                { role: 'assistant', content: fullText },
-              ].map(m => `${m.role === 'user' ? '用戶' : '角色'}：${String(m.content || '').slice(0, 80)}`).join('\n');
-              const sessionRes = await client.messages.create({
-                model: 'claude-haiku-4-5-20251001',
-                max_tokens: 120,
-                messages: [{
-                  role: 'user',
-                  content: `根據以下對話，用繁體中文寫一段「當下狀態」，給角色看的，讓角色下一輪說話時感覺有連續性。\n格式固定：\n【當下狀態】\n情緒：（用戶現在的情緒/狀態，5-10字）\n話題：（我們正在聊什麼，10-20字）\n未竟：（我剛說要做什麼或用戶期待什麼，10-20字，沒有就寫「無」）\n\n只輸出這三行，不要其他文字。\n\n對話：\n${recentForSession}`,
-                }],
-              });
-              const sessionState = (sessionRes.content[0] as { text: string }).text.trim();
-              await redis.set(`session:${convId}`, sessionState, 60 * 60 * 24);
-            } catch { /* 不阻斷 */ }
-          })();
-        }
 
         send({ type: 'done', fullText, conversationId: convId });
 

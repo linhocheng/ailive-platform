@@ -70,6 +70,7 @@ export default function VoicePage() {
   const targetFlowRef = useRef<FlowParams>({ ...FLOW.idle });
   const rafRef = useRef<number>(0);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const unlockedAudioRef = useRef<HTMLAudioElement | null>(null); // iOS autoplay unlock
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const streamRef = useRef<MediaStream | null>(null);
@@ -164,12 +165,20 @@ export default function VoicePage() {
       });
       if (!res.ok || !res.body) throw new Error('voice-stream 失敗');
 
+      // iOS 不支援 MSE (MediaSource) streaming audio/mpeg，偵測後走 blob 路徑
+      const mseSupported = typeof MediaSource !== 'undefined' &&
+        (typeof (MediaSource as any).isTypeSupported === 'function'
+          ? (MediaSource as any).isTypeSupported('audio/mpeg')
+          : true);
+
       let mediaSource: MediaSource|null=null, sourceBuffer: SourceBuffer|null=null;
       let audio: HTMLAudioElement|null=null;
       const audioQueue: Uint8Array[]=[];
       let isAppending=false, streamDone=false, fullReplyText='';
+      // iOS blob path
+      const iosChunks: Uint8Array[]=[];
 
-      const initAudio = () => {
+      const initMSEAudio = () => {
         if (audio) return;
         mediaSource = new MediaSource();
         audio = new Audio(URL.createObjectURL(mediaSource));
@@ -197,24 +206,49 @@ export default function VoicePage() {
           if (!line.startsWith('data: ')) continue;
           try {
             const ev = JSON.parse(line.slice(6)) as {type:string;content?:string;chunk?:string;conversationId?:string;fullText?:string;message?:string};
-            if (ev.type==='text'&&ev.content) { if (!audio) initAudio(); fullReplyText+=ev.content; }
-            if (ev.type==='audio'&&ev.chunk) { const b=atob(ev.chunk); const arr=new Uint8Array(b.length); for(let i=0;i<b.length;i++)arr[i]=b.charCodeAt(i); audioQueue.push(arr); drainQueue(); }
+            if (ev.type==='text'&&ev.content) {
+              if (mseSupported && !audio) initMSEAudio();
+              fullReplyText+=ev.content;
+            }
+            if (ev.type==='audio'&&ev.chunk) {
+              const b=atob(ev.chunk); const arr=new Uint8Array(b.length);
+              for(let i=0;i<b.length;i++)arr[i]=b.charCodeAt(i);
+              if (mseSupported) { audioQueue.push(arr); drainQueue(); }
+              else { iosChunks.push(arr); }  // iOS: 收集起來等 done
+            }
             if (ev.type==='done') {
               if (ev.conversationId) { setConversationId(ev.conversationId); localStorage.setItem(`conv-${characterId}`,ev.conversationId); }
               const now=new Date().toISOString();
               setMessages(prev=>[...prev,{role:'user',content:userText,timestamp:now},{role:'assistant',content:fullReplyText||ev.fullText||'',timestamp:now}]);
-              streamDone=true; drainQueue();
+              streamDone=true;
+              if (mseSupported) {
+                drainQueue();
+              } else if (iosChunks.length > 0) {
+                // iOS：所有 chunk 收齊後合成 blob 一次播
+                const total = iosChunks.reduce((s,c)=>s+c.length,0);
+                const combined = new Uint8Array(total);
+                let offset=0; for(const c of iosChunks){combined.set(c,offset);offset+=c.length;}
+                const blob = new Blob([combined],{type:'audio/mpeg'});
+                const url = URL.createObjectURL(blob);
+                // iOS: 用 gesture 裡預解鎖的 Audio 元素，避免 autoplay 封鎖
+                const iosAudio = unlockedAudioRef.current || new Audio();
+                iosAudio.src = url;
+                iosAudio.load();
+                audio = iosAudio; audioRef.current=audio;
+                audio.play().catch(()=>{});
+                setVoiceState('playing');
+              }
             }
             if (ev.type==='error') throw new Error(ev.message);
           } catch(e){ if(e instanceof SyntaxError) continue; throw e; }
         }
       }
       if (audio) await new Promise<void>(resolve=>{
-        // 只等 audio.ended，不用 queue 長度短路——避免 buffer 填滿但音訊還在播時提早結束
+        // 主路徑：等 audio.ended
         (audio as HTMLAudioElement).addEventListener('ended', ()=>resolve(), {once:true});
-        // 保底：如果 MediaSource 出問題導致 ended 不觸發，5 秒後強制結束
-        const fallback = setTimeout(()=>resolve(), 30000);
-        (audio as HTMLAudioElement).addEventListener('ended', ()=>clearTimeout(fallback), {once:true});
+        // 聰明 fallback：串流結束後最多再等 8 秒
+        const smartFallback = setTimeout(()=>resolve(), 8000);
+        (audio as HTMLAudioElement).addEventListener('ended', ()=>clearTimeout(smartFallback), {once:true});
       });
       // 播完：先讓粒子慢下來再切 idle
       setVoiceState('ending');
@@ -223,17 +257,57 @@ export default function VoicePage() {
   }, [characterId, conversationId, setVoiceState]);
 
   // ── Web Speech API ──
+  const isRecordingRef = useRef(false); // 追蹤「用戶是否還在錄音」，用於自動重啟判斷
+
+  const startWebSpeechSession = useCallback((SR: any) => {
+    // 每次開一個新的 recognition session，累積文字進同一個 finalTextRef
+    const rec = new SR();
+    rec.lang='zh-TW'; rec.interimResults=true; rec.continuous=true; rec.maxAlternatives=1;
+    speechRecRef.current=rec;
+
+    rec.onresult=(e:any)=>{
+      let interim='';
+      for(let i=e.resultIndex;i<e.results.length;i++){
+        if(e.results[i].isFinal){finalTextRef.current+=e.results[i][0].transcript;}
+        else{interim+=e.results[i][0].transcript;}
+      }
+      setInterimText(interim);
+    };
+
+    rec.onerror=(e:any)=>{
+      if(e.error==='no-speech') {
+        // 靜音超時：只要用戶還在錄音，自動重啟，文字繼續累積
+        if(isRecordingRef.current) {
+          try{rec.stop();}catch{}
+          setTimeout(()=>{ if(isRecordingRef.current) startWebSpeechSession(SR); }, 100);
+        }
+        return;
+      }
+      // 其他錯誤才真的停掉
+      isRecordingRef.current=false; setVoiceState('idle');
+    };
+
+    rec.onend=()=>{
+      // 瀏覽器強制停（iOS 60秒限制等）：自動重啟，文字繼續累積
+      if(isRecordingRef.current) {
+        setTimeout(()=>{ if(isRecordingRef.current) startWebSpeechSession(SR); }, 100);
+      }
+    };
+
+    try{ rec.start(); } catch{ isRecordingRef.current=false; setVoiceState('idle'); }
+  }, [setVoiceState]);
+
   const startWebSpeech = useCallback(() => {
     const w=window as any; const SR=w.SpeechRecognition||w.webkitSpeechRecognition; if(!SR) return false;
     finalTextRef.current=''; setInterimText(''); setEndDone(false);
-    const rec=new SR(); rec.lang='zh-TW'; rec.interimResults=true; rec.continuous=true; rec.maxAlternatives=1;
-    speechRecRef.current=rec;
-    rec.onresult=(e:any)=>{ let interim=''; for(let i=e.resultIndex;i<e.results.length;i++){if(e.results[i].isFinal){finalTextRef.current+=e.results[i][0].transcript;}else{interim+=e.results[i][0].transcript;}} setInterimText(interim); };
-    rec.onerror=(e:any)=>{ if(e.error==='no-speech') return; setVoiceState('idle'); };
-    rec.start(); setVoiceState('recording'); return true;
-  }, [setVoiceState]);
+    isRecordingRef.current=true;
+    startWebSpeechSession(SR);
+    setVoiceState('recording');
+    return true;
+  }, [setVoiceState, startWebSpeechSession]);
 
   const stopWebSpeechAndSend = useCallback(() => {
+    isRecordingRef.current=false; // 先關旗，避免 onend 觸發重啟
     const rec=speechRecRef.current; if(rec){try{rec.stop();}catch{} speechRecRef.current=null;}
     sendToDialogue((finalTextRef.current+' '+interimText).trim());
   }, [interimText, sendToDialogue]);
@@ -242,7 +316,9 @@ export default function VoicePage() {
   const startGemini = useCallback(async () => {
     try {
       const stream=await navigator.mediaDevices.getUserMedia({audio:true}); streamRef.current=stream;
-      const mr=new MediaRecorder(stream,{mimeType:'audio/webm'}); chunksRef.current=[];
+      // iOS 不支援 audio/webm，動態選支援的格式
+      const mimeType=['audio/webm','audio/mp4','audio/ogg'].find(t=>MediaRecorder.isTypeSupported(t))||'';
+      const mr=new MediaRecorder(stream, mimeType ? {mimeType} : {}); chunksRef.current=[];
       mr.ondataavailable=e=>{if(e.data.size>0)chunksRef.current.push(e.data);}; mr.start(100);
       mediaRecorderRef.current=mr; setVoiceState('recording'); setEndDone(false);
     } catch { /* mic denied */ }
@@ -252,9 +328,11 @@ export default function VoicePage() {
     const mr=mediaRecorderRef.current; if(!mr) return;
     mr.onstop=async()=>{
       streamRef.current?.getTracks().forEach(t=>t.stop());
-      const blob=new Blob(chunksRef.current,{type:'audio/webm'});
+      const blobType=mr.mimeType||'audio/webm';
+      const blob=new Blob(chunksRef.current,{type:blobType});
       try {
-        const form=new FormData(); form.append('audio',blob,'audio.webm');
+        const ext=blobType.includes('mp4')?'audio.mp4':'audio.webm';
+        const form=new FormData(); form.append('audio',blob,ext);
         const sttRes=await fetch('/api/stt',{method:'POST',body:form});
         const sttData=await sttRes.json() as {text?:string};
         if(sttData.text) await sendToDialogue(sttData.text);
@@ -266,6 +344,8 @@ export default function VoicePage() {
 
   // ── 主按鈕 ──
   const handleMainButton = useCallback(() => {
+    // iOS: 每次 user gesture 都預先解鎖一個 Audio 元素，供後續 blob 播放
+    try { const a=new Audio(); a.play().catch(()=>{}); a.pause(); unlockedAudioRef.current=a; } catch {}
     if (state==='idle') { if(usingSpeechAPI) startWebSpeech(); else startGemini(); }
     else if (state==='recording') { if(usingSpeechAPI) stopWebSpeechAndSend(); else stopGeminiAndSend(); }
     else if (state==='playing') { audioRef.current?.pause(); setVoiceState('idle'); }

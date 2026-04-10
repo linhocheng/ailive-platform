@@ -13,6 +13,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
+import { withRetry } from '@/lib/anthropic-retry';
 import { getFirestore } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 import { generateEmbedding, cosineSimilarity } from '@/lib/embeddings';
@@ -963,7 +964,17 @@ ${awakeningResult}`,
       }
     }
 
-    const systemPrompt = `${mentorInjection}${soulText}${skillsBlock}${episodicBlock}${voiceModeBlock}${gapInjection}
+    // ── Session State：讀取角色的「當下感」──
+    let sessionStateBlock = '';
+    const sessionKey = `session:${conversationId || convRef?.id || ''}`;
+    if (sessionKey !== 'session:') {
+      try {
+        const sessionRaw = await redis.get(sessionKey);
+        if (sessionRaw) sessionStateBlock = `\n\n---\n${sessionRaw}`;
+      } catch { /* 不阻斷 */ }
+    }
+
+    const systemPrompt = `${mentorInjection}${soulText}${skillsBlock}${episodicBlock}${voiceModeBlock}${gapInjection}${sessionStateBlock}
 
 ---
 現在時間（台北）：${taipeiTime}
@@ -973,7 +984,7 @@ ${awakeningResult}`,
 - 需要知道當前事件、時事、不確定的資訊 → 呼叫 web_search
 - 不確定就查，查了才說，不從空氣裡編。
 
-${convData.summary ? `對話摘要（上次回顧）：\n${convData.summary}` : ''}`;
+${convData.userProfile ? `【我認識這個人】\n${convData.userProfile}\n\n` : ''}${convData.summary ? `對話摘要（上次回顧）：\n${convData.summary}` : ''}`;
 
     // 4. 組歷史訊息（舊圖片不重傳 base64，只帶文字，避免 413）
     const history = (convData.messages as Array<{ role: string; content: string; imageUrl?: string }> || []).slice(-10);
@@ -994,229 +1005,259 @@ ${convData.summary ? `對話摘要（上次回顧）：\n${convData.summary}` : 
       },
     ];
 
-    // 5. Claude 對話（支援 tool use loop）
+    // 5. Claude 對話（支援 tool use loop）— Streaming SSE
     const client = new Anthropic({ apiKey });
-    let finalReply = '';
-    let toolsUsed: string[] = [];
-    let generatedImageUrl = '';
-    let currentMessages = [...messages];
-    let totalInputTokens = 0;
-    let totalOutputTokens = 0;
-    let haikuInputTokens = 0;
-    let haikuOutputTokens = 0;
+    const encoder = new TextEncoder();
 
-    for (let turn = 0; turn < 10; turn++) {
-      const response = await client.messages.create({
-        model: 'claude-sonnet-4-6',
-        max_tokens: 1500,
-        system: systemPrompt,
-        tools: [WEB_SEARCH_TOOL, ...dynamicTools],
-        tool_choice: { type: 'auto' }, // auto：讓 Claude 自己判斷要不要查網路/記憶
-        messages: currentMessages,
-      });
+    const responseStream = new ReadableStream({
+      async start(controller) {
+        const sseWrite = (data: object) =>
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
 
-      currentMessages.push({ role: 'assistant', content: response.content });
-      totalInputTokens += response.usage?.input_tokens ?? 0;
-      totalOutputTokens += response.usage?.output_tokens ?? 0;
+        try {
+          let finalReply = '';
+          let toolsUsed: string[] = [];
+          let generatedImageUrl = '';
+          let currentMessages = [...messages];
+          let totalInputTokens = 0;
+          let totalOutputTokens = 0;
+          let haikuInputTokens = 0;
+          let haikuOutputTokens = 0;
 
-      if (response.stop_reason === 'end_turn') {
-        finalReply = response.content
-          .filter(b => b.type === 'text')
-          .map(b => (b as Anthropic.TextBlock).text)
-          .join('');
-        break;
-      }
+          for (let turn = 0; turn < 10; turn++) {
+            const streamMsg = client.messages.stream({
+              model: 'claude-sonnet-4-6',
+              max_tokens: 4096,
+              system: systemPrompt,
+              tools: [WEB_SEARCH_TOOL, ...dynamicTools],
+              tool_choice: { type: 'auto' },
+              messages: currentMessages,
+            });
 
-      if (response.stop_reason === 'tool_use') {
-        const toolResults: Anthropic.ToolResultBlockParam[] = [];
-        for (const block of response.content) {
-          if (block.type === 'tool_use') {
-            toolsUsed.push(block.name);
-            // web_search 由 Anthropic 伺服器端處理，不需要手動 executeTool
-            if (block.name === 'web_search') continue;
-            const result = await executeTool(
-              block.name, block.input as Record<string, unknown>, characterId,
-              (inp, out) => { haikuInputTokens += inp; haikuOutputTokens += out; },
-            );
-            // generate_image 回傳 IMAGE_URL:xxx，解析出來讓 Claude 能在回覆裡帶出
-            if (result.startsWith('IMAGE_URL:')) {
-              const url = result.replace('IMAGE_URL:', '').trim();
-              generatedImageUrl = url;
-              toolResults.push({
-                type: 'tool_result',
-                tool_use_id: block.id,
-                content: `圖片已生成完成。URL: ${url}\n請在你的回覆裡直接用 markdown 格式帶出這張圖：![圖片](${url})\n然後用幾句話描述這張圖或說說你的感受。`,
-              });
-            } else {
-              toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: result });
+            const toolUseBlocks: Array<{id: string; name: string; input: unknown}> = [];
+            let currentTool: {id: string; name: string; inputJson: string} | null = null;
+
+            for await (const event of streamMsg) {
+              if (event.type === 'content_block_start' && event.content_block.type === 'tool_use') {
+                currentTool = { id: event.content_block.id, name: event.content_block.name, inputJson: '' };
+              } else if (event.type === 'content_block_delta') {
+                if (event.delta.type === 'text_delta') {
+                  finalReply += event.delta.text;
+                  sseWrite({ type: 'text', content: event.delta.text });
+                } else if (event.delta.type === 'input_json_delta' && currentTool) {
+                  currentTool.inputJson += event.delta.partial_json;
+                }
+              } else if (event.type === 'content_block_stop' && currentTool) {
+                try {
+                  toolUseBlocks.push({ id: currentTool.id, name: currentTool.name, input: JSON.parse(currentTool.inputJson || '{}') });
+                } catch {
+                  toolUseBlocks.push({ id: currentTool.id, name: currentTool.name, input: {} });
+                }
+                currentTool = null;
+              }
+            }
+
+            const finalMsg = await streamMsg.finalMessage();
+            currentMessages.push({ role: 'assistant', content: finalMsg.content });
+            totalInputTokens += finalMsg.usage?.input_tokens ?? 0;
+            totalOutputTokens += finalMsg.usage?.output_tokens ?? 0;
+
+            if (finalMsg.stop_reason === 'end_turn' || !toolUseBlocks.length) break;
+
+            if (finalMsg.stop_reason === 'tool_use') {
+              const toolResults: Anthropic.ToolResultBlockParam[] = [];
+              for (const tb of toolUseBlocks) {
+                toolsUsed.push(tb.name);
+                if (tb.name === 'web_search') continue;
+                const result = await executeTool(
+                  tb.name, tb.input as Record<string, unknown>, characterId,
+                  (inp, out) => { haikuInputTokens += inp; haikuOutputTokens += out; },
+                );
+                if (result.startsWith('IMAGE_URL:')) {
+                  const url = result.replace('IMAGE_URL:', '').trim();
+                  generatedImageUrl = url;
+                  toolResults.push({
+                    type: 'tool_result',
+                    tool_use_id: tb.id,
+                    content: `圖片已生成完成。URL: ${url}\n請在你的回覆裡直接用 markdown 格式帶出這張圖：![圖片](${url})\n然後用幾句話描述這張圖或說說你的感受。`,
+                  });
+                } else {
+                  toolResults.push({ type: 'tool_result', tool_use_id: tb.id, content: result });
+                }
+              }
+              currentMessages.push({ role: 'user', content: toolResults });
             }
           }
-        }
-        currentMessages.push({ role: 'user', content: toolResults });
-      }
-    }
 
-    if (!finalReply) {
-      finalReply = currentMessages
-        .filter(m => m.role === 'assistant')
-        .flatMap(m => Array.isArray(m.content) ? m.content : [])
-        .filter((b): b is Anthropic.TextBlock => (b as Anthropic.ContentBlock).type === 'text')
-        .map(b => b.text)
-        .join('') || '（無回覆）';
-    }
+          if (!finalReply) {
+            finalReply = currentMessages
+              .filter(m => m.role === 'assistant')
+              .flatMap(m => Array.isArray(m.content) ? m.content : [])
+              .filter((b): b is Anthropic.TextBlock => (b as Anthropic.ContentBlock).type === 'text')
+              .map(b => b.text)
+              .join('') || '（無回覆）';
+          }
 
-    // 6. 存訊息
-    // imageUrl 必須存進 messages，這樣歷史載入時圖片才能顯示
-    // LINE 傳來的 image 是 base64，存進 Storage 才能在網頁歷史中顯示
-    let userImageUrl: string | undefined;
-    if (image?.data) {
-      try {
-        const { getFirebaseAdmin } = await import('@/lib/firebase-admin');
-        const admin = getFirebaseAdmin();
-        const bucket = admin.storage().bucket();
-        const mimeType = image.media_type || 'image/jpeg';
-        const ext = mimeType.includes('png') ? 'png' : mimeType.includes('webp') ? 'webp' : 'jpg';
-        const imgBuffer = Buffer.from(image.data, 'base64');
-        const filePath = generateImagePath(`platform-user-images/${characterId}`).replace(/\.jpg$/, `.${ext}`);
-        const file = bucket.file(filePath);
-        await file.save(imgBuffer, { metadata: { contentType: mimeType } });
-        await file.makePublic();
-        userImageUrl = `https://storage.googleapis.com/${bucket.name}/${filePath}`;
-      } catch (e) {
-        console.warn('[dialogue] user image persist failed:', e);
-      }
-    }
-    const userEntry: Record<string, unknown> = {
-      role: 'user',
-      content: message + (image ? ' [附圖]' : ''),
-      timestamp: new Date().toISOString(),
-    };
-    if (userImageUrl) userEntry.imageUrl = userImageUrl;
-    const assistantEntry: Record<string, unknown> = {
-      role: 'assistant',
-      content: finalReply,
-      timestamp: new Date().toISOString(),
-    };
-    if (generatedImageUrl) assistantEntry.imageUrl = generatedImageUrl;
-
-    const newMessages = [
-      ...(convData.messages as Array<Record<string, unknown>> || []),
-      userEntry,
-      assistantEntry,
-    ];
-
-    const newCount = (convData.messageCount as number || 0) + 2;
-    await convRef.update({
-      messages: newMessages,
-      messageCount: newCount,
-      updatedAt: new Date().toISOString(),
-    });
-
-    // ── Gateway：寫回 Redis cache（30 分鐘 TTL）──
-    if (conversationId) {
-      try {
-        const updatedConvData = { ...convData, messages: newMessages, messageCount: newCount };
-        await redis.set(`conv:${conversationId}`, JSON.stringify(updatedConvData), 60 * 30);
-      } catch (_e) { /* Redis 壞掉不影響主流程 */ }
-    }
-
-    // 7. 更新 growthMetrics + 費用追蹤
-    await db.collection('platform_characters').doc(characterId).update({
-      'growthMetrics.totalConversations': FieldValue.increment(1),
-      updatedAt: new Date().toISOString(),
-    });
-    await trackCost(characterId, 'claude-sonnet-4-6', totalInputTokens, totalOutputTokens);
-    if (haikuInputTokens + haikuOutputTokens > 0) {
-      await trackCost(characterId, 'claude-haiku-4-5-20251001', haikuInputTokens, haikuOutputTokens);
-    }
-
-    // 7b. summary 壓縮：對話超過 10 輪，把第 1-10 輪壓縮進 summary
-    const allMessages = newMessages;
-    if (allMessages.length > 10) {
-      const olderMessages = allMessages.slice(0, allMessages.length - 10);
-      if (olderMessages.length >= 4) {
-        try {
-          const compressText = olderMessages
-            .map(m => `${String(m.role) === 'user' ? '用戶' : '角色'}：${String(m.content || '').slice(0, 100)}`)
-            .join('\n');
-          const compressRes = await client.messages.create({
-            model: 'claude-haiku-4-5-20251001',
-            max_tokens: 200,
-            messages: [{
-              role: 'user',
-              content: `以下是對話的早期段落，請用 3-5 句話壓縮成摘要，保留重要的人名、話題、關係資訊。直接輸出摘要，不要標題。\n\n${compressText}`,
-            }],
-          });
-          const newSummary = (compressRes.content[0] as Anthropic.TextBlock).text.trim();
-          await trackCost(characterId, 'claude-haiku-4-5-20251001',
-            compressRes.usage?.input_tokens ?? 0, compressRes.usage?.output_tokens ?? 0);
-          // 只保留最近 10 輪，summary 累加
-          const existingSummary = String(convData.summary || '');
-          const mergedSummary = existingSummary
-            ? `${existingSummary}\n${newSummary}`
-            : newSummary;
-          await convRef!.update({
-            messages: allMessages.slice(-10),
-            summary: mergedSummary.slice(-500), // summary 最多保留 500 字
-          });
-        } catch { /* 壓縮失敗不阻斷 */ }
-      }
-    }
-
-    // 8. 每 20 輪提煉 insight
-    if (newCount % 20 === 0) {
-      const recentMessages = newMessages.slice(-20)
-        .map(m => `${String(m.role) === 'user' ? '用戶' : '角色'}：${String(m.content || '')}`)
-        .filter(line => line.length > 5)
-        .join('\n');
-
-      try {
-        const extractRes = await client.messages.create({
-          model: 'claude-haiku-4-5-20251001',
-          max_tokens: 500,
-          messages: [{
+          // 6. 存訊息
+          let userImageUrl: string | undefined;
+          if (image?.data) {
+            try {
+              const { getFirebaseAdmin } = await import('@/lib/firebase-admin');
+              const admin = getFirebaseAdmin();
+              const bucket = admin.storage().bucket();
+              const mimeType = image.media_type || 'image/jpeg';
+              const ext = mimeType.includes('png') ? 'png' : mimeType.includes('webp') ? 'webp' : 'jpg';
+              const imgBuffer = Buffer.from(image.data, 'base64');
+              const filePath = generateImagePath(`platform-user-images/${characterId}`).replace(/\.jpg$/, `.${ext}`);
+              const file = bucket.file(filePath);
+              await file.save(imgBuffer, { metadata: { contentType: mimeType } });
+              await file.makePublic();
+              userImageUrl = `https://storage.googleapis.com/${bucket.name}/${filePath}`;
+            } catch (e) {
+              console.warn('[dialogue] user image persist failed:', e);
+            }
+          }
+          const userEntry: Record<string, unknown> = {
             role: 'user',
-            content: `以下是一段對話記錄，請提煉出 1-2 條最重要的洞察（什麼值得記住）。
-用 JSON 陣列回傳：[{"title":"...","content":"..."}]
-只回傳 JSON，不要其他文字。
+            content: message + (image ? ' [附圖]' : ''),
+            timestamp: new Date().toISOString(),
+          };
+          if (userImageUrl) userEntry.imageUrl = userImageUrl;
+          const assistantEntry: Record<string, unknown> = {
+            role: 'assistant',
+            content: finalReply,
+            timestamp: new Date().toISOString(),
+          };
+          if (generatedImageUrl) assistantEntry.imageUrl = generatedImageUrl;
 
-對話：
-${recentMessages}`,
-          }],
-        });
+          const newMessages = [
+            ...(convData.messages as Array<Record<string, unknown>> || []),
+            userEntry,
+            assistantEntry,
+          ];
+          const newCount = (convData.messageCount as number || 0) + 2;
 
-        const raw = (extractRes.content[0] as Anthropic.TextBlock).text.trim();
-        const cleaned = raw.replace(/^```[\w]*\n?/m, '').replace(/\n?```$/m, '').trim();
-        const insights = JSON.parse(cleaned);
-        const today = getTaipeiDate();
-        for (const ins of insights) {
-          const embedding = await generateEmbedding(`${ins.title} ${ins.content}`);
-          await db.collection('platform_insights').add({
-            characterId,
-            title: ins.title,
-            content: ins.content,
-            source: 'auto_extract',
-            eventDate: today,
-            tier: 'fresh',
-            hitCount: 0,
-            lastHitAt: null,
-            embedding,
-            createdAt: new Date().toISOString(),
+          await convRef.update({
+            messages: newMessages,
+            messageCount: newCount,
+            updatedAt: new Date().toISOString(),
           });
-        }
-        await db.collection('platform_characters').doc(characterId).update({
-          'growthMetrics.totalInsights': FieldValue.increment(insights.length),
-        });
-      } catch { /* 提煉失敗不中斷 */ }
-    }
 
-    return NextResponse.json({
-      success: true,
-      reply: finalReply,
-      conversationId: convRef.id,
-      toolsUsed,
-      messageCount: newCount,
-      imageUrl: generatedImageUrl || undefined,
+          if (conversationId) {
+            try {
+              const updatedConvData = { ...convData, messages: newMessages, messageCount: newCount };
+              await redis.set(`conv:${conversationId}`, JSON.stringify(updatedConvData), 60 * 30);
+            } catch (_e) { /* Redis 壞掉不影響 */ }
+          }
+
+          await db.collection('platform_characters').doc(characterId).update({
+            'growthMetrics.totalConversations': FieldValue.increment(1),
+            updatedAt: new Date().toISOString(),
+          });
+          await trackCost(characterId, 'claude-sonnet-4-6', totalInputTokens, totalOutputTokens);
+          if (haikuInputTokens + haikuOutputTokens > 0) {
+            await trackCost(characterId, 'claude-haiku-4-5-20251001', haikuInputTokens, haikuOutputTokens);
+          }
+
+          // summary 壓縮
+          const allMessages = newMessages;
+          if (allMessages.length > 10) {
+            const olderMessages = allMessages.slice(0, allMessages.length - 10);
+            if (olderMessages.length >= 4) {
+              try {
+                const compressText = olderMessages
+                  .map(m => `${String(m.role) === 'user' ? '用戶' : '角色'}：${String(m.content || '').slice(0, 100)}`)
+                  .join('\n');
+                const compressRes = await client.messages.create({
+                  model: 'claude-haiku-4-5-20251001',
+                  max_tokens: 200,
+                  messages: [{ role: 'user', content: `以下是對話的早期段落，請用 3-5 句話壓縮成摘要，保留重要的人名、話題、關係資訊。直接輸出摘要，不要標題。\n\n${compressText}` }],
+                });
+                const newSummary = (compressRes.content[0] as Anthropic.TextBlock).text.trim();
+                await trackCost(characterId, 'claude-haiku-4-5-20251001', compressRes.usage?.input_tokens ?? 0, compressRes.usage?.output_tokens ?? 0);
+                const existingSummary = String(convData.summary || '');
+                const mergedSummary = existingSummary ? `${existingSummary}\n${newSummary}` : newSummary;
+                await convRef!.update({ messages: allMessages.slice(-10), summary: mergedSummary.slice(-500) });
+              } catch { /* 壓縮失敗不阻斷 */ }
+            }
+          }
+
+          // userProfile 更新
+          if (newCount >= 2 && newCount % 6 === 0 && convRef) {
+            const profileMessages = newMessages.slice(-12)
+              .map(m => `${String(m.role) === 'user' ? '用戶' : '角色'}：${String(m.content || '').slice(0, 150)}`)
+              .join('\n');
+            const existingProfile = String(convData.userProfile || '');
+            try {
+              const profileRes = await client.messages.create({
+                model: 'claude-haiku-4-5-20251001',
+                max_tokens: 150,
+                messages: [{ role: 'user', content: `根據以下對話，用 2-3 句話更新「我對這個用戶的了解」。\n聚焦在：他叫什麼、他的喜好/個性/生活情況、我們的關係感覺。\n${existingProfile ? `目前已知：${existingProfile}\n\n` : ''}新的對話：\n${profileMessages}\n\n直接輸出更新後的描述，不要標題，不超過 100 字。` }],
+              });
+              const newProfile = (profileRes.content[0] as Anthropic.TextBlock).text.trim();
+              await trackCost(characterId, 'claude-haiku-4-5-20251001', profileRes.usage?.input_tokens ?? 0, profileRes.usage?.output_tokens ?? 0);
+              await convRef.update({ userProfile: newProfile });
+            } catch { /* 不阻斷 */ }
+          }
+
+          // 每 20 輪提煉 insight
+          if (newCount % 20 === 0) {
+            const recentMessages = newMessages.slice(-20)
+              .map(m => `${String(m.role) === 'user' ? '用戶' : '角色'}：${String(m.content || '')}`)
+              .filter(line => line.length > 5).join('\n');
+            try {
+              const extractRes = await client.messages.create({
+                model: 'claude-haiku-4-5-20251001',
+                max_tokens: 500,
+                messages: [{ role: 'user', content: `以下是一段對話記錄，請提煉出 1-2 條最重要的洞察（什麼值得記住）。\n用 JSON 陣列回傳：[{"title":"...","content":"..."}]\n只回傳 JSON，不要其他文字。\n\n對話：\n${recentMessages}` }],
+              });
+              const raw = (extractRes.content[0] as Anthropic.TextBlock).text.trim();
+              const cleaned = raw.replace(/^```[\w]*\n?/m, '').replace(/\n?```$/m, '').trim();
+              const insights = JSON.parse(cleaned);
+              const today = getTaipeiDate();
+              for (const ins of insights) {
+                const embedding = await generateEmbedding(`${ins.title} ${ins.content}`);
+                await db.collection('platform_insights').add({ characterId, title: ins.title, content: ins.content, source: 'auto_extract', eventDate: today, tier: 'fresh', hitCount: 0, lastHitAt: null, embedding, createdAt: new Date().toISOString() });
+              }
+              await db.collection('platform_characters').doc(characterId).update({ 'growthMetrics.totalInsights': FieldValue.increment(insights.length) });
+            } catch { /* 提煉失敗不中斷 */ }
+          }
+
+          // Session State 更新
+          if (newCount >= 4) {
+            void (async () => {
+              try {
+                const recentForSession = newMessages.slice(-6)
+                  .map(m => `${String(m.role) === 'user' ? '用戶' : '角色'}：${String(m.content || '').slice(0, 80)}`).join('\n');
+                const sessionRes = await client.messages.create({
+                  model: 'claude-haiku-4-5-20251001',
+                  max_tokens: 120,
+                  messages: [{ role: 'user', content: `根據以下對話，用繁體中文寫一段「當下狀態」，給角色看的，讓角色下一輪說話時感覺有連續性。\n格式固定：\n【當下狀態】\n情緒：（用戶現在的情緒/狀態，5-10字）\n話題：（我們正在聊什麼，10-20字）\n未竟：（我剛說要做什麼或用戶期待什麼，10-20字，沒有就寫「無」）\n\n只輸出這三行，不要其他文字。\n\n對話：\n${recentForSession}` }],
+                });
+                const sessionState = (sessionRes.content[0] as { text: string }).text.trim();
+                await redis.set(`session:${convRef.id}`, sessionState, 60 * 60 * 24);
+              } catch { /* session 更新失敗 */ }
+            })();
+          }
+
+          sseWrite({ type: 'done', conversationId: convRef.id, toolsUsed, messageCount: newCount, imageUrl: generatedImageUrl || undefined });
+
+        } catch (innerErr: unknown) {
+          const msg = innerErr instanceof Error ? innerErr.message : String(innerErr);
+          try { controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'error', message: msg })}\n\n`)); } catch { /* ignore */ }
+        } finally {
+          controller.close();
+        }
+      },
+    });
+
+    return new Response(responseStream, {
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache, no-transform',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      },
     });
 
   } catch (e: unknown) {
