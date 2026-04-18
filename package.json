@@ -12,6 +12,7 @@
     "@anthropic-ai/sdk": "^0.78.0",
     "@google-cloud/vertexai": "^1.10.0",
     "@types/pdf-parse": "^1.1.5",
+    "chinese-conv": "^4.0.0",
     "firebase": "^12.10.0",
     "firebase-admin": "^13.7.0",
     "google-auth-library": "^10.6.1",

@@ -18,6 +18,7 @@
  * 這樣前端 MSE (audio/mpeg) 不用改。
  */
 import type { TTSProvider, TTSRequest } from './types';
+import { sify } from 'chinese-conv';
 
 interface MinimaxVoiceSettings {
   voice_id: string;
@@ -145,9 +146,13 @@ export class MinimaxProvider implements TTSProvider {
     const settings = buildSettings(req.voiceId);
 
     const url = `https://api.minimax.io/v1/t2a_v2?GroupId=${encodeURIComponent(groupId)}`;
+    // 繁→簡轉換：MiniMax 訓練語料以簡體為主，送簡體進去發音穩定度較高
+    // 字級對應，不轉詞彙（譬如「專案」不會變「項目」）— 只解決發音，不改用語
+    const textForMinimax = sify(req.text);
+
     const body = {
       model: settings.model,
-      text: req.text,
+      text: textForMinimax,
       stream: true,
       stream_options: { exclude_aggregated_audio: true },
       language_boost: 'auto',
