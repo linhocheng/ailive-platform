@@ -5,7 +5,7 @@ import { CharNav } from '../page';
 
 interface Insight { id: string; title: string; content: string; source: string; tier: string; hitCount: number; eventDate: string; createdAt: string; }
 
-const TIER_COLORS: Record<string, string> = { core: '#fff3e0', fresh: '#f8f9fa', archived: '#eeeeee' };
+const TIER_COLORS: Record<string, string> = { core: '#fff3e0', fresh: '#f8f9fa', archive: '#eeeeee' };
 const SOURCE_LABELS: Record<string, string> = { conversation: '對話', manual: '手動', self_learning: '自學', reflect: '省思', sleep_time: '夢境', auto_extract: '自動提煉' };
 
 export default function MemoryPage() {
@@ -25,7 +25,7 @@ export default function MemoryPage() {
 
   useEffect(() => {
     load();
-    fetch(`/api/characters/${id}`).then(r => r.json()).then(d => setCharName(d.character?.name || ''));
+    fetch(`/api/characters/${id}`).then(r => r.json()).then(d => { setCharName(d.character?.name || ''); });
   }, [id]);
 
   const del = async (insightId: string) => {
@@ -50,7 +50,7 @@ export default function MemoryPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <h3 style={{ margin: 0 }}>共 {items.length} 條記憶</h3>
         <div style={{ display: 'flex', gap: 8 }}>
-          {['all', 'core', 'fresh', 'archived'].map(t => (
+          {['all', 'core', 'fresh', 'archive'].map(t => (
             <button key={t} onClick={() => setFilter(t)}
               style={{ padding: '5px 12px', border: '1px solid #e0e0e0', borderRadius: 20, background: filter === t ? '#1a1a2e' : '#fff', color: filter === t ? '#fff' : '#666', cursor: 'pointer', fontSize: 12 }}>
               {t === 'all' ? '全部' : t === 'core' ? '核心' : t === 'fresh' ? '新鮮' : '封存'}
