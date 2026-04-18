@@ -14,6 +14,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
 import { withRetry } from '@/lib/anthropic-retry';
+import { shouldInjectGap } from '@/lib/time-awareness';
 import { detectGear, MODELS, getMaxTokens } from '@/lib/llm-router';
 import { callGemini } from '@/lib/gemini-client';
 import { getFirestore } from '@/lib/firebase-admin';
@@ -894,23 +895,16 @@ ${awakeningResult}`,
 - 不用條列式，說人話，像朋友在聊天` : '';
 
     // 時間感知：只在新訪問且有過對話記錄且間隔 > 10 分鐘時注入
-    const formatGap = (ms: number): string => {
-      const min = ms / 60000;
-      if (min < 60)    return `約 ${Math.round(min)} 分鐘`;
-      if (min < 1440)  return `約 ${Math.round(min / 60)} 小時`;
-      if (min < 10080) return `約 ${Math.round(min / 1440)} 天`;
-      return `約 ${Math.round(min / 10080)} 週`;
-    };
+    // formatGap 與閾值統一在 lib/time-awareness（破真相分裂）
     let gapInjection = '';
-    if (isNewVisit && convData.messageCount && Number(convData.messageCount) > 0) {
-      const lastAt = convData.updatedAt ? new Date(String(convData.updatedAt)).getTime() : null;
-      if (lastAt && !isNaN(lastAt)) {
-        const gap = Date.now() - lastAt;
-        if (gap > 10 * 60 * 1000) {
-          const duration = formatGap(gap);
-          gapInjection = `\n\n---\n【時間感知】距離上次對話過了 ${duration}\n（可能說出來、也可能什麼都不說，又或者接續自己想要的）`;
-        }
-      }
+    const gapCheck = shouldInjectGap({
+      lastUpdatedAt: convData.updatedAt as string | null | undefined,
+      messageCount: Number(convData.messageCount || 0),
+      requireNewVisit: true,
+      isNewVisit,
+    });
+    if (gapCheck.inject) {
+      gapInjection = `\n\n---\n【時間感知】距離上次對話過了 ${gapCheck.durationText}\n（可能說出來、也可能什麼都不說，又或者接續自己想要的）`;
     }
 
     // ── Session State：讀取角色的「當下感」──
