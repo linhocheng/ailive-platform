@@ -29,7 +29,7 @@ function getMemoryType(source: string): 'identity' | 'knowledge' {
   const identitySources = new Set([
     'sleep_time', 'self_awareness', 'sleep_self_awareness',
     'reflect', 'scheduler_reflect', 'scheduler_sleep',
-    'post_reflection', 'pre_publish_reflection',
+    'post_reflection', 'post_memory', 'pre_publish_reflection',
     'conversation', 'awakening',
   ]);
   return identitySources.has(source) ? 'identity' : 'knowledge';
@@ -63,25 +63,14 @@ export async function POST(req: NextRequest) {
     const now = Date.now();
 
     // 建立 rootAnchor：用於計算 rootRelevance（防漂移保護）
-    // 優先用知識庫天命條目，fallback 用 soul_core 文字
+    // 只用 soul_core 文字——rootAnchor 衡量「跟角色身份的相關度」
+    // 產品知識已在 platform_knowledge 獨立保存，不應干擾身份記憶的篩選
     let rootAnchorEmbeddings: number[][] = [];
     try {
-      const kSnap0 = await db.collection('platform_knowledge')
-        .where('characterId', '==', characterId)
-        .limit(30)
-        .get();
-      const kWithEmb0 = kSnap0.docs
-        .map(d => d.data())
-        .filter(d => d.embedding && Array.isArray(d.embedding));
-      if (kWithEmb0.length > 0) {
-        rootAnchorEmbeddings = kWithEmb0.map(d => d.embedding as number[]);
-      } else {
-        // fallback：soul_core 文字
-        const soulText = String(char.soul_core || char.enhancedSoul || '').slice(0, 400);
-        if (soulText) {
-          const soulEmb = await generateEmbedding(soulText);
-          rootAnchorEmbeddings = [soulEmb];
-        }
+      const soulText = String(char.soul_core || char.system_soul || char.enhancedSoul || '').slice(0, 600);
+      if (soulText) {
+        const soulEmb = await generateEmbedding(soulText);
+        rootAnchorEmbeddings = [soulEmb];
       }
     } catch { /* rootAnchor 建立失敗不阻斷，只是不做保護 */ }
 
@@ -90,12 +79,23 @@ export async function POST(req: NextRequest) {
       return Math.max(...rootAnchorEmbeddings.map(a => cosineSimilarity(insightEmb, a)));
     }
 
-    // 1. 升降級（設計規則 2026-03-30 rootRelevance 保護版）
-    // fresh  → core    : hitCount >= 5 且 rootRelevance >= 門檻（identity: 0.2 / knowledge: 0.35）
-    // fresh  → blocked : hitCount >= 5 但 rootRelevance 不足 → 寫入 rootRelevance，不升
-    // core   → archive : lastHitAt 超過 decayDays 無新命中
-    // fresh  → archive : createdAt 超過 decayDays 且 hitCount = 0
-    // self   → 不參與升降，永久保留
+    // 1. 升降級（設計規則 2026-04-14 重設計版）
+    //
+    // 核心原則：
+    //   - rootRelevance 決定是否能升 core（身份相關度）
+    //   - hitCount 只影響對話注入時的排序，不再是升格門檻
+    //   - knowledge 類永遠不升 core（知識是工具，不是身份）
+    //
+    // identity 記憶：
+    //   fresh → core    : rootRelevance >= 0.5（與靈魂高度相關）
+    //   fresh → archive : createdAt 超過 30 天且 hitCount = 0
+    //   core  → archive : lastHitAt 超過 60 天無新命中
+    //
+    // knowledge 記憶：
+    //   fresh → archive : createdAt 超過 7 天且 hitCount = 0
+    //   （永遠不升 core，hitCount 影響對話注入排序）
+    //
+    // self → 不參與升降，永久保留
     for (const ins of insights) {
       const hitCount = (ins.hitCount as number) || 0;
       const tier = ins.tier as string;
@@ -106,41 +106,61 @@ export async function POST(req: NextRequest) {
 
       if (tier === 'self' || tier === 'archive') continue;
 
-      // memoryType 分流：identity 保護更久，knowledge 衰退更快
       const memType = getMemoryType(String(ins.source || ''));
-      const coreDecayDays = memType === 'identity' ? 60 : 14;
-      const freshDecayDays = memType === 'identity' ? 30 : 7;
-      const rootThreshold = memType === 'identity' ? 0.2 : 0.35;
 
-      if (hitCount >= 5 && tier === 'fresh') {
-        // rootRelevance 保護：升 core 前先驗根
-        const insEmb = ins.embedding && Array.isArray(ins.embedding) ? ins.embedding as number[] : null;
-        const rootRelevance = insEmb ? calcRootRelevance(insEmb) : 1;
-        if (rootRelevance >= rootThreshold) {
-          if (!dryRun) await db.collection('platform_insights').doc(ins.id as string).update({
-            tier: 'core', memoryType: memType, rootRelevance,
-          });
-          upgraded.push(ins.title as string);
-        } else {
-          // 不升，但寫入 rootRelevance 讓 dashboard 可見
-          if (!dryRun) await db.collection('platform_insights').doc(ins.id as string).update({ rootRelevance, memoryType: memType });
-          blocked.push(String(ins.title || ''));
-        }
-      } else if (tier === 'core' && daysSinceHit > coreDecayDays) {
-        if (!dryRun) await db.collection('platform_insights').doc(ins.id as string).update({ tier: 'archive' });
-        archived.push(ins.title as string);
-      } else if (tier === 'fresh' && hitCount === 0 && ageDays > freshDecayDays) {
-        if (!dryRun) await db.collection('platform_insights').doc(ins.id as string).update({ tier: 'archive' });
-        archived.push(ins.title as string);
-      }
       // 補 memoryType（舊資料沒有這個欄位）
       if (!ins.memoryType && !dryRun) {
         await db.collection('platform_insights').doc(ins.id as string).update({ memoryType: memType });
       }
+
+      if (memType === 'identity') {
+        // ── identity：rootRelevance >= 0.5 才升 core ──
+        const coreDecayDays = 60;
+        const freshDecayDays = 30;
+        const CORE_THRESHOLD = 0.5;
+
+        if (tier === 'fresh') {
+          const insEmb = ins.embedding && Array.isArray(ins.embedding) ? ins.embedding as number[] : null;
+          const rootRelevance = insEmb ? calcRootRelevance(insEmb) : 0;
+          // 補寫 rootRelevance
+          if (!dryRun && rootRelevance !== ins.rootRelevance) {
+            await db.collection('platform_insights').doc(ins.id as string).update({ rootRelevance, memoryType: memType });
+          }
+          if (rootRelevance >= CORE_THRESHOLD) {
+            if (!dryRun) await db.collection('platform_insights').doc(ins.id as string).update({
+              tier: 'core', memoryType: memType, rootRelevance,
+            });
+            upgraded.push(ins.title as string);
+          } else if (hitCount === 0 && ageDays > freshDecayDays) {
+            if (!dryRun) await db.collection('platform_insights').doc(ins.id as string).update({ tier: 'archive' });
+            archived.push(ins.title as string);
+          }
+        } else if (tier === 'core' && daysSinceHit > coreDecayDays) {
+          if (!dryRun) await db.collection('platform_insights').doc(ins.id as string).update({ tier: 'archive' });
+          archived.push(ins.title as string);
+        }
+
+      } else {
+        // ── knowledge：永遠不升 core，快速衰退 ──
+        const freshDecayDays = 7;
+        if (tier === 'fresh' && hitCount === 0 && ageDays > freshDecayDays) {
+          if (!dryRun) await db.collection('platform_insights').doc(ins.id as string).update({ tier: 'archive' });
+          archived.push(ins.title as string);
+        }
+        // knowledge 被手動升成 core 的，重新計算 rootRelevance 並降回 fresh
+        if (tier === 'core') {
+          const insEmb = ins.embedding && Array.isArray(ins.embedding) ? ins.embedding as number[] : null;
+          const rootRelevance = insEmb ? calcRootRelevance(insEmb) : 0;
+          if (!dryRun) await db.collection('platform_insights').doc(ins.id as string).update({
+            tier: 'fresh', memoryType: memType, rootRelevance,
+          });
+          archived.push(`[knowledge→fresh] ${String(ins.title || '')}`);
+        }
+      }
     }
 
     // 2. 合併相似（cosine > 0.88）
-    const withEmb = insights.filter(i => i.embedding && Array.isArray(i.embedding) && i.tier !== 'archived');
+    const withEmb = insights.filter(i => i.embedding && Array.isArray(i.embedding) && i.tier !== 'archive');
     const toMerge: Array<[string, string]> = [];
     const mergedSet = new Set<string>();
 
@@ -453,14 +473,14 @@ ${skillList}
           const mType = String(i.memoryType || '');
           if (mType === 'identity') return true;
           if (mType === 'knowledge') return false;
-          const IDENTITY_SOURCES = new Set(['sleep_time','self_awareness','sleep_self_awareness','reflect','scheduler_reflect','scheduler_sleep','post_reflection','pre_publish_reflection','conversation','awakening']);
+          const IDENTITY_SOURCES = new Set(['sleep_time','self_awareness','sleep_self_awareness','reflect','scheduler_reflect','scheduler_sleep','post_reflection', 'post_memory','pre_publish_reflection','conversation','awakening']);
           return IDENTITY_SOURCES.has(String(i.source || ''));
         }).length,
         knowledge: insights.filter(i => {
           const mType = String(i.memoryType || '');
           if (mType === 'knowledge') return true;
           if (mType === 'identity') return false;
-          const IDENTITY_SOURCES = new Set(['sleep_time','self_awareness','sleep_self_awareness','reflect','scheduler_reflect','scheduler_sleep','post_reflection','pre_publish_reflection','conversation','awakening']);
+          const IDENTITY_SOURCES = new Set(['sleep_time','self_awareness','sleep_self_awareness','reflect','scheduler_reflect','scheduler_sleep','post_reflection', 'post_memory','pre_publish_reflection','conversation','awakening']);
           return !IDENTITY_SOURCES.has(String(i.source || ''));
         }).length,
       },
