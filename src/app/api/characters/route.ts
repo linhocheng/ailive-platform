@@ -41,9 +41,12 @@ export async function POST(req: NextRequest) {
 
     const {
       name,
-      type = 'vtuber',   // vtuber | brand_editor
+      tier = 'character',  // character | strategist
+      type = 'vtuber',     // vtuber | brand_editor
       rawSoul = '',
       mission = '',
+      manages = [],        // 謀師專用：管理的角色 ID 清單，空陣列 = 管全部
+      reportsTo = null,    // 角色專用：回報的謀師 ID
     } = body;
 
     if (!name) {
@@ -53,6 +56,7 @@ export async function POST(req: NextRequest) {
     const now = new Date();
     const data = {
       name,
+      tier,
       type,
       rawSoul,
       enhancedSoul: '',
@@ -82,6 +86,8 @@ export async function POST(req: NextRequest) {
         totalOutputTokens: 0,
         totalCostUSD: 0,
       },
+      manages,
+      reportsTo,
       status: 'pending',
       createdAt: now,
       updatedAt: now,

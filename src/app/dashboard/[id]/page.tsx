@@ -1,8 +1,9 @@
 'use client';
+import React from 'react';
 import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 
-const NAV_ITEMS = [
+const CHARACTER_NAV = [
   { href: '', label: '概覽' },
   { href: '/soul', label: '靈魂' },
   { href: '/identity', label: '身份' },
@@ -12,9 +13,21 @@ const NAV_ITEMS = [
   { href: '/posts', label: '發文' },
   { href: '/skills', label: '技巧' },
   { href: '/tasks', label: '排程' },
-  { href: '/proposals', label: '靈魂提案' },
   { href: '/growth', label: '成長' },
 ];
+
+const STRATEGIST_NAV = [
+  { href: '', label: '概覽' },
+  { href: '/soul', label: '靈魂' },
+  { href: '/assignments', label: '管轄設定' },
+  { href: '/tasks', label: '任務提案' },
+  { href: '/memory', label: '記憶' },
+  { href: '/growth', label: '成長' },
+];
+
+function getNavItems(tier?: string) {
+  return tier === 'strategist' ? STRATEGIST_NAV : CHARACTER_NAV;
+}
 
 interface Character {
   id: string;
@@ -42,14 +55,20 @@ const Ic = {
   ExternalLink: () => <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>,
 };
 
-export function CharNav({ id, active }: { id: string; active: string }) {
+export function CharNav({ id, active, tier: tierProp }: { id: string; active: string; tier?: string }) {
+  const [tier, setTier] = React.useState(tierProp || '');
+  React.useEffect(() => {
+    if (tierProp !== undefined) { setTier(tierProp); return; }
+    fetch(`/api/characters/${id}`).then(r => r.json()).then(d => setTier(d.character?.tier || ''));
+  }, [id, tierProp]);
+  const navItems = getNavItems(tier);
   return (
     <nav style={{
       display: 'flex', gap: 2, marginBottom: 28,
       borderBottom: '1px solid var(--border)',
       overflowX: 'auto', paddingBottom: 0,
     }}>
-      {NAV_ITEMS.map(item => {
+      {navItems.map(item => {
         const href = `/dashboard/${id}${item.href}`;
         const isActive = active === item.href;
         return (
