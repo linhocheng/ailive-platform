@@ -28,7 +28,7 @@ import { redis } from '@/lib/redis';
 import { generateEmbedding, cosineSimilarity } from '@/lib/embeddings';
 import { generateImageForCharacter } from '@/lib/generate-image';
 import { preprocessTTS } from '@/lib/tts-preprocess';
-import { getTTSProvider } from '@/lib/tts-providers';
+import { getTTSProvider, synthesizeWithFallback } from '@/lib/tts-providers';
 
 export const maxDuration = 120;
 
@@ -60,12 +60,33 @@ function sseEvent(data: object): string {
   return `data: ${JSON.stringify(data)}\n\n`;
 }
 
-// ===== TTS 透過 Provider，回傳 audio/mpeg stream =====
-async function fetchTTSStream(text: string, voiceId: string, providerName?: string | null): Promise<ReadableStream<Uint8Array> | null> {
-  const processed = preprocessTTS(text.trim());
+// ===== TTS 透過 Provider（含 cross-provider fallback），回傳 audio/mpeg stream =====
+// primary 失敗（null / 0B 第一 chunk）→ 自動切 fallback 重試一次
+// 兩邊都失敗 → 回 null
+async function fetchTTSStream(opts: {
+  text: string;
+  primaryVoiceId: string;
+  primaryProviderName: string;
+  fallbackVoiceId?: string;          // 不傳 = 不做 fallback（向後相容）
+  fallbackProviderName?: string;
+}): Promise<ReadableStream<Uint8Array> | null> {
+  const processed = preprocessTTS(opts.text.trim());
   if (!processed) return null;
-  const provider = getTTSProvider(providerName);
-  return provider.synthesizeStream({ text: processed, voiceId });
+
+  const primary = {
+    provider: getTTSProvider(opts.primaryProviderName),
+    voiceId: opts.primaryVoiceId,
+  };
+  // 只有 fallback voiceId 有值才掛 fallback（避免 minimax 失敗切到沒設定的 ElevenLabs voice）
+  const fallback = opts.fallbackVoiceId && opts.fallbackProviderName
+    ? {
+        provider: getTTSProvider(opts.fallbackProviderName),
+        voiceId: opts.fallbackVoiceId,
+      }
+    : undefined;
+
+  const result = await synthesizeWithFallback({ primary, fallback, text: processed });
+  return result ? result.stream : null;
 }
 
 // ===== 讀完整個 stream 拿 base64 =====
@@ -533,7 +554,19 @@ export async function POST(req: NextRequest) {
           send({ type: 'text', content: sentence, index: idx });
 
           try {
-            const audioStream = await fetchTTSStream(sentence, voiceId, ttsProviderName);
+            // fallback：MiniMax 失敗自動切 ElevenLabs（反之亦然）
+            // 若角色沒設另一邊的 voiceId，fallback 自動關閉（保守做法）
+            const fallbackVoiceId = ttsProviderName === 'minimax'
+              ? ((charData.voiceId as string) || '')                // MiniMax→ElevenLabs：用角色的 voiceId
+              : ((charData.voiceIdMinimax as string) || '');         // ElevenLabs→MiniMax：用角色的 voiceIdMinimax
+            const fallbackProviderName = ttsProviderName === 'minimax' ? 'elevenlabs' : 'minimax';
+            const audioStream = await fetchTTSStream({
+              text: sentence,
+              primaryVoiceId: voiceId,
+              primaryProviderName: ttsProviderName,
+              fallbackVoiceId: fallbackVoiceId || undefined,
+              fallbackProviderName: fallbackVoiceId ? fallbackProviderName : undefined,
+            });
             const base64 = audioStream ? await streamToBase64(audioStream) : '';
             audioBuffer.set(idx, base64);
           } catch (_e) {
