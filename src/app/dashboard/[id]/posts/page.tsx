@@ -174,7 +174,7 @@ export default function PostsPage() {
 
   useEffect(() => {
     load();
-    fetch(`/api/characters/${id}`).then(r => r.json()).then(d => setCharName(d.character?.name || ''));
+    fetch(`/api/characters/${id}`).then(r => r.json()).then(d => { setCharName(d.character?.name || ''); });
   }, [id]);
 
   const approve = async (postId: string) => {

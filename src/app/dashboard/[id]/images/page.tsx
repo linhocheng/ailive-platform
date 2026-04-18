@@ -27,7 +27,7 @@ export default function ImagesPage() {
 
   useEffect(() => {
     load();
-    fetch(`/api/characters/${id}`).then(r => r.json()).then(d => setCharName(d.character?.name || ''));
+    fetch(`/api/characters/${id}`).then(r => r.json()).then(d => { setCharName(d.character?.name || ''); });
   }, [id]);
 
   const del = async (img: ImageItem) => {

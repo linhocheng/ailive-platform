@@ -39,7 +39,7 @@ export default function KnowledgePage() {
 
   useEffect(() => {
     load();
-    fetch(`/api/characters/${id}`).then(r => r.json()).then(d => setCharName(d.character?.name || ''));
+    fetch(`/api/characters/${id}`).then(r => r.json()).then(d => { setCharName(d.character?.name || ''); });
   }, [id]);
 
   const add = async () => {
