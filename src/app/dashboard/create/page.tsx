@@ -6,6 +6,7 @@ type Step = 1 | 2 | 3 | 4 | 5;
 
 interface CharacterDraft {
   name: string;
+  tier: 'character' | 'strategist';
   type: 'vtuber' | 'brand_editor';
   mission: string;
   rawSoul: string;
@@ -50,7 +51,7 @@ export default function CreatePage() {
   const router = useRouter();
   const [step, setStep] = useState<Step>(1);
   const [draft, setDraft] = useState<CharacterDraft>({
-    name: '', type: 'vtuber', mission: '', rawSoul: '', soul_core: '', soulVersion: 0,
+    name: '', tier: 'character', type: 'vtuber', mission: '', rawSoul: '', soul_core: '', soulVersion: 0,
     imagePromptPrefix: '', styleGuide: 'realistic', negativePrompt: 'different face, inconsistent features',
     lineChannelToken: '', lineChannelSecret: '',
     tasks: DEFAULT_TASKS.map(t => ({ ...t })),
@@ -69,7 +70,7 @@ export default function CreatePage() {
     const cr = await fetch('/api/characters', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: draft.name || '新角色', type: draft.type, mission: draft.mission, rawSoul: draft.rawSoul }),
+      body: JSON.stringify({ name: draft.name || '新角色', tier: draft.tier, type: draft.type, mission: draft.mission, rawSoul: draft.rawSoul }),
     });
     const cd = await cr.json();
     const tmpId = cd.id;
@@ -194,6 +195,18 @@ export default function CreatePage() {
             {step === 1 && (
               <div style={{ background: '#fff', borderRadius: 16, padding: 32 }}>
                 <h2 style={{ margin: '0 0 24px', color: '#1a1a2e' }}>基本資料</h2>
+                <div style={{ marginBottom: 16 }}>
+                  <label style={labelStyle}>層級</label>
+                  <div style={{ display: 'flex', gap: 10 }}>
+                    {([['character', '🎭 一般角色', '有個性、與用戶互動的生產層角色'], ['strategist', '🧠 管理層（謀師）', '感知所有角色、可引導與審核發文']] as [string, string, string][]).map(([val, label, desc]) => (
+                      <div key={val} onClick={() => setDraft({ ...draft, tier: val as 'character' | 'strategist' })}
+                        style={{ flex: 1, border: `2px solid ${draft.tier === val ? '#5560cc' : '#e0e0e0'}`, borderRadius: 10, padding: 14, cursor: 'pointer', background: draft.tier === val ? '#f0f0ff' : '#fff' }}>
+                        <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
+                        <div style={{ fontSize: 12, color: '#666' }}>{desc}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
                 <div style={{ marginBottom: 16 }}>
                   <label style={labelStyle}>角色名稱 *</label>
                   <input value={draft.name} onChange={e => setDraft({ ...draft, name: e.target.value })}
