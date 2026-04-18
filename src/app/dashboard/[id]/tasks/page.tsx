@@ -7,6 +7,7 @@ interface Task {
   id: string; type: string; run_hour: number; run_minute: number;
   days: string[]; enabled: boolean; description: string;
   intent?: string; last_run?: string;
+  status?: string; reason?: string; proposedBy?: string;
 }
 
 const TYPE_LABELS: Record<string, string> = {
@@ -38,6 +39,34 @@ export default function TasksPage() {
   const [editing, setEditing] = useState<Task | null>(null);
   const [saving, setSaving] = useState(false);
   const [newType, setNewType] = useState('learn');
+  const [triggering, setTriggering] = useState<string | null>(null);
+  const [triggerResult, setTriggerResult] = useState<{id: string; success: boolean; message?: string} | null>(null);
+
+  const triggerTask = async (task: Task) => {
+    setTriggering(task.id);
+    setTriggerResult(null);
+    try {
+      const res = await fetch('/api/task-run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          characterId: id,
+          taskId: task.id,
+          taskType: task.type,
+          intent: task.intent || '',
+          force: true,
+        }),
+      });
+      const data = await res.json();
+      setTriggerResult({ id: task.id, success: data.success, message: data.success ? '完成' : (data.error || '失敗') });
+      setTimeout(() => setTriggerResult(null), 3000);
+    } catch (e) {
+      setTriggerResult({ id: task.id, success: false, message: '連線錯誤' });
+      setTimeout(() => setTriggerResult(null), 3000);
+    }
+    setTriggering(null);
+    load();
+  };
 
   const load = () => {
     setLoading(true);
@@ -46,7 +75,7 @@ export default function TasksPage() {
 
   useEffect(() => {
     load();
-    fetch(`/api/characters/${id}`).then(r => r.json()).then(d => setCharName(d.character?.name || ''));
+    fetch(`/api/characters/${id}`).then(r => r.json()).then(d => { setCharName(d.character?.name || ''); });
   }, [id]);
 
   const toggleEnabled = async (task: Task) => {
@@ -90,10 +119,50 @@ export default function TasksPage() {
       </div>
       <CharNav id={id} active="/tasks" />
 
+      {/* 謀師提案：pending_approval 任務 */}
+      {tasks.filter(t => t.status === 'pending_approval').length > 0 && (
+        <div style={{ background: '#fff8e1', border: '1px solid #ffcc02', borderRadius: 10, padding: 12, marginBottom: 16 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: '#856404', marginBottom: 10 }}>
+            📋 謀師提案（{tasks.filter(t => t.status === 'pending_approval').length} 個待審）
+          </div>
+          {tasks.filter(t => t.status === 'pending_approval').map(task => (
+            <div key={task.id} style={{ background: '#fff', borderRadius: 8, padding: '10px 12px', marginBottom: 8, border: '1px solid #ffe082' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                <div style={{ flex: 1 }}>
+                  <span style={{ fontWeight: 600, fontSize: 13 }}>{TYPE_LABELS[task.type] || task.type}</span>
+                  <span style={{ color: '#999', fontSize: 11, marginLeft: 8 }}>
+                    {String(task.run_hour ?? 9).padStart(2, '0')}:{String(task.run_minute ?? 0).padStart(2, '0')} 台北 ｜ 週{(task.days || []).map((d: string) => DAY_LABELS[DAY_KEYS.indexOf(d)]).join('')}
+                  </span>
+                  {task.reason && (
+                    <div style={{ fontSize: 12, color: '#666', marginTop: 4, lineHeight: 1.5 }}>
+                      💡 {task.reason}
+                    </div>
+                  )}
+                </div>
+                <div style={{ display: 'flex', gap: 6, marginLeft: 12 }}>
+                  <button onClick={async () => {
+                    await fetch('/api/tasks', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: task.id, status: 'pending', enabled: true }) });
+                    load();
+                  }} style={{ background: '#2e7d32', color: '#fff', border: 'none', borderRadius: 6, padding: '5px 12px', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
+                    ✓ 放行
+                  </button>
+                  <button onClick={async () => {
+                    await fetch(`/api/tasks?id=${task.id}`, { method: 'DELETE' });
+                    load();
+                  }} style={{ background: 'none', border: '1px solid #d32f2f', color: '#d32f2f', borderRadius: 6, padding: '5px 10px', cursor: 'pointer', fontSize: 12 }}>
+                    ✗
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* 說明卡片 */}
       <div style={{ background: '#f8f9ff', border: '1px solid #e0e8ff', borderRadius: 10, padding: '12px 16px', marginBottom: 16, fontSize: 13, color: '#555' }}>
         <strong>任務意義（intent）</strong> 是這個任務存在的原因，用一句話說清楚。<br />
-        蓉兒執行時會先查自己的記憶和知識庫，再從這個意義出發，自己決定今天怎麼做。
+        {charName} 執行時會先查自己的記憶和知識庫，再從這個意義出發，自己決定今天怎麼做。
       </div>
 
       <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
@@ -122,7 +191,7 @@ export default function TasksPage() {
               {/* 任務意義（intent）— 核心欄位 */}
               <div style={{ marginBottom: 10 }}>
                 <label style={{ fontSize: 11, color: '#5560cc', display: 'block', marginBottom: 3, fontWeight: 600 }}>
-                  ✦ 任務意義（蓉兒會根據這個 + 自己的記憶決定怎麼做）
+                  ✦ 任務意義（{charName} 會根據這個 + 自己的記憶決定怎麼做）
                 </label>
                 <textarea
                   value={editing.intent || ''}
@@ -179,6 +248,21 @@ export default function TasksPage() {
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginLeft: 12 }}>
                   <button onClick={() => toggleEnabled(task)} style={{ background: task.enabled ? '#e8f5e9' : '#eeeeee', color: task.enabled ? '#2e7d32' : '#999', border: 'none', borderRadius: 20, padding: '4px 12px', cursor: 'pointer', fontSize: 11 }}>
                     {task.enabled ? '啟用中' : '已停用'}
+                  </button>
+                  <button 
+                    onClick={() => triggerTask(task)} 
+                    disabled={triggering === task.id}
+                    style={{ 
+                      background: triggering === task.id ? '#f0f0f0' : triggerResult?.id === task.id ? (triggerResult.success ? '#e8f5e9' : '#ffebee') : '#fff3e0', 
+                      color: triggerResult?.id === task.id ? (triggerResult.success ? '#2e7d32' : '#c62828') : '#e65100', 
+                      border: triggerResult?.id === task.id ? (triggerResult.success ? '1px solid #a5d6a7' : '1px solid #ef9a9a') : '1px solid #ffcc80', 
+                      borderRadius: 6, 
+                      padding: '4px 10px', 
+                      cursor: triggering === task.id ? 'wait' : 'pointer', 
+                      fontSize: 11 
+                    }}
+                  >
+                    {triggering === task.id ? '執行中...' : triggerResult?.id === task.id ? (triggerResult.success ? '✓ 完成' : '✗ ' + triggerResult.message) : '▶️ 觸發'}
                   </button>
                   <button onClick={() => setEditing(task)} style={{ background: 'none', border: '1px solid #e0e0e0', color: '#666', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 11 }}>編輯</button>
                   <button onClick={() => del(task.id)} style={{ background: 'none', border: 'none', color: '#c00', cursor: 'pointer', fontSize: 12 }}>刪</button>

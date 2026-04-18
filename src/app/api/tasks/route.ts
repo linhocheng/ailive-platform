@@ -18,9 +18,18 @@ export async function GET(req: NextRequest) {
     const characterId = req.nextUrl.searchParams.get('characterId');
     if (!characterId) return NextResponse.json({ error: 'characterId 必填' }, { status: 400 });
 
-    const snap = await db.collection('platform_tasks')
-      .where('characterId', '==', characterId)
-      .get();
+    const statusFilter = req.nextUrl.searchParams.get('status'); // 可選：pending_approval / all
+    let snap;
+    if (statusFilter && statusFilter !== 'all') {
+      snap = await db.collection('platform_tasks')
+        .where('characterId', '==', characterId)
+        .where('status', '==', statusFilter)
+        .get();
+    } else {
+      snap = await db.collection('platform_tasks')
+        .where('characterId', '==', characterId)
+        .get();
+    }
 
     const tasks = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     return NextResponse.json({ tasks, total: snap.size });
@@ -63,7 +72,7 @@ export async function PATCH(req: NextRequest) {
     const { id, ...fields } = await req.json();
     if (!id) return NextResponse.json({ error: 'id 必填' }, { status: 400 });
 
-    const allowed = ['run_hour', 'run_minute', 'days', 'enabled', 'description', 'intent', 'last_run'];
+    const allowed = ['run_hour', 'run_minute', 'days', 'enabled', 'description', 'intent', 'last_run', 'status'];
     const updates: Record<string, unknown> = { updatedAt: new Date().toISOString() };
     for (const key of allowed) {
       if (fields[key] !== undefined) updates[key] = fields[key];

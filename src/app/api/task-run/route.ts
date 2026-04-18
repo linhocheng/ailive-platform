@@ -179,6 +179,27 @@ async function getKnowledgeBookList(db: ReturnType<typeof getFirestore>, charact
 }
 
 
+// 撈 category=image 的知識庫條目，組成產品圖庫索引（供 post 排程選圖用）
+async function getProductImageIndex(db: ReturnType<typeof getFirestore>, characterId: string): Promise<string> {
+  try {
+    const snap = await db.collection('platform_knowledge')
+      .where('characterId', '==', characterId)
+      .where('category', '==', 'image')
+      .limit(50)
+      .get();
+    if (snap.empty) return '';
+    const lines = snap.docs.map(d => {
+      const data = d.data() as Record<string, unknown>;
+      const title = String(data.title || '').split('—')[0].trim();
+      const imageUrl = String(data.imageUrl || data.content || '');
+      if (!imageUrl.startsWith('http')) return null;
+      return `- ${title}：${imageUrl}`;
+    }).filter(Boolean);
+    if (lines.length === 0) return '';
+    return `\n\n【產品圖庫（生圖時從這裡挑一張最搭文案的，把 URL 填進 referenceImageUrl）】\n${lines.join('\n')}` ;
+  } catch { return ''; }
+}
+
 // source → memoryType 映射（全域共用）
 function getMemoryType(source: string): 'identity' | 'knowledge' {
   const identitySources = new Set([
@@ -232,12 +253,13 @@ async function savePostDraft(
   topic: string,
   date: string,
   imagePrompt?: string,
+  referenceImageUrl?: string,
 ): Promise<string> {
   // 生圖（有 imagePrompt 才生）
   let imageUrl = '';
   if (imagePrompt) {
     try {
-      const imgResult = await generateImageForCharacter(characterId, imagePrompt);
+      const imgResult = await generateImageForCharacter(characterId, imagePrompt, referenceImageUrl || undefined);
       imageUrl = imgResult.imageUrl || '';
     } catch (e) {
       console.warn('[task-run] 生圖失敗，草稿無圖：', e);
@@ -245,7 +267,7 @@ async function savePostDraft(
   }
 
   const ref = await db.collection('platform_posts').add({
-    characterId, content, imageUrl, topic,
+    characterId, content, imageUrl, topic, imagePrompt: imagePrompt || "",
     status: 'draft', scheduledAt: null, publishedAt: null,
     createdAt: new Date().toISOString(),
   });
@@ -255,12 +277,22 @@ async function savePostDraft(
     `${date} 寫了一篇草稿。主題：${topic || '（未命名）'}。摘要：${content.slice(0, 80)}`,
     'post_memory', date
   );
+
+  // 事件連動：fire-and-forget 觸發謀師審核
+  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'https://ailive-platform.vercel.app';
+  fetch(`${baseUrl}/api/strategist-review`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ postId: ref.id, authorCharacterId: characterId }),
+  }).catch(() => {}); // fire-and-forget，不阻斷
+
   return ref.id;
 }
 
 export async function POST(req: NextRequest) {
   try {
-    const { characterId, taskId, taskType, intent } = await req.json();
+    const { characterId, taskId, taskType, intent, force: req_body_force } = await req.json();
+    const req_body = { force: req_body_force };
     if (!characterId || !taskType) {
       return NextResponse.json({ error: 'characterId, taskType 必填' }, { status: 400 });
     }
@@ -275,7 +307,8 @@ export async function POST(req: NextRequest) {
     if (taskId) {
       const recordId = `${characterId}-${taskId}-${today}-taskrun`;
       const recordRef = db.collection('platform_proactive_records').doc(recordId);
-      if ((await recordRef.get()).exists) {
+      const forceRun = req_body.force === true;
+      if (!forceRun && (await recordRef.get()).exists) {
         return NextResponse.json({ success: true, skipped: true, reason: '今日已執行' });
       }
     }
@@ -297,10 +330,12 @@ export async function POST(req: NextRequest) {
     // post 任務專用：預查草稿去重 + 知識庫素材清單
     let recentPostContext = '';
     let knowledgeBookList = '';
+    let productImageIndex = '';
     if (taskType === 'post') {
-      [recentPostContext, knowledgeBookList] = await Promise.all([
+      [recentPostContext, knowledgeBookList, productImageIndex] = await Promise.all([
         getRecentPostContext(db, characterId),
         getKnowledgeBookList(db, characterId),
+        getProductImageIndex(db, characterId),
       ]);
     }
 
@@ -345,10 +380,16 @@ export async function POST(req: NextRequest) {
         const relevantSkills = skillsSnap.docs
           .map(d => {
             const data = d.data() as Record<string, unknown>;
-            const score = data.embedding && Array.isArray(data.embedding)
+            const semanticScore = data.embedding && Array.isArray(data.embedding)
               ? cosineSimilarity(qEmb, data.embedding as number[])
               : 0;
-            return { data, score };
+            // 關鍵字命中：意圖裡出現技巧名稱或觸發條件關鍵字 → 強制納入
+            const skillName = String(data.name || '').toLowerCase();
+            const skillTrigger = String(data.trigger || '').toLowerCase();
+            const queryLower = skillQuery.toLowerCase();
+            const keywordHit = queryLower.includes(skillName) || skillName.split(/[\s，、。]+/).some((w: string) => w.length >= 2 && queryLower.includes(w));
+            const score = keywordHit ? Math.max(semanticScore, 0.8) : semanticScore;
+            return { data, score, keywordHit };
           })
           .filter(r => r.score >= 0.3)
           .sort((a, b) => b.score - a.score)
@@ -379,10 +420,10 @@ export async function POST(req: NextRequest) {
 
     if (taskType === 'post') {
       outputFormat = `輸出格式（JSON，只輸出 JSON，不要其他文字）：
-{"topic":"主題一句話","content":"完整貼文文案（含 hashtag）","imagePrompt":"配圖描述（英文，50字以內，從角色的視覺語言和靈魂色調出發）"}`;
+{"topic":"主題一句話","content":"完整貼文文案（含 hashtag）","imagePrompt":"配圖描述（英文，200字以內，描述場景/穿搭/姿勢/光線，不描述臉）","referenceImageUrl":"從產品圖庫裡選一張最搭這篇文案的 URL，沒有圖庫就填空字串"}`;
       userPrompt = `【排程任務：生成 IG 貼文草稿】
 任務意義：${intent || '從今天的感受出發，寫一篇真實的貼文'}
-${postReflectionBlock}${contextBlock}${recentPostContext}${knowledgeBookList}
+${postReflectionBlock}${contextBlock}${recentPostContext}${knowledgeBookList}${productImageIndex}
 
 從上面的記憶和知識出發，寫一篇今天的 IG 貼文草稿。
 不重複最近說過的主題。從感受出發，不從格式出發。
@@ -457,7 +498,7 @@ ${outputFormat}`;
     const client = new Anthropic({ apiKey });
     const response = await client.messages.create({
       model: 'claude-sonnet-4-6',
-      max_tokens: 1000,
+      max_tokens: taskType === 'post' ? 2000 : 1000,
       system: systemPrompt,
       messages: [{ role: 'user', content: userPrompt }],
     });
@@ -476,7 +517,7 @@ ${outputFormat}`;
     // 根據 taskType 決定怎麼存
     let savedId = '';
     if (taskType === 'post') {
-      savedId = await savePostDraft(db, characterId, result.content || '', result.topic || '', today, result.imagePrompt);
+      savedId = await savePostDraft(db, characterId, result.content || '', result.topic || '', today, result.imagePrompt, result.referenceImageUrl);
       // post：更新 postReflectionBlock 用到的自評 ids（保底）
       await updateHitCounts(db, recentInsightIds);
 
