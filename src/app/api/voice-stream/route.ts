@@ -27,6 +27,7 @@ import { redis } from '@/lib/redis';
 import { generateEmbedding, cosineSimilarity } from '@/lib/embeddings';
 import { generateImageForCharacter } from '@/lib/generate-image';
 import { preprocessTTS } from '@/lib/tts-preprocess';
+import { getTTSProvider } from '@/lib/tts-providers';
 
 export const maxDuration = 120;
 
@@ -58,29 +59,12 @@ function sseEvent(data: object): string {
   return `data: ${JSON.stringify(data)}\n\n`;
 }
 
-// ===== 叫 ElevenLabs TTS，回傳 audio stream =====
-async function fetchTTSStream(text: string, voiceId: string, apiKey: string): Promise<ReadableStream<Uint8Array> | null> {
+// ===== TTS 透過 Provider，回傳 audio/mpeg stream =====
+async function fetchTTSStream(text: string, voiceId: string, providerName?: string | null): Promise<ReadableStream<Uint8Array> | null> {
   const processed = preprocessTTS(text.trim());
   if (!processed) return null;
-
-  const res = await fetch(
-    `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream`,
-    {
-      method: 'POST',
-      headers: {
-        'xi-api-key': apiKey,
-        'Content-Type': 'application/json',
-        'Accept': 'audio/mpeg',
-      },
-      body: JSON.stringify({
-        text: processed,
-        model_id: 'eleven_flash_v2_5',
-        voice_settings: { stability: 0.75, similarity_boost: 0.75, speed: 1.05 },
-      }),
-    }
-  );
-  if (!res.ok || !res.body) return null;
-  return res.body;
+  const provider = getTTSProvider(providerName);
+  return provider.synthesizeStream({ text: processed, voiceId });
 }
 
 // ===== 讀完整個 stream 拿 base64 =====
@@ -137,7 +121,13 @@ export async function POST(req: NextRequest) {
           try { await redis.set(charCacheKey, JSON.stringify(charData), 60 * 10); } catch (_e) {}
         }
 
-        const voiceId = (charData.voiceId as string) || '56hCnQE2rYMllQDw3m1o';
+        // Provider 選擇：角色欄位 > env > elevenlabs
+        const rawProvider = (charData.ttsProvider as string | undefined) || process.env.TTS_PROVIDER || 'elevenlabs';
+        const ttsProviderName = rawProvider.toLowerCase() === 'minimax' ? 'minimax' : 'elevenlabs';
+        // voiceId 依 provider 挑欄位（elevenlabs 回退到舊 voiceId 欄位，保持向後相容）
+        const voiceId = ttsProviderName === 'minimax'
+          ? ((charData.voiceIdMinimax as string) || '')
+          : ((charData.voiceIdElevenLabs as string) || (charData.voiceId as string) || '56hCnQE2rYMllQDw3m1o');
         const soulText = (charData.system_soul as string) || (charData.soul_core as string) || (charData.enhancedSoul as string) || (charData.soul as string) || '';
 
         // 2. 讀對話歷史（Redis cache）
@@ -184,10 +174,8 @@ export async function POST(req: NextRequest) {
           if (sessionRaw) sessionStateBlock = `\n\n---\n${sessionRaw}`;
         } catch { /* 不阻斷 */ }
 
-        const systemPrompt = `${soulText}${summaryBlock}${gapInjection}${sessionStateBlock}
-
----
-現在時間（台北）：${taipeiTime}
+        // Prompt Caching：soul+語音天條穩定不變，標 cache_control，每輪只收 10% input token
+        const voiceStableBlock = `${soulText}
 
 【語音對話天條】
 你現在是語音模式。說話要像真人對話，不是在寫文章。
@@ -201,6 +189,17 @@ export async function POST(req: NextRequest) {
 ❌ 禁止：說「你說的 XXX 是什麼意思」「我沒聽清楚」「請再說一次」
 ❌ 禁止：重複用戶說的奇怪詞語，或對轉錄錯誤提出疑問
 比喻：把用戶說的話當成打錯字的簡訊——你會猜意思繼續聊，不會問「你是不是打錯字了？」`;
+
+        const voiceDynamicBlock = `${summaryBlock}${gapInjection}${sessionStateBlock}
+
+---
+現在時間（台北）：${taipeiTime}`;
+
+        type SystemBlock = { type: 'text'; text: string; cache_control?: { type: 'ephemeral' } };
+        const systemBlocks: SystemBlock[] = [
+          { type: 'text', text: voiceStableBlock, cache_control: { type: 'ephemeral' } },
+          { type: 'text', text: voiceDynamicBlock },
+        ];
 
         // 4. 工具定義
         const VOICE_TOOLS: Anthropic.Tool[] = [
@@ -483,7 +482,7 @@ export async function POST(req: NextRequest) {
             : { type: 'auto' as const };
           const preRes = await withRetry(() => client.messages.create({
             model: voiceModel, max_tokens: voiceMaxTokens,
-            system: systemPrompt, messages: loopMessages,
+            system: systemBlocks as any, messages: loopMessages,
             tools: [WEB_SEARCH, ...VOICE_TOOLS], tool_choice: toolChoice,
           }));
           if (preRes.stop_reason !== 'tool_use') {
@@ -505,7 +504,7 @@ export async function POST(req: NextRequest) {
         const claudeStream = client.messages.stream({
           model: voiceModel,
           max_tokens: voiceMaxTokens,
-          system: systemPrompt,
+          system: systemBlocks as any,
           messages: loopMessages,
         });
 
@@ -538,7 +537,7 @@ export async function POST(req: NextRequest) {
           send({ type: 'text', content: sentence, index: idx });
 
           try {
-            const audioStream = await fetchTTSStream(sentence, voiceId, elevenKey);
+            const audioStream = await fetchTTSStream(sentence, voiceId, ttsProviderName);
             const base64 = audioStream ? await streamToBase64(audioStream) : '';
             audioBuffer.set(idx, base64);
           } catch (_e) {

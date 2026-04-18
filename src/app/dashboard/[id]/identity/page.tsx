@@ -61,6 +61,8 @@ export default function IdentityPage() {
   });
   const [mission, setMission] = useState('');
   const [voiceId, setVoiceId] = useState('');
+  const [voiceIdMinimax, setVoiceIdMinimax] = useState('');
+  const [ttsProvider, setTtsProvider] = useState<'' | 'elevenlabs' | 'minimax'>('');
   const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState('');
@@ -81,6 +83,9 @@ export default function IdentityPage() {
       setChar(c);
       setMission(c?.mission || '');
       setVoiceId(c?.voiceId || '');
+      setVoiceIdMinimax(c?.voiceIdMinimax || '');
+      const prov = (c?.ttsProvider || '').toLowerCase();
+      setTtsProvider(prov === 'minimax' ? 'minimax' : prov === 'elevenlabs' ? 'elevenlabs' : '');
       setChannels({
         lineChannelToken: c?.lineChannelToken || '',
         lineChannelSecret: c?.lineChannelSecret || '',
@@ -212,7 +217,13 @@ export default function IdentityPage() {
     await fetch(`/api/characters/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mission, visualIdentity: finalVi, voiceId: voiceId.trim() || null }),
+      body: JSON.stringify({
+        mission,
+        visualIdentity: finalVi,
+        voiceId: voiceId.trim() || null,
+        voiceIdMinimax: voiceIdMinimax.trim() || null,
+        ttsProvider: ttsProvider || null,
+      }),
     });
     setVi(finalVi);
     setSaving(false);
@@ -308,13 +319,28 @@ export default function IdentityPage() {
               placeholder="這個角色存在是為了什麼" />
           </div>
 
-          {/* VOICE ID */}
+          {/* VOICE (TTS PROVIDER + VOICE IDS) */}
           <div style={{ background: '#fff', border: '1px solid #e7e5e4', padding: 20 }}>
-            <p style={{ fontSize: 10, letterSpacing: '0.2em', color: '#a8a29e', fontWeight: 700, margin: '0 0 6px' }}>VOICE ID</p>
-            <p style={{ fontSize: 11, color: '#a8a29e', margin: '0 0 10px', lineHeight: 1.6 }}>ElevenLabs Voice ID。留空則使用預設女聲。</p>
+            <p style={{ fontSize: 10, letterSpacing: '0.2em', color: '#a8a29e', fontWeight: 700, margin: '0 0 6px' }}>VOICE</p>
+            <p style={{ fontSize: 11, color: '#a8a29e', margin: '0 0 14px', lineHeight: 1.6 }}>選 TTS 家，填對應的 voice ID。未選則跟隨系統預設（env）。</p>
+
+            <label style={{ display: 'block', fontSize: 11, color: '#555', marginBottom: 6 }}>TTS Provider</label>
+            <select value={ttsProvider} onChange={e => setTtsProvider(e.target.value as '' | 'elevenlabs' | 'minimax')}
+              style={{ width: '100%', border: '1px solid #e0e0e0', borderRadius: 6, padding: '9px 11px', fontSize: 13, boxSizing: 'border-box', marginBottom: 14 }}>
+              <option value="">跟隨系統預設</option>
+              <option value="elevenlabs">ElevenLabs</option>
+              <option value="minimax">MiniMax</option>
+            </select>
+
+            <label style={{ display: 'block', fontSize: 11, color: '#555', marginBottom: 6 }}>ElevenLabs Voice ID</label>
             <input value={voiceId} onChange={e => setVoiceId(e.target.value)}
-              style={{ width: '100%', border: '1px solid #e0e0e0', borderRadius: 6, padding: '9px 11px', fontSize: 13, boxSizing: 'border-box', fontFamily: 'monospace' }}
+              style={{ width: '100%', border: '1px solid #e0e0e0', borderRadius: 6, padding: '9px 11px', fontSize: 13, boxSizing: 'border-box', fontFamily: 'monospace', marginBottom: 14 }}
               placeholder="56hCnQE2rYMllQDw3m1o（預設女聲）" />
+
+            <label style={{ display: 'block', fontSize: 11, color: '#555', marginBottom: 6 }}>MiniMax Voice ID</label>
+            <input value={voiceIdMinimax} onChange={e => setVoiceIdMinimax(e.target.value)}
+              style={{ width: '100%', border: '1px solid #e0e0e0', borderRadius: 6, padding: '9px 11px', fontSize: 13, boxSizing: 'border-box', fontFamily: 'monospace' }}
+              placeholder="moss_audio_xxx" />
           </div>
 
           {/* FIXED ELEMENTS */}
