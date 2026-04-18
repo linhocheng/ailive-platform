@@ -10,7 +10,7 @@ interface Character {
 }
 interface Post {
   id: string; content: string; imageUrl?: string; topic: string;
-  status: string; createdAt: string; igPostId?: string;
+  status: string; createdAt: string; igPostId?: string; imagePrompt?: string;
 }
 interface Task {
   id: string; type: string; description: string; intent?: string; enabled: boolean;
@@ -120,6 +120,35 @@ function PostsTab({ charId }: { charId:string }) {
   const [editImgId, setEditImgId] = useState<string|null>(null);
   const [editImg, setEditImg] = useState('');
   const [saving, setSaving] = useState(false);
+  const [regenerating, setRegenerating] = useState<string|null>(null);
+  const [regenResult, setRegenResult] = useState<{id:string;success:boolean;message?:string}|null>(null);
+  const [editPromptId, setEditPromptId] = useState<string|null>(null);
+  const [editPrompt, setEditPrompt] = useState('');
+
+  const regenerateImage = async (postId: string, newPrompt?: string) => {
+    setRegenerating(postId);
+    setRegenResult(null);
+    try {
+      const res = await fetch('/api/posts/regenerate-image', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ postId, imagePrompt: newPrompt }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setRegenResult({ id: postId, success: true, message: '圖片已更新' });
+        setEditPromptId(null);
+        load();
+      } else {
+        setRegenResult({ id: postId, success: false, message: data.error || '生圖失敗' });
+      }
+      setTimeout(() => setRegenResult(null), 4000);
+    } catch {
+      setRegenResult({ id: postId, success: false, message: '連線錯誤' });
+      setTimeout(() => setRegenResult(null), 4000);
+    }
+    setRegenerating(null);
+  };
 
   const load = useCallback(()=>{
     setLoading(true);
@@ -224,25 +253,28 @@ function PostsTab({ charId }: { charId:string }) {
                 </div>
               )}
 
-              {/* 圖片 + imageUrl 編輯 */}
+              {/* 圖片 + 重新生圖 */}
               <div style={{marginBottom:10}}>
-                {post.imageUrl && !editImgId &&
-                  <img src={post.imageUrl} alt="" style={{maxWidth:160,borderRadius:'var(--r-sm)',marginBottom:6,border:'1px solid var(--border)',display:'block'}}/>
-                }
-                {editImgId===post.id ? (
-                  <div style={{display:'flex',gap:4,alignItems:'center'}}>
-                    <input value={editImg} onChange={e=>setEditImg(e.target.value)}
-                      placeholder="貼上圖片 URL" style={{...S.input,fontSize:12}}
-                      onFocus={e=>(e.target.style.borderColor='var(--accent)')} onBlur={e=>(e.target.style.borderColor='var(--border)')}/>
-                    <button onClick={()=>saveImg(post.id)} disabled={saving} style={{...S.btn(true),padding:'6px 10px',flexShrink:0}}><Ic.Check/></button>
-                    <button onClick={()=>setEditImgId(null)} style={{...S.btn(false),padding:'6px 10px',flexShrink:0}}><Ic.X/></button>
+                {post.imageUrl && <img src={post.imageUrl} alt="" style={{maxWidth:160,borderRadius:'var(--r-sm)',marginBottom:8,border:'1px solid var(--border)',display:'block'}}/>}
+                {regenerating===post.id && <div style={{fontSize:12,color:'var(--accent)',marginBottom:6}}>🔄 生成中...（約30-60秒）</div>}
+                {regenResult?.id===post.id && <div style={{fontSize:12,color:regenResult.success?'var(--green)':'var(--red)',marginBottom:6}}>{regenResult.success?'✓ ':'✗ '}{regenResult.message}</div>}
+                {isDraft && (editPromptId===post.id ? (
+                  <div style={{marginBottom:8}}>
+                    <label style={{...S.label,marginBottom:4}}>圖片描述（英文更精準）</label>
+                    <textarea value={editPrompt} onChange={e=>setEditPrompt(e.target.value)} rows={3} placeholder="描述畫面場景、光線、構圖..." style={{...S.input,resize:'vertical',fontSize:12,marginBottom:6}}/>
+                    <div style={{display:'flex',gap:6}}>
+                      <button onClick={()=>regenerateImage(post.id, editPrompt)} disabled={!!regenerating||!editPrompt.trim()} style={{...S.btn(true),background:'var(--accent)',borderColor:'var(--accent)',fontSize:11,padding:'5px 12px'}}>🔄 生圖</button>
+                      <button onClick={()=>setEditPromptId(null)} style={{...S.btn(false),fontSize:11,padding:'5px 12px'}}>取消</button>
+                    </div>
                   </div>
                 ) : (
-                  isDraft && <button onClick={()=>{setEditImgId(post.id);setEditImg(post.imageUrl||'');}}
-                    style={{display:'flex',alignItems:'center',gap:4,background:'none',border:'1px solid var(--border)',borderRadius:'var(--r-sm)',color:'var(--text-muted)',cursor:'pointer',fontSize:11,padding:'4px 8px'}}>
-                    <Ic.Image/>{post.imageUrl?'換圖片':'加圖片'}
-                  </button>
-                )}
+                  <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+                    {post.imagePrompt && <button onClick={()=>regenerateImage(post.id)} disabled={!!regenerating} style={{background:'var(--accent-light)',border:'1px solid var(--accent)',borderRadius:'var(--r-sm)',color:'var(--accent)',cursor:regenerating?'wait':'pointer',fontSize:11,padding:'4px 10px',fontWeight:500}}>🔄 重新生圖</button>}
+                    <button onClick={()=>{setEditPromptId(post.id);setEditPrompt(post.imagePrompt||'');}} style={{background:'none',border:'1px solid var(--border)',borderRadius:'var(--r-sm)',color:'var(--text-muted)',cursor:'pointer',fontSize:11,padding:'4px 8px'}}>✏️ {post.imagePrompt?'改描述':'寫描述'}</button>
+                    <button onClick={()=>{setEditImgId(post.id);setEditImg(post.imageUrl||'');}} style={{background:'none',border:'1px solid var(--border)',borderRadius:'var(--r-sm)',color:'var(--text-muted)',cursor:'pointer',fontSize:11,padding:'4px 8px'}}><Ic.Image/>{post.imageUrl?'換URL':'貼URL'}</button>
+                  </div>
+                ))}
+                {editImgId===post.id && <div style={{display:'flex',gap:4,alignItems:'center',marginTop:6}}><input value={editImg} onChange={e=>setEditImg(e.target.value)} placeholder="圖片 URL" style={{...S.input,fontSize:12,flex:1}}/><button onClick={()=>saveImg(post.id)} disabled={saving} style={{...S.btn(true),padding:'5px 10px'}}><Ic.Check/></button><button onClick={()=>setEditImgId(null)} style={{...S.btn(false),padding:'5px 10px'}}><Ic.X/></button></div>}
               </div>
 
               {/* 操作按鈕 */}
