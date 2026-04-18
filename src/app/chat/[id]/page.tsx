@@ -134,10 +134,24 @@ export default function ChatPage() {
     const reader = new FileReader();
     reader.onload = () => {
       const dataUrl = reader.result as string;
-      const base64 = dataUrl.split(',')[1];
-      const mimeMatch = dataUrl.match(/^data:([^;]+);/);
-      const mimeType = mimeMatch ? mimeMatch[1] : (file.type || 'image/jpeg');
-      setPendingImage({ base64, preview: dataUrl, mimeType });
+      // Canvas 壓縮：最長邊 1280px，quality 0.85，防止大圖炸 Vercel 4.5MB 上限
+      const img = new window.Image();
+      img.onload = () => {
+        const MAX = 1280;
+        let { width, height } = img;
+        if (width > MAX || height > MAX) {
+          if (width > height) { height = Math.round(height * MAX / width); width = MAX; }
+          else { width = Math.round(width * MAX / height); height = MAX; }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = width; canvas.height = height;
+        const ctx = canvas.getContext('2d')!;
+        ctx.drawImage(img, 0, 0, width, height);
+        const compressed = canvas.toDataURL('image/jpeg', 0.85);
+        const base64 = compressed.split(',')[1];
+        setPendingImage({ base64, preview: compressed, mimeType: 'image/jpeg' });
+      };
+      img.src = dataUrl;
     };
     reader.readAsDataURL(file);
     e.target.value = '';
