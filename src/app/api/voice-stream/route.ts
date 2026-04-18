@@ -121,13 +121,13 @@ export async function POST(req: NextRequest) {
           try { await redis.set(charCacheKey, JSON.stringify(charData), 60 * 10); } catch (_e) {}
         }
 
-        // Provider 選擇：角色欄位 > env > elevenlabs
-        const rawProvider = (charData.ttsProvider as string | undefined) || process.env.TTS_PROVIDER || 'elevenlabs';
-        const ttsProviderName = rawProvider.toLowerCase() === 'minimax' ? 'minimax' : 'elevenlabs';
-        // voiceId 依 provider 挑欄位（elevenlabs 回退到舊 voiceId 欄位，保持向後相容）
+        // Provider 選擇：角色欄位 > env > elevenlabs（normalization 由 getTTSProvider 內部處理）
+        const ttsProvider = getTTSProvider(charData.ttsProvider as string | undefined);
+        const ttsProviderName = ttsProvider.name;
+        // voiceId：minimax 走 voiceIdMinimax，elevenlabs 走 voiceId
         const voiceId = ttsProviderName === 'minimax'
           ? ((charData.voiceIdMinimax as string) || '')
-          : ((charData.voiceIdElevenLabs as string) || (charData.voiceId as string) || '56hCnQE2rYMllQDw3m1o');
+          : ((charData.voiceId as string) || '56hCnQE2rYMllQDw3m1o');
         const soulText = (charData.system_soul as string) || (charData.soul_core as string) || (charData.enhancedSoul as string) || (charData.soul as string) || '';
 
         // 2. 讀對話歷史（Redis cache）
