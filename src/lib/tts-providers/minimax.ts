@@ -155,7 +155,11 @@ export class MinimaxProvider implements TTSProvider {
       text: textForMinimax,
       stream: true,
       stream_options: { exclude_aggregated_audio: true },
-      language_boost: 'auto',
+      // language_boost 官方 40 個選項只有 Chinese / Chinese,Yue，沒有台灣國語
+      // 用 'auto' 會偵測成 Chinese → 推到最純陸腔模板（加劇陸腔）
+      // 用 null = 不觸發任何語言強化，讓 voice 本身的錄音底去決定口音
+      // 治標不治本（底層仍是大陸錄音），但比 auto 輕一點
+      language_boost: null,
       voice_setting: settings.voice,
       audio_setting: {
         sample_rate: 32000,
