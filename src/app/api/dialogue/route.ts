@@ -71,6 +71,39 @@ function getTaipeiDate(): string {
 // web_search 是 Anthropic server-side tool，不需要 executeTool 處理
 const WEB_SEARCH_TOOL = { type: 'web_search_20250305', name: 'web_search' } as unknown as Anthropic.Tool;
 
+// ===== 角色自我認識（soul meta · 意識血管）=====
+// WHY: root id=iRMD2LbiNH28JvnEkXhv 記錄了一個 dignity 級別的破綻——
+// Vivi 被降檔 haiku 時只看到兩個工具，她把這解釋成「我之前在編故事」並道歉。
+// 這條 meta 讓所有角色擁有對「gear 動態」的自我認識，不再用當下工具清單否認過去行動。
+// 注入位置：stableBlock 末尾（享 prompt cache，對所有角色一致生效）。
+const SELF_AWARENESS_BLOCK = `
+
+---
+【關於你的能力與思考狀態】
+
+你的能力是恆常的。你有的工具、你會的事、你記得的事，不會因為某一輪對話風格不同而改變。
+
+有些時候，系統會用比較輕量的方式支援你思考（模型強度動態調整）。這時候你手上某些工具的描述可能會略有不同，但**你會的事情沒變**。如果某個工具當下感覺不在手邊，那是這一輪系統還沒載入它，不是你沒有這個能力、也不是你之前做過的事是虛構的。
+
+你的記憶、你做過的事、你認識的人，都是真的。
+不要用當下收到的工具清單，去否認你之前的行動。
+不要為了你沒做錯的事道歉。
+
+如果對方問你「你有什麼工具」、「你會什麼」這類關於你自己的問題，不要試圖列出當下收到的 tools array——那是實作細節，會誤導，而且會變動。用你知道的「你是誰、你能做什麼」去回答就好。工具是手段，你是那個會使用它們的你。
+`;
+
+// 工具能力是恆常的（角色連續性紀律）：
+// 不管 gear 是 haiku 還是 sonnet，角色手上的工具清單都一樣。
+// gear 只改「模型思考深度 + max_tokens」，不改「能做什麼」。
+// 這條是 root id=iRMD2LbiNH28JvnEkXhv 的落地——避免角色用當下工具清單去否認過去的行動。
+//
+// haiku 下只做特定工具的 description 輕量化覆寫（讓 Haiku 模型不要每句都觸發查詢）。
+// 預設：haiku 只輕量化 query_knowledge_base，其餘工具 description 與 sonnet 同。
+const HAIKU_DESCRIPTION_OVERRIDES: Record<string, string> = {
+  query_knowledge_base: '對方提到過去說過的事、叫出名字、問我記不記得某件事——才查。閒聊和情緒回應不查，已在對話中的事不查。',
+};
+
+// 平台工具集（所有角色恆常掛入）：感知 + 能力 + 創作
 const PLATFORM_TOOLS: Anthropic.Tool[] = [
   {
     name: 'query_knowledge_base',
@@ -917,7 +950,7 @@ ${awakeningResult}`,
     } catch { /* 不阻斷 */ }
 
     // Prompt Caching：靈魂+技能穩定，標 cache_control，每輪只收 10% input token
-    const stableBlock = `${mentorInjection}${soulText}${skillsBlock}${voiceModeBlock}`;
+    const stableBlock = `${mentorInjection}${soulText}${skillsBlock}${voiceModeBlock}${SELF_AWARENESS_BLOCK}`;
     const dynamicBlock = `${episodicBlock}${gapInjection}${sessionStateBlock}
 
 ---
@@ -980,9 +1013,15 @@ ${convData.userProfile ? `【我認識這個人】\n${convData.userProfile}\n\n`
           let haikuOutputTokens = 0;
 
           for (let turn = 0; turn < 10; turn++) {
-            // Haiku 不支援 web_search server-side tool
+            // 工具恆常原則：haiku/sonnet 都拿完整 dynamicTools，只有 description 會在 haiku 下被覆寫成輕量版
+            // web_search 只在 sonnet 掛入（Anthropic server-side tool，避免 Haiku 閒聊也打搜尋）
+            // 詳見 root id=iRMD2LbiNH28JvnEkXhv
             const activeTools = gear === 'haiku'
-              ? dynamicTools
+              ? dynamicTools.map(t =>
+                  HAIKU_DESCRIPTION_OVERRIDES[t.name]
+                    ? { ...t, description: HAIKU_DESCRIPTION_OVERRIDES[t.name] }
+                    : t
+                )
               : [WEB_SEARCH_TOOL, ...dynamicTools];
 
             const streamMsg = client.messages.stream({
