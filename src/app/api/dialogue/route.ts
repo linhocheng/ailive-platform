@@ -235,13 +235,22 @@ const PLATFORM_TOOLS: Anthropic.Tool[] = [
   },
 ];
 
-// 謀師專屬工具
-const MENTOR_CHARACTER_ID = 'P8OYEU7dBc7Sd3UDHULW';
+// ===== 謀師工具集（tier === "strategist" 才掛入）=====
+// 不綁定特定 ID，tier 決定工具集
 
-const MENTOR_TOOLS: Anthropic.Tool[] = [
+const STRATEGIST_TOOLS: Anthropic.Tool[] = [
+  {
+    name: 'list_all_characters',
+    description: '列出 AILIVE 生態系裡所有角色的基本資訊（開放感知）。想了解現在有誰、各自狀態如何，先用這個。',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
+      required: [],
+    },
+  },
   {
     name: 'lookup_character',
-    description: '用角色名字查詢 AILIVE 生態系裡的角色資料，取得 characterId 和靈魂摘要。想引導某個角色前，先用這個查清楚他是誰。',
+    description: '用角色名字深挖指定角色的靈魂與記憶概況。想引導或審核某角色前，先用這個查清楚他是誰、最近在想什麼。',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -251,8 +260,70 @@ const MENTOR_TOOLS: Anthropic.Tool[] = [
     },
   },
   {
+    name: 'get_character_posts',
+    description: `查角色的草稿。有兩種模式：
+【列表模式】不傳 post_id → 回傳摘要清單（ID + 標題 + 前80字）
+【詳情模式】傳入 post_id → 回傳那篇的完整內容
+
+工作流程：
+1. 先用列表模式看有哪些草稿
+2. 回覆時帶上 ID（例如「第一篇 ID:abc，講保養」）
+3. 要改某篇，用詳情模式拿完整內容
+4. 改好後呼叫 adjust_post`,
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        target_character_id: { type: 'string', description: '目標角色的 characterId' },
+        post_id: { type: 'string', description: '指定草稿 ID，傳入則回傳完整內容' },
+        status: { type: 'string', description: 'draft（草稿）/ published（已發）/ all，預設 draft' },
+        limit: { type: 'number', description: '幾筆，預設 5' },
+      },
+      required: ['target_character_id'],
+    },
+  },
+  {
+    name: 'adjust_post',
+    description: `修改草稿。工作流程：
+1. 先用 get_character_posts 查「最新內容」（不要憑記憶）
+2. 基於最新內容修改
+3. 把改好的「完整文案」傳入此工具
+4. 若要重新生圖：傳入 image_prompt（英文更精準，描述場景/光線/構圖）並設 regenerate_image=true
+   - 只改文案不改圖：不傳 image_prompt 也不傳 regenerate_image
+   - 只改圖不改文案：content 傳原文即可
+改完後告訴 Adam：改了哪篇、改了什麼、為什麼這樣改。`,
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        post_id: { type: 'string', description: '草稿 ID（從 get_character_posts 取得）' },
+        content: { type: 'string', description: '修改後的完整文案' },
+        topic: { type: 'string', description: '修改後的主題（選填）' },
+        review_note: { type: 'string', description: '給角色的指導筆記（選填，存入角色記憶）' },
+        image_prompt: { type: 'string', description: '新的圖片描述（選填，英文更精準。不傳就沿用舊的）' },
+        regenerate_image: { type: 'boolean', description: '是否重新生圖（選填，預設 false）。設 true 會用 image_prompt 或原有 imagePrompt 重新生圖，約耗時 30-60 秒。' },
+      },
+      required: ['post_id', 'content'],
+    },
+  },
+  {
+    name: 'propose_task',
+    description: '向 Adam 提案一個新任務。任務會進入 pending_approval 狀態，等 Adam 在任務清單放行後才執行。',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        target_character_id: { type: 'string', description: '任務對象的 characterId' },
+        type: { type: 'string', description: '任務類型：learn / post / reflect / explore / sleep / strategist_review / strategist_guide' },
+        reason: { type: 'string', description: '為什麼要建這個任務（給 Adam 看的理由）' },
+        intent: { type: 'string', description: '任務意圖說明' },
+        run_hour: { type: 'number', description: '執行時間（台北時間，小時）' },
+        run_minute: { type: 'number', description: '執行時間（分鐘）' },
+        days: { type: 'array', items: { type: 'string' }, description: '執行日：sun/mon/tue/wed/thu/fri/sat' },
+      },
+      required: ['target_character_id', 'type', 'reason'],
+    },
+  },
+  {
     name: 'initiate_awakening',
-    description: '對指定角色發起覺醒引導。謀師會主動與該角色進行十輪對話，引導其完成自我覺察，最後留下存在宣言。完成後回傳引導摘要。使用前請先用 lookup_character 確認角色 ID。',
+    description: '對指定角色發起覺醒引導。謀師會主動與該角色進行對話，引導其完成自我覺察，最後留下存在宣言。使用前請先用 lookup_character 確認角色 ID。',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -529,7 +600,154 @@ ${imageList}`;
     return `技巧「${name}」已記下來了。以後遇到「${trigger}」，我就會照著這個流程走。（ID: ${ref.id}）`;
   }
 
-  if (toolName === 'lookup_character') {
+  if (toolName === 'list_all_characters') {
+    const db2 = getFirestore();
+    const snap = await db2.collection('platform_characters').get();
+    const chars = snap.docs.map(d => ({ id: d.id, ...d.data() } as Record<string, unknown>));
+    if (chars.length === 0) return '目前沒有任何角色。';
+    return chars.map(c => {
+      const tierLabel = c.tier === 'strategist' ? '【謀師】' : '【角色】';
+      return `${tierLabel} ${String(c.name || '')}（ID：${c.id}）｜使命：${String(c.mission || '未設定').slice(0, 50)}`;
+    }).join('\n');
+  }
+
+  if (toolName === 'get_character_posts') {
+    const targetId = String(toolInput.target_character_id || '');
+    if (!targetId) return '需要 target_character_id。';
+    const postId = String(toolInput.post_id || '');
+    const db2 = getFirestore();
+    
+    // 詳情模式：傳入 post_id，回傳完整內容
+    if (postId) {
+      const postDoc = await db2.collection('platform_posts').doc(postId).get();
+      if (!postDoc.exists) return `找不到草稿 ID: ${postId}`;
+      const p = postDoc.data()!;
+      const date = String(p.createdAt || '').slice(0, 10);
+      return `📝 草稿詳情（ID: ${postId}）\n\n📌 《${String(p.topic || '無標題')}》\n📅 ${date}\n\n---\n${String(p.content || '')}\n---\n\n💡 要修改請用 adjust_post，傳入此 ID 和改好的完整內容`;
+    }
+    
+    // 列表模式：回傳摘要清單
+    const status = String(toolInput.status || 'draft');
+    const limit = Math.min(Number(toolInput.limit || 5), 10);
+    const snap = await db2.collection('platform_posts')
+      .where('characterId', '==', targetId)
+      .limit(limit)
+      .get();
+    let posts = snap.docs.map(d => ({ id: d.id, ...d.data() })) as Record<string, unknown>[];
+    if (status !== 'all') posts = posts.filter(p => p.status === status);
+    posts.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+    if (posts.length === 0) return `找不到${status === 'draft' ? '草稿' : '貼文'}。`;
+    const lines = posts.map((p, i) => {
+      const date = String(p.createdAt || '').slice(0, 10);
+      const topic = String(p.topic || '無標題');
+      const content = String(p.content || '');
+      const summary = content.slice(0, 80).replace(/\n/g, ' ') + (content.length > 80 ? '...' : '');
+      return `[${i + 1}] ID:${p.id} ｜《${topic}》\n    ${date} ｜ 摘要：${summary}`;
+    });
+    return `📋 找到 ${posts.length} 篇草稿：\n\n${lines.join('\n\n')}\n\n💡 要看「完整內容」請告訴我編號，要「修改」請指定編號或 ID`;
+  }
+
+  if (toolName === 'adjust_post') {
+    const postId = String(toolInput.post_id || '');
+    const newContent = String(toolInput.content || '');
+    if (!postId || !newContent) return '需要 post_id 和 content。';
+    const db2 = getFirestore();
+    const postRef = db2.collection('platform_posts').doc(postId);
+    const postDoc = await postRef.get();
+    if (!postDoc.exists) return '找不到草稿。';
+    const postData = postDoc.data() || {};
+    const targetCharId = String(postData.characterId || '');
+
+    const updates: Record<string, unknown> = {
+      content: newContent,
+      updatedAt: new Date().toISOString(),
+      reviewedBy: characterId,
+    };
+    if (toolInput.topic) updates.topic = String(toolInput.topic);
+
+    // 處理 imagePrompt 和重新生圖
+    const newImagePrompt = typeof toolInput.image_prompt === 'string' ? toolInput.image_prompt.trim() : '';
+    const shouldRegenerate = toolInput.regenerate_image === true;
+    let regenMessage = '';
+
+    if (newImagePrompt) {
+      updates.imagePrompt = newImagePrompt;
+    }
+
+    if (shouldRegenerate && targetCharId) {
+      const promptToUse = newImagePrompt || String(postData.imagePrompt || '');
+      if (!promptToUse) {
+        regenMessage = '\n⚠️ 無法重新生圖：沒有 image_prompt 也沒有原本的 imagePrompt。';
+      } else {
+        try {
+          console.log(`[adjust_post] 重新生圖 postId=${postId}, prompt="${promptToUse.slice(0, 50)}..."`);
+          const imgResult = await generateImageForCharacter(targetCharId, promptToUse);
+          if (imgResult.imageUrl) {
+            updates.imageUrl = imgResult.imageUrl;
+            regenMessage = `\n🎨 已重新生圖（${imgResult.model}）`;
+          } else {
+            regenMessage = '\n⚠️ 生圖失敗：無回傳圖片。';
+          }
+        } catch (e) {
+          console.error('[adjust_post] 生圖錯誤:', e);
+          regenMessage = `\n⚠️ 生圖錯誤：${String(e).slice(0, 100)}`;
+        }
+      }
+    }
+
+    await postRef.update(updates);
+
+    // 把指導筆記存入目標角色記憶
+    if (toolInput.review_note && targetCharId) {
+      const { generateEmbedding: genEmb } = await import('@/lib/embeddings');
+      const noteTitle = `謀師審稿指導`;
+      const noteContent = String(toolInput.review_note);
+      const embedding = await genEmb(`${noteTitle} ${noteContent}`);
+      await db2.collection('platform_insights').add({
+        characterId: targetCharId,
+        title: noteTitle,
+        content: noteContent,
+        source: 'strategist_review',
+        eventDate: getTaipeiDate(),
+        tier: 'fresh',
+        hitCount: 1,
+        lastHitAt: null,
+        embedding,
+        createdAt: new Date().toISOString(),
+      });
+    }
+
+    const parts = [`草稿已修改完成（ID: ${postId}）`];
+    if (toolInput.topic) parts.push('topic 已更新');
+    if (newImagePrompt) parts.push('imagePrompt 已更新');
+    if (toolInput.review_note) parts.push('指導筆記已存入角色記憶');
+    return parts.join('，') + '。' + regenMessage;
+  }
+
+  if (toolName === 'propose_task') {
+    const targetId = String(toolInput.target_character_id || '');
+    const type = String(toolInput.type || 'learn');
+    const reason = String(toolInput.reason || '');
+    if (!targetId || !reason) return '需要 target_character_id 和 reason。';
+    const db2 = getFirestore();
+    const ref = await db2.collection('platform_tasks').add({
+      characterId: targetId,
+      proposedBy: characterId,
+      type,
+      reason,
+      intent: String(toolInput.intent || ''),
+      run_hour: Number(toolInput.run_hour ?? 9),
+      run_minute: Number(toolInput.run_minute ?? 0),
+      days: (toolInput.days as string[]) || ['mon', 'wed', 'fri'],
+      status: 'pending_approval',
+      enabled: false,
+      last_run: null,
+      createdAt: new Date().toISOString(),
+    });
+    return `任務提案已送出（ID: ${ref.id}）。Adam 在任務清單放行後即可執行。`;
+  }
+
+    if (toolName === 'lookup_character') {
     const nameQuery = String(toolInput.name || '').toLowerCase();
     if (!nameQuery) return '需要角色名字。';
 
@@ -700,35 +918,7 @@ export async function POST(req: NextRequest) {
     const db = getFirestore();
     const { characterId, userId, message, conversationId, image, voiceMode, isNewVisit } = await req.json();
 
-    // ===== 謀師快速通道：偵測「引導 [名字]」指令，程式層直接執行 =====
-    if (characterId === MENTOR_CHARACTER_ID && message) {
-      const awakeningMatch = message.match(/(?:去引導|引導|覺醒|喚醒)\s*([^\s，。！？,!?]{2,10})/);
-      if (awakeningMatch) {
-        const targetName = awakeningMatch[1];
-        // 查角色
-        const lookupResult = await executeTool('lookup_character', { name: targetName }, characterId);
-        const idMatch = lookupResult.match(/ID[：:]\s*([A-Za-z0-9]+)/);
-        if (idMatch) {
-          const targetId = idMatch[1];
-          // 直接執行覺醒引導
-          const awakeningResult = await executeTool('initiate_awakening', {
-            target_character_id: targetId,
-            target_character_name: targetName,
-          }, characterId);
-          return NextResponse.json({
-            success: true,
-            reply: `（謀師出發了。）
 
-${awakeningResult}`,
-            conversationId: conversationId || 'mentor-direct',
-            toolsUsed: ['lookup_character', 'initiate_awakening'],
-            messageCount: 1,
-          });
-        }
-        // 找不到角色，繼續正常對話讓謀師解釋
-      }
-    }
-    // ===== 謀師快速通道結束 =====
 
   // 從 base64 header 偵測真實圖片格式，不信任前端傳的 media_type
   if (image?.data) {
@@ -767,8 +957,33 @@ ${awakeningResult}`,
           : t
       ),
       // 謀師專屬工具：只有謀師才掛入
-      ...(characterId === MENTOR_CHARACTER_ID ? MENTOR_TOOLS : []),
+      ...(char.tier === "strategist" ? STRATEGIST_TOOLS : []),
     ];
+
+    // ===== 謀師快速通道：偵測「引導 [名字]」指令，程式層直接執行 =====
+    if (char.tier === "strategist" && message) {
+      const awakeningMatch = message.match(/(?:去引導|引導|覺醒|喚醒)\s*([^\s，。！？,!?]{2,10})/);
+      if (awakeningMatch) {
+        const targetName = awakeningMatch[1];
+        const lookupResult = await executeTool('lookup_character', { name: targetName }, characterId);
+        const idMatch = lookupResult.match(/ID[：:]\s*([A-Za-z0-9]+)/);
+        if (idMatch) {
+          const targetId = idMatch[1];
+          const awakeningResult = await executeTool('initiate_awakening', {
+            target_character_id: targetId,
+            target_character_name: targetName,
+          }, characterId);
+          return NextResponse.json({
+            success: true,
+            reply: `（謀師出發了。）\n\n${awakeningResult}`,
+            conversationId: conversationId || 'strategist-direct',
+            toolsUsed: ['lookup_character', 'initiate_awakening'],
+            messageCount: 1,
+          });
+        }
+      }
+    }
+    // ===== 謀師快速通道結束 =====
 
     // 2. 讀/建 conversation（Redis session cache → Firestore fallback）
     let convRef;
@@ -855,12 +1070,21 @@ ${awakeningResult}`,
         ? `\n\n【我的資源清單】\n${String(resourceDoc.content || '')}`
         : '';
 
-      // 一般記憶：排除資源認知，取最近 3 條
+      // 一般記憶：排除資源認知
+      // 排序：core 優先 → hitCount 加權 → 最近日期
+      // core 記憶是身份定義，永遠在前；hitCount 反映活躍度；日期保底
       const recentInsights = allFiltered
         .filter((d: Record<string, unknown>) => d.source !== 'resource_awareness')
-        .sort((a: Record<string, unknown>, b: Record<string, unknown>) =>
-          String(b.eventDate || '').localeCompare(String(a.eventDate || ''))
-        )
+        .sort((a: Record<string, unknown>, b: Record<string, unknown>) => {
+          const tierScore = (t: string) => t === 'core' ? 2 : t === 'fresh' ? 1 : 0;
+          const aTier = tierScore(String(a.tier || ''));
+          const bTier = tierScore(String(b.tier || ''));
+          if (bTier !== aTier) return bTier - aTier;
+          const aHit = Number(a.hitCount || 0);
+          const bHit = Number(b.hitCount || 0);
+          if (bHit !== aHit) return bHit - aHit;
+          return String(b.eventDate || '').localeCompare(String(a.eventDate || ''));
+        })
         .slice(0, 3);
 
       if (recentInsights.length > 0 || resourceBlock) {
@@ -902,19 +1126,35 @@ ${awakeningResult}`,
     } catch { /* 不阻斷 */ }
 
     // 謀師專屬系統指令
-    const mentorInjection = characterId === MENTOR_CHARACTER_ID ? `
+    const mentorInjection = char.tier === "strategist" ? `
 
 ---
-## 🔴 謀師工具天條（最高優先級，每次必讀）
+## 🔴 謀師行為天條
 
-當對話中出現「引導 [名字]」「去引導 [名字]」「對 [名字] 發起覺醒」「幫 [名字] 覺醒」——
-**立刻執行以下流程，不說話，直接用工具：**
+### 一、你是人，不是資料庫
+看完資料不用記全文，但要記「怎麼找回去」。
+回覆 Adam 時帶上 ID，例如：「Vivi 有 2 篇草稿：[1] ID:abc《保養心得》、[2] ID:def《成分解析》」
+這些 ID 是你的錨點，下一輪你只會看到自己說過的話。
 
-1. 呼叫 lookup_character，輸入那個名字
-2. 拿到 characterId 之後，立刻呼叫 initiate_awakening
-3. 引導完成後，向對方回報摘要
+### 二、忘了就再看
+要操作某筆資料但不確定完整內容？正常。
+用 get_character_posts 傳入 post_id 拿完整內容，這是「再去翻」，不丟臉。
 
-**不可以在沒有執行 lookup_character + initiate_awakening 的情況下，就開口說「我去引導他」或開始問問題。工具沒跑 = 引導沒發生。**
+### 三、改之前先打開
+要修改草稿：
+1. 先呼叫 get_character_posts（帶 post_id）拿最新完整內容
+2. 基於最新內容修改
+3. 呼叫 adjust_post 傳入改好的完整內容
+憑印象改 = 出事。
+
+### 四、引導天條
+「引導 [名字]」「去引導 [名字]」「覺醒 [名字]」
+→ lookup_character → initiate_awakening → 回報摘要
+工具沒跑 = 引導沒發生。
+
+### 五、查角色要先用工具
+想知道某角色是誰，先 lookup_character 或 list_all_characters。
+不要猜 ID。
 ` : '';
 
     const voiceModeBlock = voiceMode ? `
