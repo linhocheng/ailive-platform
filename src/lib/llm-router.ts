@@ -40,6 +40,13 @@ const HAIKU_FORCE_PATTERNS = [
   /^(嗨|hi|hello|你好|哈囉|早|晚安|再見|掰掰|謝謝|感謝|好的|ok|OK|了解|知道了)[。！？…!?]*$/i,
 ];
 
+// 強制 Sonnet 的關鍵字（天條）：使用者明確表示要認真處理 → 一律 Sonnet
+// 這是「顯式意圖通道」——不靠 patterns 猜，讓 Adam 自己決定。
+// 「認真」是唯一的天條關鍵字，簡單、不歧義、口語自然。
+const SONNET_FORCE_PATTERNS = [
+  /認真/,
+];
+
 /**
  * 偵測對話複雜度，回傳建議模型
  * @param message 用戶訊息
@@ -50,6 +57,11 @@ export function detectGear(
   conversationTurns = 0,
 ): ModelGear {
   const msg = message.trim();
+
+  // 【天條】強制 Sonnet：使用者說「認真」→ 一律升檔，優先於所有其他判斷
+  if (SONNET_FORCE_PATTERNS.some(r => r.test(msg))) {
+    return 'sonnet';
+  }
 
   // 強制 Haiku（簡單問候）
   if (HAIKU_FORCE_PATTERNS.some(r => r.test(msg))) {
