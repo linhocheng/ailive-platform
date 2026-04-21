@@ -20,6 +20,69 @@
 import type { TTSProvider, TTSRequest } from './types';
 import { sify } from 'chinese-conv';
 
+// ===== 模組級 throttle：防 MiniMax RPM 靜默限流 =====
+// YuqiCity 血換數據：0.2s 間隔會 71% 空回應、0.5s 穩定
+// 我們選 throttle-by-interval 而非 Semaphore(1)，因為 voice-stream 多句並行
+// 嚴格序列化會把首字延遲變 N 倍。間隔保證足以避開 RPM 爆點
+// Promise chain 確保 throttle 本身是串行的（避免 race condition）
+// 注意：這是單 lambda instance 保護，跨 instance 的全域 RPM 要 Redis-based
+const MINIMAX_MIN_INTERVAL_MS = 500;
+let minimaxLastCallAt = 0;
+let minimaxThrottleGate: Promise<void> = Promise.resolve();
+
+function throttleMinimax(): Promise<void> {
+  const myTurn = minimaxThrottleGate.then(async () => {
+    const elapsed = Date.now() - minimaxLastCallAt;
+    if (elapsed < MINIMAX_MIN_INTERVAL_MS) {
+      await new Promise(r => setTimeout(r, MINIMAX_MIN_INTERVAL_MS - elapsed));
+    }
+    minimaxLastCallAt = Date.now();
+  });
+  minimaxThrottleGate = myTurn.catch(() => {}); // 防止 chain 壞掉
+  return myTurn;
+}
+
+// ===== 0B retry：讀第一個 chunk，空的話重組一個 null 訊號 =====
+// MiniMax 靜默限流 = HTTP 200 + SSE body 無 audio chunk → 輸出 stream 0 bytes
+// 修法：讀第一個 chunk 判斷，空就 retry 一次
+async function peekFirstChunk(upstream: ReadableStream<Uint8Array>): Promise<{
+  firstChunk: Uint8Array | null;
+  rebuiltStream: ReadableStream<Uint8Array> | null;
+}> {
+  const reader = upstream.getReader();
+  let firstChunk: Uint8Array | null = null;
+  try {
+    const { done, value } = await reader.read();
+    if (done || !value || value.length === 0) {
+      try { reader.releaseLock(); } catch {}
+      return { firstChunk: null, rebuiltStream: null };
+    }
+    firstChunk = value;
+  } catch {
+    try { reader.releaseLock(); } catch {}
+    return { firstChunk: null, rebuiltStream: null };
+  }
+
+  // 組新 stream：先塞 firstChunk，之後把 reader 剩下 pull 出來
+  const rebuiltStream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      if (firstChunk) controller.enqueue(firstChunk);
+    },
+    async pull(controller) {
+      try {
+        const { done, value } = await reader.read();
+        if (done) { controller.close(); try { reader.releaseLock(); } catch {} return; }
+        if (value) controller.enqueue(value);
+      } catch (e) {
+        controller.error(e);
+        try { reader.releaseLock(); } catch {}
+      }
+    },
+    cancel() { try { reader.releaseLock(); } catch {} },
+  });
+  return { firstChunk, rebuiltStream };
+}
+
 interface MinimaxVoiceSettings {
   voice_id: string;
   speed: number;
@@ -133,18 +196,9 @@ function sseToMp3Stream(upstream: ReadableStream<Uint8Array>): ReadableStream<Ui
 export class MinimaxProvider implements TTSProvider {
   name = 'minimax' as const;
 
-  async synthesizeStream(req: TTSRequest): Promise<ReadableStream<Uint8Array> | null> {
-    const apiKey = process.env.MINIMAX_API_KEY;
-    const groupId = process.env.MINIMAX_GROUP_ID;
-
-    if (!apiKey || !groupId) {
-      console.warn('[MinimaxProvider] MINIMAX_API_KEY / MINIMAX_GROUP_ID 未設定');
-      return null;
-    }
-    if (!req.text.trim()) return null;
-
+  // 單次原始呼叫（不含 throttle / retry 邏輯）
+  private async rawCall(req: TTSRequest, apiKey: string, groupId: string): Promise<ReadableStream<Uint8Array> | null> {
     const settings = buildSettings(req.voiceId);
-
     const url = `https://api.minimax.io/v1/t2a_v2?GroupId=${encodeURIComponent(groupId)}`;
     // 繁→簡轉換：MiniMax 訓練語料以簡體為主，送簡體進去發音穩定度較高
     // 字級對應，不轉詞彙（譬如「專案」不會變「項目」）— 只解決發音，不改用語
@@ -158,13 +212,12 @@ export class MinimaxProvider implements TTSProvider {
       // language_boost 官方 40 個選項只有 Chinese / Chinese,Yue，沒有台灣國語
       // 用 'auto' 會偵測成 Chinese → 推到最純陸腔模板（加劇陸腔）
       // 用 null = 不觸發任何語言強化，讓 voice 本身的錄音底去決定口音
-      // 治標不治本（底層仍是大陸錄音），但比 auto 輕一點
       language_boost: null,
       voice_setting: settings.voice,
       audio_setting: {
         sample_rate: 32000,
         bitrate: 128000,
-        format: 'mp3',     // 讓前端 MSE audio/mpeg 不用動
+        format: 'mp3',
         channel: 1,
       },
     };
@@ -184,7 +237,45 @@ export class MinimaxProvider implements TTSProvider {
       console.error(`[MinimaxProvider] API ${res.status}: ${errText.slice(0, 200)}`);
       return null;
     }
-
     return sseToMp3Stream(res.body);
+  }
+
+  async synthesizeStream(req: TTSRequest): Promise<ReadableStream<Uint8Array> | null> {
+    const apiKey = process.env.MINIMAX_API_KEY;
+    const groupId = process.env.MINIMAX_GROUP_ID;
+
+    if (!apiKey || !groupId) {
+      console.warn('[MinimaxProvider] MINIMAX_API_KEY / MINIMAX_GROUP_ID 未設定');
+      return null;
+    }
+    if (!req.text.trim()) return null;
+
+    // 最多嘗試 2 次：第二次是 0B 重試
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await throttleMinimax();
+
+      const rawStream = await this.rawCall(req, apiKey, groupId);
+      if (!rawStream) {
+        // HTTP 層失敗（4xx/5xx/no body），不重試，交給 cross-provider fallback 處理
+        return null;
+      }
+
+      // 讀第一個 MP3 chunk 判斷有沒有音訊
+      const { firstChunk, rebuiltStream } = await peekFirstChunk(rawStream);
+      if (firstChunk && firstChunk.length > 0 && rebuiltStream) {
+        return rebuiltStream; // 正常，直接回
+      }
+
+      // 0B：靜默限流跡象。sleep 500ms 後重試一次
+      if (attempt === 0) {
+        console.warn('[MinimaxProvider] empty first chunk (silent rate-limit?), retrying after 500ms');
+        await new Promise(r => setTimeout(r, 500));
+        continue;
+      }
+      // 第二次還 0B：放棄，回 null 給 cross-provider fallback
+      console.error('[MinimaxProvider] empty first chunk after retry, giving up');
+      return null;
+    }
+    return null;
   }
 }

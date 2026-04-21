@@ -177,6 +177,12 @@ export const PRONUNCIATION_MAP: Record<string, string> = {
  */
 export function preprocessTTS(text: string): string {
   let r = text;
+  // LLM 思考洩漏清除（放最前面：思考內容可能含 markdown，要先刪才不會誤處理）
+  // Anthropic 目前不會洩漏，但變檔器若切 Gemini/DeepSeek 就會踩（YuqiCity 血換教訓）
+  r = r.replace(/<thinking>[\s\S]*?<\/thinking>/gi, '');  // Anthropic/Claude 風格
+  r = r.replace(/<think>[\s\S]*?<\/think>/gi, '');         // DeepSeek 風格
+  r = r.replace(/（\s*(?:思考|thinking)[：:][\s\S]*?）/gi, ''); // 全形括號
+  r = r.replace(/\(\s*(?:思考|thinking)[：:][\s\S]*?\)/gi, ''); // 半形括號
   // 清 Markdown + URL（TTS 不念網址）
   r = r.replace(/\*\*(.+?)\*\*/g, '$1');
   r = r.replace(/\*(.+?)\*/g, '$1');
