@@ -24,6 +24,8 @@ import { generateImageForCharacter, buildGenerateImageDescription } from '@/lib/
 import { trackCost } from '@/lib/cost-tracker';
 import { generateImagePath } from '@/lib/image-storage';
 import { redis } from '@/lib/redis';
+import { extractSessionSummary, messagesToDialogueText, type LastSession } from '@/lib/session-summary';
+import { buildLastSessionBlock } from '@/lib/last-session-block';
 
 export const maxDuration = 120;
 
@@ -1191,7 +1193,10 @@ export async function POST(req: NextRequest) {
 
     // Prompt Caching：靈魂+技能穩定，標 cache_control，每輪只收 10% input token
     const stableBlock = `${mentorInjection}${soulText}${skillsBlock}${voiceModeBlock}${SELF_AWARENESS_BLOCK}`;
-    const dynamicBlock = `${episodicBlock}${gapInjection}${sessionStateBlock}
+    // 上次對話快照（cross-session）— 跟 voice 端共用 lib
+    const lastSessionBlock = buildLastSessionBlock(convData.lastSession as LastSession | undefined);
+
+    const dynamicBlock = `${episodicBlock}${gapInjection}${sessionStateBlock}${lastSessionBlock}
 
 ---
 現在時間（台北）：${taipeiTime}
@@ -1463,7 +1468,7 @@ ${convData.userProfile ? `【我認識這個人】\n${convData.userProfile}\n\n`
             } catch { /* 提煉失敗不中斷 */ }
           }
 
-          // Session State 更新
+          // Session State 更新（in-session：當下狀態，存 Redis 24h）
           if (newCount >= 4) {
             void (async () => {
               try {
@@ -1475,6 +1480,32 @@ ${convData.userProfile ? `【我認識這個人】\n${convData.userProfile}\n\n`
                 );
                 if (sessionState) await redis.set(`session:${characterId}:${userId}`, sessionState, 60 * 60 * 24);
               } catch { /* session 更新失敗 */ }
+            })();
+          }
+
+          // lastSession 更新（cross-session：給「下次」開場用，存 Firestore 永久）
+          // 觸發時機：第 6 輪首次出現 → 之後每 8 輪刷一次
+          // 不在每輪打，避免 Haiku 成本累積；不等「結束」，因為 dialogue 沒有結束信號
+          // 與 voice-end / voice-stream 共用 extractSessionSummary lib
+          const shouldUpdateLastSession = newCount === 6 || (newCount > 6 && newCount % 8 === 0);
+          if (shouldUpdateLastSession) {
+            void (async () => {
+              try {
+                const dialogueText = messagesToDialogueText(newMessages.slice(-12));
+                const summary = await extractSessionSummary(client, dialogueText);
+                if (summary && summary.summary) {
+                  await convRef!.update({
+                    lastSession: {
+                      summary: summary.summary,
+                      endingMood: summary.endingMood,
+                      unfinishedThreads: summary.unfinishedThreads,
+                      updatedAt: new Date().toISOString(),
+                    },
+                  });
+                  // LESSONS #1：寫完 conv 必清 cache，否則下輪 prompt 讀到舊 doc
+                  try { await redis.del(`conv:${conversationId}`); } catch { /* 不阻斷 */ }
+                }
+              } catch (_e) { /* lastSession 更新失敗，靜默 */ }
             })();
           }
 
