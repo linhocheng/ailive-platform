@@ -184,6 +184,29 @@ export async function POST(req: NextRequest) {
           gapInjection = `\n\n---\n【時間感知】距離上次語音對話過了 ${gapCheck.durationText}\n（可以自然帶出，也可以什麼都不說，看情境決定）`;
         }
 
+        // ── 上次通話快照（A 線 · Smart Greeting）──
+        // voice-end 結束時由 Haiku 產出 lastSession 寫到對話 doc
+        // 這裡讀來注入 prompt，讓角色「記得」上次聊到哪，不硬要開場提，看情境
+        let lastSessionBlock = '';
+        type LastSession = { summary?: string; endingMood?: string; unfinishedThreads?: string[]; updatedAt?: string };
+        const lastSession = (convData.lastSession as LastSession | undefined);
+        if (lastSession && lastSession.summary) {
+          const parts: string[] = [`\n\n---\n【上次對話】${lastSession.summary}`];
+          if (lastSession.endingMood && lastSession.endingMood !== 'neutral') {
+            const moodLabel: Record<string,string> = {
+              positive: '聊得愉快',
+              concerned: '對方心情不太好',
+              unfinished: '意猶未盡',
+            };
+            parts.push(`氣氛：${moodLabel[lastSession.endingMood] || lastSession.endingMood}`);
+          }
+          if (Array.isArray(lastSession.unfinishedThreads) && lastSession.unfinishedThreads.length > 0) {
+            parts.push(`未完話題：${lastSession.unfinishedThreads.slice(0, 2).join('、')}`);
+          }
+          parts.push('（可以自然帶出延續上次，也可以完全不提，看情境與對方開場。不要硬套、不要報告式複述。）');
+          lastSessionBlock = parts.join('\n');
+        }
+
         // ── Session State 讀取 ──
         let sessionStateBlock = '';
         try {
@@ -207,7 +230,7 @@ export async function POST(req: NextRequest) {
 ❌ 禁止：重複用戶說的奇怪詞語，或對轉錄錯誤提出疑問
 比喻：把用戶說的話當成打錯字的簡訊——你會猜意思繼續聊，不會問「你是不是打錯字了？」`;
 
-        const voiceDynamicBlock = `${summaryBlock}${gapInjection}${sessionStateBlock}
+        const voiceDynamicBlock = `${summaryBlock}${gapInjection}${lastSessionBlock}${sessionStateBlock}
 
 ---
 現在時間（台北）：${taipeiTime}`;

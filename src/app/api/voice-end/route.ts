@@ -9,6 +9,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { getFirestore } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 import { generateEmbedding } from '@/lib/embeddings';
+import { redis } from '@/lib/redis';
 
 export const maxDuration = 60;
 
@@ -41,19 +42,33 @@ export async function POST(req: NextRequest) {
       .map(m => `${m.role === 'user' ? '用戶' : '角色'}：${String(m.content || '').slice(0, 150)}`)
       .join('\n');
 
-    // 用 Haiku 提煉 insight
+    // 用 Haiku 同時抽 insights + sessionSummary（給下次通話開場用）
     const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
     const extractRes = await client.messages.create({
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: 600,
+      max_tokens: 900,
       messages: [{
         role: 'user',
-        content: `以下是一段語音對話記錄，請提煉出 1-3 條值得角色記住的洞察。
-重點：用戶說了什麼重要的事？角色感受到了什麼？這次對話有什麼值得記住的？
+        content: `以下是一段語音對話記錄。請一次產出兩樣東西，整合成一個 JSON 物件回傳。
 
-用 JSON 陣列回傳：[{"title":"...","content":"...","importance":1-3}]
-importance: 1=普通/2=重要/3=深刻
-只回傳 JSON，不要其他文字。
+【1】insights：提煉 1-3 條值得角色記住的洞察
+用戶說了什麼重要的事？角色感受到了什麼？有什麼值得記住？
+每條: { title, content, importance }（importance: 1=普通/2=重要/3=深刻）
+
+【2】sessionSummary：給「下次通話」開場用的快照
+- summary: 一句話白描上次聊了什麼主題（≤40 字）
+- endingMood: positive / neutral / concerned / unfinished（看對話走向判斷）
+- unfinishedThreads: 角色提到但沒講完的話題（字串陣列，可空）
+
+回傳格式（只回 JSON，不要其他文字、不要 code fence）：
+{
+  "insights": [{"title":"...","content":"...","importance":1}],
+  "sessionSummary": {
+    "summary": "...",
+    "endingMood": "positive",
+    "unfinishedThreads": []
+  }
+}
 
 對話：
 ${dialogueText}`,
@@ -62,7 +77,12 @@ ${dialogueText}`,
 
     const raw = (extractRes.content[0] as Anthropic.TextBlock).text.trim();
     const cleaned = raw.replace(/^```[\w]*\n?/m, '').replace(/\n?```$/m, '').trim();
-    const insights = JSON.parse(cleaned) as Array<{ title: string; content: string; importance: number }>;
+    const parsed = JSON.parse(cleaned) as {
+      insights: Array<{ title: string; content: string; importance: number }>;
+      sessionSummary: { summary: string; endingMood: string; unfinishedThreads: string[] };
+    };
+    const insights = parsed.insights || [];
+    const sessionSummary = parsed.sessionSummary || null;
 
     const today = getTaipeiDate();
     const saved: string[] = [];
@@ -94,11 +114,28 @@ ${dialogueText}`,
       });
     }
 
+    // ── A 線：寫 lastSession 到對話 doc，給下次通話 Smart Greeting ──
+    // 不管 insights 多少條，只要 sessionSummary 解析到就寫
+    if (sessionSummary && sessionSummary.summary) {
+      await db.collection('platform_conversations').doc(conversationId).update({
+        lastSession: {
+          summary: sessionSummary.summary,
+          endingMood: sessionSummary.endingMood || 'neutral',
+          unfinishedThreads: sessionSummary.unfinishedThreads || [],
+          disconnectReason: 'user_hangup', // 未來前端可傳入更細的值
+          updatedAt: new Date().toISOString(),
+        },
+      });
+      // 清對話 cache，下次 voice-stream 才讀得到新 lastSession（LESSONS 第 1 條）
+      try { await redis.del(`conv:${conversationId}`); } catch (_e) { /* 不阻斷 */ }
+    }
+
     return NextResponse.json({
       success: true,
       insights,
+      sessionSummary,
       saved: saved.length,
-      message: `已沉澱 ${saved.length} 條記憶`,
+      message: `已沉澱 ${saved.length} 條記憶${sessionSummary ? '、寫入 lastSession' : ''}`,
     });
   } catch (e: unknown) {
     return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
