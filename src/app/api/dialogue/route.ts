@@ -29,6 +29,12 @@ import { buildLastSessionBlock } from '@/lib/last-session-block';
 
 export const maxDuration = 120;
 
+// dialogue 直接記憶窗口（給 Claude 看的最近訊息數）
+// 同時控制：history slice、壓縮觸發閾值、壓縮後 doc 保留數
+// 改大 → 角色更不健忘，token 成本上升；改小 → 省錢但容易失憶
+// Adam 拍板 2026-04-21：10 → 20
+const RECENT_MESSAGES_WINDOW = 20;
+
 // instance-level cache：角色靜態資料（5 分鐘有效）
 const charCache = new Map();
 const CACHE_TTL = 5 * 60 * 1000;
@@ -1213,7 +1219,7 @@ ${convData.userProfile ? `【我認識這個人】\n${convData.userProfile}\n\n`
       { type: 'text', text: dynamicBlock },
     ];
     // 4. 組歷史訊息（舊圖片不重傳 base64，只帶文字，避免 413）
-    const history = (convData.messages as Array<{ role: string; content: string; imageUrl?: string }> || []).slice(-10);
+    const history = (convData.messages as Array<{ role: string; content: string; imageUrl?: string }> || []).slice(-RECENT_MESSAGES_WINDOW);
     const messages: Anthropic.MessageParam[] = [
       ...history.map(m => ({
         role: m.role as 'user' | 'assistant',
@@ -1410,8 +1416,8 @@ ${convData.userProfile ? `【我認識這個人】\n${convData.userProfile}\n\n`
 
           // summary 壓縮
           const allMessages = newMessages;
-          if (allMessages.length > 10) {
-            const olderMessages = allMessages.slice(0, allMessages.length - 10);
+          if (allMessages.length > RECENT_MESSAGES_WINDOW) {
+            const olderMessages = allMessages.slice(0, allMessages.length - RECENT_MESSAGES_WINDOW);
             if (olderMessages.length >= 4) {
               try {
                 const compressText = olderMessages
@@ -1425,7 +1431,7 @@ ${convData.userProfile ? `【我認識這個人】\n${convData.userProfile}\n\n`
                 if (!newSummary) throw new Error('Gemini 壓縮失敗');
                 const existingSummary = String(convData.summary || '');
                 const mergedSummary = existingSummary ? `${existingSummary}\n${newSummary}` : newSummary;
-                await convRef!.update({ messages: allMessages.slice(-10), summary: mergedSummary.slice(-500) });
+                await convRef!.update({ messages: allMessages.slice(-RECENT_MESSAGES_WINDOW), summary: mergedSummary.slice(-500) });
               } catch { /* 壓縮失敗不阻斷 */ }
             }
           }
