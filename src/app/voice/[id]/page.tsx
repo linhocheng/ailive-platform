@@ -184,8 +184,8 @@ export default function VoicePage() {
     setInterimText('');
     setProcessingLabel('( 思考中 )');
     setVoiceState('processing');
-    // 思考超過 5 秒，換成「查詢中」提示用戶知道在網路查資料
-    const thinkingTimer = setTimeout(() => setProcessingLabel('( 查詢中 )'), 5000);
+    // 思考超過 5 秒，換成「沈思中」提示用戶還在處理
+    const thinkingTimer = setTimeout(() => setProcessingLabel('( 沈思中 )'), 5000);
     try {
       const res = await fetch('/api/voice-stream', {
         method: 'POST', headers: {'Content-Type':'application/json'},
