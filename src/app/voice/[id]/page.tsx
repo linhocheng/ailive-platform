@@ -157,6 +157,27 @@ export default function VoicePage() {
   }, [characterId]);
   useEffect(() => () => { streamRef.current?.getTracks().forEach(t=>t.stop()); }, []);
 
+  // iOS Audio 預解鎖：進頁面後首次 touch/pointer 就解鎖，不等按主鈕
+  // （iOS 規定 audio.play() 必須在 user gesture 同步 stack，首次碰螢幕就算）
+  useEffect(() => {
+    const unlock = () => {
+      if (unlockedAudioRef.current) return;
+      try {
+        const a = new Audio();
+        a.play().catch(()=>{});
+        a.pause();
+        unlockedAudioRef.current = a;
+      } catch {}
+    };
+    const opts = { once: true, passive: true } as AddEventListenerOptions;
+    window.addEventListener('pointerdown', unlock, opts);
+    window.addEventListener('touchstart', unlock, opts);
+    return () => {
+      window.removeEventListener('pointerdown', unlock);
+      window.removeEventListener('touchstart', unlock);
+    };
+  }, []);
+
   // ── 送出對話 ──
   const sendToDialogue = useCallback(async (userText: string) => {
     if (!userText.trim()) { setVoiceState('idle'); return; }
@@ -355,8 +376,10 @@ export default function VoicePage() {
 
   // ── 主按鈕 ──
   const handleMainButton = useCallback(() => {
-    // iOS: 每次 user gesture 都預先解鎖一個 Audio 元素，供後續 blob 播放
-    try { const a=new Audio(); a.play().catch(()=>{}); a.pause(); unlockedAudioRef.current=a; } catch {}
+    // iOS: fallback — 若頁面首次 touch listener 沒跑到（理論上不會），補建一次
+    if (!unlockedAudioRef.current) {
+      try { const a=new Audio(); a.play().catch(()=>{}); a.pause(); unlockedAudioRef.current=a; } catch {}
+    }
     if (state==='idle') { if(usingSpeechAPI) startWebSpeech(); else startGemini(); }
     else if (state==='recording') { if(usingSpeechAPI) stopWebSpeechAndSend(); else stopGeminiAndSend(); }
     else if (state==='playing') { audioRef.current?.pause(); setVoiceState('idle'); }

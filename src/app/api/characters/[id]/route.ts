@@ -10,10 +10,26 @@ import { redis } from '@/lib/redis';
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params;
+
+    // Redis cache 優先（voice-stream 用同一把 key，10 分鐘）
+    // voice 頁 mount fetch 自動預熱 → voice-stream 進來就 hit
+    try {
+      const cached = await redis.get(`char:${id}`);
+      if (cached) {
+        const data = JSON.parse(cached as string);
+        return NextResponse.json({ character: { id, ...data } });
+      }
+    } catch (_e) { /* 不阻斷，往下讀 Firestore */ }
+
     const db = getFirestore();
     const doc = await db.collection('platform_characters').doc(id).get();
     if (!doc.exists) return NextResponse.json({ error: '角色不存在' }, { status: 404 });
-    return NextResponse.json({ character: { id: doc.id, ...doc.data() } });
+
+    const data = doc.data()!;
+    // 寫回 cache（10 分鐘，PATCH 會 del）
+    try { await redis.set(`char:${id}`, JSON.stringify(data), 60 * 10); } catch (_e) { /* 不阻斷 */ }
+
+    return NextResponse.json({ character: { id: doc.id, ...data } });
   } catch (e: unknown) {
     return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
   }
