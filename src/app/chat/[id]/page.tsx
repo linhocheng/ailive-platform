@@ -1,12 +1,23 @@
 'use client';
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
+import CommissionStatusBar from '@/components/CommissionStatusBar';
+import type { ActiveJob } from '@/lib/commission-stages';
+import { deriveMiniLight } from '@/lib/commission-stages';
 
 interface Message {
-  role: 'user' | 'assistant';
+  role: 'user' | 'assistant' | 'system_event';
   content: string;
   timestamp: string;
   imageUrl?: string;
+  // system_event 專屬
+  eventType?: string;
+  specialistName?: string;
+  specialistId?: string;
+  jobId?: string;
+  output?: { type: string; imageUrl?: string; docUrl?: string; title?: string };
+  workLog?: string;
+  error?: string;
 }
 
 interface Character {
@@ -69,6 +80,7 @@ export default function ChatPage() {
   const { id: characterId } = useParams<{ id: string }>();
   const [char, setChar] = useState<Character | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [activeJobs, setActiveJobs] = useState<ActiveJob[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
@@ -106,6 +118,39 @@ export default function ChatPage() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, loading]);
 
+  // ── Polling：每 5s 更新 messages + activeJobs（捕捉 system_event 交件 + 委託狀態）──
+  useEffect(() => {
+    if (!conversationId) return;
+    const timer = setInterval(async () => {
+      try {
+        const r = await fetch(`/api/dialogue?conversationId=${conversationId}`);
+        const d = await r.json();
+        if (d.messages?.length > 0) {
+          setMessages(prev => {
+            // 只有訊息數量增加時才更新（避免覆蓋 streaming）
+            if (d.messages.length <= prev.length) return prev;
+            return d.messages.map((m: Message) => ({
+              role: m.role,
+              content: m.content || '',
+              timestamp: m.timestamp || new Date().toISOString(),
+              imageUrl: m.imageUrl || m.output?.imageUrl,
+              eventType: m.eventType,
+              specialistName: m.specialistName,
+              specialistId: m.specialistId,
+              jobId: m.jobId,
+              output: m.output,
+              workLog: m.workLog,
+              error: m.error,
+            }));
+          });
+        }
+        // activeJobs 每次都覆寫（後端已過濾 active + 60s 內）
+        if (Array.isArray(d.activeJobs)) setActiveJobs(d.activeJobs as ActiveJob[]);
+      } catch { /* ignore polling errors */ }
+    }, 5000);
+    return () => clearInterval(timer);
+  }, [conversationId]);
+
   const loadHistory = async (convId: string) => {
     setLoadingHistory(true);
     try {
@@ -113,11 +158,21 @@ export default function ChatPage() {
       const d = await r.json();
       if (d.messages?.length > 0) {
         setMessages(d.messages.map((m: Message) => ({
-          role: m.role, content: m.content,
+          role: m.role,
+          content: m.content || '',
           timestamp: m.timestamp || new Date().toISOString(),
-          imageUrl: m.imageUrl,
+          imageUrl: m.imageUrl || m.output?.imageUrl,
+          // system_event fields
+          eventType: m.eventType,
+          specialistName: m.specialistName,
+          specialistId: m.specialistId,
+          jobId: m.jobId,
+          output: m.output,
+          workLog: m.workLog,
+          error: m.error,
         })));
       }
+      if (Array.isArray(d.activeJobs)) setActiveJobs(d.activeJobs as ActiveJob[]);
     } catch { /* ignore */ }
     finally { setLoadingHistory(false); }
   };
@@ -280,16 +335,47 @@ export default function ChatPage() {
 
           <div style={{ width: 1, height: 20, background: 'var(--border, #E4E2DC)' }} />
 
-          {avatar ? (
-            <img src={avatar} alt="" style={{ width: 30, height: 30, borderRadius: '50%', objectFit: 'cover', border: '1px solid var(--border, #E4E2DC)' }} />
-          ) : (
-            <div style={{
-              width: 30, height: 30, borderRadius: '50%',
-              background: 'var(--bg-alt, #EDECEA)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              color: 'var(--text-muted, #9C9A95)',
-            }}><IconUser /></div>
-          )}
+          <div style={{ position: 'relative', width: 30, height: 30 }}>
+            {avatar ? (
+              <img src={avatar} alt="" style={{ width: 30, height: 30, borderRadius: '50%', objectFit: 'cover', border: '1px solid var(--border, #E4E2DC)' }} />
+            ) : (
+              <div style={{
+                width: 30, height: 30, borderRadius: '50%',
+                background: 'var(--bg-alt, #EDECEA)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                color: 'var(--text-muted, #9C9A95)',
+              }}><IconUser /></div>
+            )}
+            {(() => {
+              const mini = deriveMiniLight(activeJobs, messages as unknown as Array<{ role?: string; eventType?: string; jobId?: string }>);
+              if (mini === 'idle') return null;
+              const color =
+                mini === 'failed' ? '#C0392B'
+                : mini === 'done' ? '#27AE60'
+                : mini === 'running' ? '#E67E22'  // 橘（脈動）
+                : '#E67E22'; // pending 也橘（尚未接到工）
+              const pulse = (mini === 'running' || mini === 'pending');
+              const title =
+                mini === 'failed' ? '有委託失敗'
+                : mini === 'done' ? '剛完成委託'
+                : mini === 'running' ? '瞬的手在動'
+                : '委託已送出，等候接單';
+              return (
+                <span
+                  title={title}
+                  style={{
+                    position: 'absolute', right: -1, bottom: -1,
+                    width: 10, height: 10, borderRadius: '50%',
+                    background: color,
+                    border: '1.5px solid var(--bg-primary, #FFFFFF)',
+                    animation: pulse ? 'zhu-minilight-pulse 1.2s ease-in-out infinite' : undefined,
+                    boxShadow: pulse ? '0 0 0 2px rgba(230,126,34,0.18)' : undefined,
+                  }}
+                />
+              );
+            })()}
+            <style>{`@keyframes zhu-minilight-pulse { 0%,100% { opacity: 0.55; } 50% { opacity: 1; } }`}</style>
+          </div>
 
           <div>
             <div style={{
@@ -337,6 +423,11 @@ export default function ChatPage() {
         </div>
       </header>
 
+      <CommissionStatusBar
+        jobs={activeJobs}
+        messages={messages as unknown as Array<{ role?: string; eventType?: string; jobId?: string }>}
+      />
+
       {/* ── Messages ── */}
       <div style={{
         flex: 1, overflowY: 'auto',
@@ -371,6 +462,57 @@ export default function ChatPage() {
           {messages.map((msg, i) => {
             const isUser = msg.role === 'user';
             const time = msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' }) : '';
+
+            // ── system_event bubble（瞬交件）──
+            if (msg.role === 'system_event') {
+              const delivered = msg.eventType === 'specialist_delivered';
+              return (
+                <div key={i} style={{ display: 'flex', justifyContent: 'center', margin: '16px 0' }}>
+                  <div style={{
+                    maxWidth: '85%', borderRadius: 12, overflow: 'hidden',
+                    border: '1px solid var(--border, #E4E2DC)',
+                    background: 'var(--surface-2, #FAFAF8)',
+                    boxShadow: '0 1px 4px rgba(0,0,0,0.06)',
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px', borderBottom: '1px solid var(--border, #E4E2DC)', background: 'var(--bg-alt, #F5F3EF)' }}>
+                      <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)' }}>
+                        {delivered ? ('🎨 ' + (msg.specialistName || '瞬') + ' 交件了') : ('⚠️ ' + (msg.specialistName || '瞬') + ' 回報')}
+                      </span>
+                      <span style={{ fontSize: 10, color: 'var(--text-muted)', marginLeft: 'auto' }}>{time}</span>
+                    </div>
+                    {msg.output?.imageUrl && (
+                      <div style={{ padding: '12px 14px 8px' }}>
+                        <img
+                          src={msg.output.imageUrl}
+                          alt={msg.output.title || ''}
+                          style={{ width: '100%', maxWidth: 380, borderRadius: 8, display: 'block', border: '1px solid var(--border)' }}
+                        />
+                      </div>
+                    )}
+                    {msg.output?.docUrl && (
+                      <div style={{ padding: '10px 14px' }}>
+                        <a href={msg.output.docUrl} target="_blank" rel="noreferrer" style={{
+                          display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 12px',
+                          borderRadius: 8, border: '1px solid var(--border)', background: 'white',
+                          color: 'var(--text-primary)', fontSize: 13, textDecoration: 'none', fontWeight: 500,
+                        }}>
+                          {'📄 ' + (msg.output.title || '查看文件')}
+                        </a>
+                      </div>
+                    )}
+                    {msg.error && (
+                      <div style={{ padding: '10px 14px', color: '#c0392b', fontSize: 13 }}>{msg.error}</div>
+                    )}
+                    {msg.workLog && (
+                      <div style={{ padding: '10px 14px', borderTop: '1px solid var(--border)', fontSize: 12, color: 'var(--text-muted)', fontStyle: 'italic', lineHeight: 1.6 }}>
+                        {(msg.specialistName || '瞬') + '：' + msg.workLog}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            }
+
             return (
               <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: isUser ? 'flex-end' : 'flex-start', marginBottom: 20 }}>
                 {/* Name + time */}
