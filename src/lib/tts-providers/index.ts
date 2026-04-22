@@ -54,8 +54,8 @@ export function getTTSProvider(name?: string | null): TTSProvider {
  * @returns { stream, providerUsed } 或 null（兩邊都失敗）
  */
 export async function synthesizeWithFallback(opts: {
-  primary: { provider: TTSProvider; voiceId: string };
-  fallback?: { provider: TTSProvider; voiceId: string };
+  primary: { provider: TTSProvider; voiceId: string; settings?: import('./types').TTSVoiceSettings };
+  fallback?: { provider: TTSProvider; voiceId: string; settings?: import('./types').TTSVoiceSettings };
   text: string;
   characterId?: string;
 }): Promise<{ stream: ReadableStream<Uint8Array>; providerUsed: string } | null> {
@@ -88,13 +88,18 @@ export async function synthesizeWithFallback(opts: {
  * 失敗 → 回 null
  */
 async function tryProvider(
-  target: { provider: TTSProvider; voiceId: string },
+  target: { provider: TTSProvider; voiceId: string; settings?: import('./types').TTSVoiceSettings },
   text: string,
   characterId?: string,
 ): Promise<ReadableStream<Uint8Array> | null> {
   let upstream: ReadableStream<Uint8Array> | null;
   try {
-    upstream = await target.provider.synthesizeStream({ text, voiceId: target.voiceId, characterId });
+    upstream = await target.provider.synthesizeStream({
+      text,
+      voiceId: target.voiceId,
+      characterId,
+      settings: target.settings,
+    });
   } catch (e) {
     console.error(`[tts-fallback] ${target.provider.name} throw:`, e);
     return null;

@@ -69,8 +69,10 @@ async function fetchTTSStream(opts: {
   text: string;
   primaryVoiceId: string;
   primaryProviderName: string;
+  primarySettings?: import('@/lib/tts-providers/types').TTSVoiceSettings;
   fallbackVoiceId?: string;          // 不傳 = 不做 fallback（向後相容）
   fallbackProviderName?: string;
+  fallbackSettings?: import('@/lib/tts-providers/types').TTSVoiceSettings;
 }): Promise<ReadableStream<Uint8Array> | null> {
   const processed = preprocessTTS(opts.text.trim());
   if (!processed) return null;
@@ -78,12 +80,14 @@ async function fetchTTSStream(opts: {
   const primary = {
     provider: getTTSProvider(opts.primaryProviderName),
     voiceId: opts.primaryVoiceId,
+    settings: opts.primarySettings,
   };
   // 只有 fallback voiceId 有值才掛 fallback（避免 minimax 失敗切到沒設定的 ElevenLabs voice）
   const fallback = opts.fallbackVoiceId && opts.fallbackProviderName
     ? {
         provider: getTTSProvider(opts.fallbackProviderName),
         voiceId: opts.fallbackVoiceId,
+        settings: opts.fallbackSettings,
       }
     : undefined;
 
@@ -567,12 +571,24 @@ export async function POST(req: NextRequest) {
               ? ((charData.voiceId as string) || '')                // MiniMax→ElevenLabs：用角色的 voiceId
               : ((charData.voiceIdMinimax as string) || '');         // ElevenLabs→MiniMax：用角色的 voiceIdMinimax
             const fallbackProviderName = ttsProviderName === 'minimax' ? 'elevenlabs' : 'minimax';
+            // 讀角色 ttsSettings（分 provider）作為 runtime override
+            const charTTSSettings = (charData.ttsSettings || {}) as {
+              elevenlabs?: import('@/lib/tts-providers/types').TTSVoiceSettings;
+              minimax?: import('@/lib/tts-providers/types').TTSVoiceSettings;
+            };
+            const primarySettings = charTTSSettings[ttsProviderName as 'elevenlabs' | 'minimax'];
+            const fallbackSettings = fallbackVoiceId
+              ? charTTSSettings[fallbackProviderName as 'elevenlabs' | 'minimax']
+              : undefined;
+
             const audioStream = await fetchTTSStream({
               text: sentence,
               primaryVoiceId: voiceId,
               primaryProviderName: ttsProviderName,
+              primarySettings,
               fallbackVoiceId: fallbackVoiceId || undefined,
               fallbackProviderName: fallbackVoiceId ? fallbackProviderName : undefined,
+              fallbackSettings,
             });
             const base64 = audioStream ? await streamToBase64(audioStream) : '';
             audioBuffer.set(idx, base64);

@@ -28,8 +28,27 @@ const PER_VOICE_OVERRIDES: Record<string, Partial<ElevenLabsSettings>> = {
   'xDoFg8lWm2wU9izkHz6D': { stability: 0.92 },
 };
 
-function getSettings(voiceId: string): ElevenLabsSettings {
-  return { ...DEFAULT_SETTINGS, ...(PER_VOICE_OVERRIDES[voiceId] || {}) };
+function getSettings(voiceId: string, runtimeOverride?: Partial<ElevenLabsSettings>): ElevenLabsSettings {
+  // 優先級：runtime (角色 ttsSettings) > PER_VOICE_OVERRIDES (code hardcode) > DEFAULT
+  return {
+    ...DEFAULT_SETTINGS,
+    ...(PER_VOICE_OVERRIDES[voiceId] || {}),
+    ...(runtimeOverride || {}),
+  };
+}
+
+// 把 req.settings（loose 型別，含兩家欄位）篩出 ElevenLabs 認得的
+function extractElevenLabsSettings(
+  s?: import('./types').TTSVoiceSettings,
+): Partial<ElevenLabsSettings> | undefined {
+  if (!s) return undefined;
+  const out: Partial<ElevenLabsSettings> = {};
+  if (typeof s.speed === 'number') out.speed = s.speed;
+  if (typeof s.stability === 'number') out.stability = s.stability;
+  if (typeof s.similarity_boost === 'number') out.similarity_boost = s.similarity_boost;
+  if (typeof s.style === 'number') out.style = s.style;
+  if (typeof s.use_speaker_boost === 'boolean') out.use_speaker_boost = s.use_speaker_boost;
+  return Object.keys(out).length ? out : undefined;
 }
 
 export class ElevenLabsProvider implements TTSProvider {
@@ -55,7 +74,7 @@ export class ElevenLabsProvider implements TTSProvider {
         body: JSON.stringify({
           text: req.text,
           model_id: 'eleven_flash_v2_5',
-          voice_settings: getSettings(req.voiceId),
+          voice_settings: getSettings(req.voiceId, extractElevenLabsSettings(req.settings)),
         }),
       }
     );

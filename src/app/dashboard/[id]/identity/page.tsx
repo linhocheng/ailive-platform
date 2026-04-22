@@ -50,6 +50,41 @@ function parseRefMeta(filename: string): { angle: string; framing: string; expre
   return { angle, framing, expression };
 }
 
+// ── 通用 Slider（帶 reset）──
+function Slider({ label, hint, value, min, max, step, onChange, onReset }: {
+  label: string;
+  hint?: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  onChange: (v: number) => void;
+  onReset: () => void;
+}) {
+  return (
+    <div style={{ marginBottom: 10 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4 }}>
+        <label style={{ fontSize: 11, color: '#555' }}>
+          {label}
+          {hint && <span style={{ color: '#a8a29e', fontSize: 10, marginLeft: 8 }}>{hint}</span>}
+        </label>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
+          <span style={{ fontSize: 12, fontFamily: 'monospace', color: '#292524', minWidth: 36, textAlign: 'right' }}>
+            {value.toFixed(step < 1 ? 2 : 0)}
+          </span>
+          <button onClick={onReset} title="用預設值（不寫入 Firestore）"
+            style={{ background: 'transparent', border: 'none', color: '#a8a29e', fontSize: 10, cursor: 'pointer', padding: '2px 4px' }}>
+            reset
+          </button>
+        </div>
+      </div>
+      <input type="range" value={value} min={min} max={max} step={step}
+        onChange={e => onChange(parseFloat(e.target.value))}
+        style={{ width: '100%', accentColor: '#292524' }} />
+    </div>
+  );
+}
+
 export default function IdentityPage() {
   const { id } = useParams<{ id: string }>();
   const fileRef = useRef<HTMLInputElement>(null);
@@ -63,6 +98,15 @@ export default function IdentityPage() {
   const [voiceId, setVoiceId] = useState('');
   const [voiceIdMinimax, setVoiceIdMinimax] = useState('');
   const [ttsProvider, setTtsProvider] = useState<'' | 'elevenlabs' | 'minimax'>('');
+
+  // ── TTS 細節參數（分 provider 存）──
+  interface ElevenLabsSettings { speed?: number; stability?: number; similarity_boost?: number; style?: number }
+  interface MinimaxSettings { speed?: number; pitch?: number; emotion?: string; vol?: number }
+  const [elSettings, setElSettings] = useState<ElevenLabsSettings>({});
+  const [mmSettings, setMmSettings] = useState<MinimaxSettings>({});
+
+  const [auditionText, setAuditionText] = useState('');  // 試聽句子
+  const [auditioning, setAuditioning] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState('');
@@ -86,6 +130,11 @@ export default function IdentityPage() {
       setVoiceIdMinimax(c?.voiceIdMinimax || '');
       const prov = (c?.ttsProvider || '').toLowerCase();
       setTtsProvider(prov === 'minimax' ? 'minimax' : prov === 'elevenlabs' ? 'elevenlabs' : '');
+      const ts = (c?.ttsSettings || {}) as { elevenlabs?: ElevenLabsSettings; minimax?: MinimaxSettings };
+      setElSettings(ts.elevenlabs || {});
+      setMmSettings(ts.minimax || {});
+      // 預設試聽句
+      setAuditionText(`嗨我是${c?.name || '角色'}，這是我的聲音。`);
       setChannels({
         lineChannelToken: c?.lineChannelToken || '',
         lineChannelSecret: c?.lineChannelSecret || '',
@@ -223,6 +272,10 @@ export default function IdentityPage() {
         voiceId: voiceId.trim() || null,
         voiceIdMinimax: voiceIdMinimax.trim() || null,
         ttsProvider: ttsProvider || null,
+        ttsSettings: {
+          ...(Object.keys(elSettings).length ? { elevenlabs: elSettings } : {}),
+          ...(Object.keys(mmSettings).length ? { minimax: mmSettings } : {}),
+        },
       }),
     });
     setVi(finalVi);
@@ -341,6 +394,120 @@ export default function IdentityPage() {
             <input value={voiceIdMinimax} onChange={e => setVoiceIdMinimax(e.target.value)}
               style={{ width: '100%', border: '1px solid #e0e0e0', borderRadius: 6, padding: '9px 11px', fontSize: 13, boxSizing: 'border-box', fontFamily: 'monospace' }}
               placeholder="moss_audio_xxx" />
+
+            {/* ── 聲音微調 slider（分 provider 顯示）── */}
+            {(ttsProvider === 'elevenlabs' || ttsProvider === 'minimax') && (
+              <div style={{ marginTop: 18, paddingTop: 18, borderTop: '1px solid #f0f0f0' }}>
+                <p style={{ fontSize: 10, letterSpacing: '0.2em', color: '#a8a29e', fontWeight: 700, margin: '0 0 10px' }}>
+                  聲音微調（{ttsProvider === 'elevenlabs' ? 'ElevenLabs' : 'MiniMax'}）
+                </p>
+
+                {ttsProvider === 'elevenlabs' && (
+                  <>
+                    <Slider label="Stability 穩定度" hint="值越高越穩、越低越有情緒 (預設 0.85)"
+                      value={elSettings.stability ?? 0.85} min={0} max={1} step={0.01}
+                      onChange={v => setElSettings({ ...elSettings, stability: v })}
+                      onReset={() => { const { stability: _, ...rest } = elSettings; void _; setElSettings(rest); }} />
+                    <Slider label="Similarity Boost 相似度" hint="越高越貼近原聲 (預設 0.75)"
+                      value={elSettings.similarity_boost ?? 0.75} min={0} max={1} step={0.01}
+                      onChange={v => setElSettings({ ...elSettings, similarity_boost: v })}
+                      onReset={() => { const { similarity_boost: _, ...rest } = elSettings; void _; setElSettings(rest); }} />
+                    <Slider label="Style 風格" hint="0=中性朗讀 / 1=戲劇化 (預設 0.0)"
+                      value={elSettings.style ?? 0.0} min={0} max={1} step={0.01}
+                      onChange={v => setElSettings({ ...elSettings, style: v })}
+                      onReset={() => { const { style: _, ...rest } = elSettings; void _; setElSettings(rest); }} />
+                    <Slider label="Speed 語速" hint="ElevenLabs 支援 0.7~1.2 (預設 1.0)"
+                      value={elSettings.speed ?? 1.0} min={0.7} max={1.2} step={0.05}
+                      onChange={v => setElSettings({ ...elSettings, speed: v })}
+                      onReset={() => { const { speed: _, ...rest } = elSettings; void _; setElSettings(rest); }} />
+                  </>
+                )}
+
+                {ttsProvider === 'minimax' && (
+                  <>
+                    <Slider label="Speed 語速" hint="1.0=正常 (0.5~2.0)"
+                      value={mmSettings.speed ?? 1.0} min={0.5} max={2.0} step={0.05}
+                      onChange={v => setMmSettings({ ...mmSettings, speed: v })}
+                      onReset={() => { const { speed: _, ...rest } = mmSettings; void _; setMmSettings(rest); }} />
+                    <Slider label="Pitch 音高" hint="0=正常 / 正值高 / 負值低 (-12 ~ +12)"
+                      value={mmSettings.pitch ?? 0} min={-12} max={12} step={1}
+                      onChange={v => setMmSettings({ ...mmSettings, pitch: v })}
+                      onReset={() => { const { pitch: _, ...rest } = mmSettings; void _; setMmSettings(rest); }} />
+                    <Slider label="Volume 音量" hint="1.0=正常 (0.1~10)"
+                      value={mmSettings.vol ?? 1.0} min={0.1} max={3.0} step={0.1}
+                      onChange={v => setMmSettings({ ...mmSettings, vol: v })}
+                      onReset={() => { const { vol: _, ...rest } = mmSettings; void _; setMmSettings(rest); }} />
+                    <label style={{ display: 'block', fontSize: 11, color: '#555', marginTop: 12, marginBottom: 6 }}>
+                      Emotion 情緒
+                      <span style={{ color: '#a8a29e', fontSize: 10, marginLeft: 8 }}>(預設 neutral)</span>
+                    </label>
+                    <select value={mmSettings.emotion ?? 'neutral'}
+                      onChange={e => {
+                        const v = e.target.value;
+                        if (v === 'neutral') { const { emotion: _, ...rest } = mmSettings; void _; setMmSettings(rest); }
+                        else setMmSettings({ ...mmSettings, emotion: v });
+                      }}
+                      style={{ width: '100%', border: '1px solid #e0e0e0', borderRadius: 6, padding: '8px 10px', fontSize: 13, boxSizing: 'border-box' }}>
+                      <option value="neutral">neutral（中性）</option>
+                      <option value="happy">happy（開心）</option>
+                      <option value="sad">sad（哀傷）</option>
+                      <option value="angry">angry（憤怒）</option>
+                      <option value="fearful">fearful（恐懼）</option>
+                      <option value="surprised">surprised（驚訝）</option>
+                      <option value="disgusted">disgusted（厭惡）</option>
+                    </select>
+                  </>
+                )}
+
+                {/* 試聽區 */}
+                <div style={{ marginTop: 16, paddingTop: 14, borderTop: '1px dashed #e7e5e4' }}>
+                  <label style={{ display: 'block', fontSize: 11, color: '#555', marginBottom: 6 }}>試聽句子</label>
+                  <input value={auditionText} onChange={e => setAuditionText(e.target.value)}
+                    style={{ width: '100%', border: '1px solid #e0e0e0', borderRadius: 6, padding: '9px 11px', fontSize: 13, boxSizing: 'border-box', marginBottom: 10 }}
+                    placeholder="嗨我是..." />
+                  <button disabled={auditioning || !auditionText.trim()}
+                    onClick={async () => {
+                      const currentVoiceId = ttsProvider === 'elevenlabs' ? voiceId.trim() : voiceIdMinimax.trim();
+                      if (!currentVoiceId) { alert(`請先填 ${ttsProvider} 的 voice ID`); return; }
+                      setAuditioning(true);
+                      try {
+                        const res = await fetch('/api/tts', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            text: auditionText,
+                            voiceId: currentVoiceId,
+                            ttsProvider,
+                            settings: ttsProvider === 'elevenlabs' ? elSettings : mmSettings,
+                          }),
+                        });
+                        if (!res.ok) {
+                          const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+                          alert('試聽失敗：' + (err.error || 'unknown'));
+                          return;
+                        }
+                        const blob = await res.blob();
+                        const url = URL.createObjectURL(blob);
+                        const audio = new Audio(url);
+                        audio.onended = () => URL.revokeObjectURL(url);
+                        await audio.play();
+                      } catch (e) {
+                        alert('試聽錯誤：' + (e instanceof Error ? e.message : String(e)));
+                      } finally {
+                        setAuditioning(false);
+                      }
+                    }}
+                    style={{
+                      background: auditioning ? '#d6d3d1' : '#292524',
+                      color: '#fff', border: 'none', borderRadius: 6,
+                      padding: '9px 18px', fontSize: 13, fontWeight: 600,
+                      cursor: auditioning ? 'wait' : 'pointer',
+                    }}>
+                    {auditioning ? '合成中…' : '▶ 試聽（未儲存也可試）'}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* FIXED ELEMENTS */}

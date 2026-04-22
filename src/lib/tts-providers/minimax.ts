@@ -88,7 +88,7 @@ interface MinimaxVoiceSettings {
   speed: number;
   vol: number;
   pitch: number;
-  emotion?: string;  // happy/sad/angry/fearful/disgusted/surprised/neutral/calm/fluent
+  emotion?: string;  // happy/sad/angry/fearful/disgusted/surprised/neutral
 }
 
 interface MinimaxSettings {
@@ -112,16 +112,30 @@ const PER_VOICE_OVERRIDES: Record<string, Partial<MinimaxSettings>> = {
   // e.g. 'moss_audio_xxx': { model: 'speech-2.6-hd', voice: { ..., emotion: 'calm' } }
 };
 
-function buildSettings(voiceId: string): MinimaxSettings {
-  const override = PER_VOICE_OVERRIDES[voiceId] || {};
+// 提取 req.settings（loose 型別）中 MiniMax 認得的欄位
+function extractMinimaxSettings(
+  s?: import('./types').TTSVoiceSettings,
+): Partial<MinimaxVoiceSettings> | undefined {
+  if (!s) return undefined;
+  const out: Partial<MinimaxVoiceSettings> = {};
+  if (typeof s.speed === 'number') out.speed = s.speed;
+  if (typeof s.vol === 'number') out.vol = s.vol;
+  if (typeof s.pitch === 'number') out.pitch = s.pitch;
+  if (typeof s.emotion === 'string') out.emotion = s.emotion;
+  return Object.keys(out).length ? out : undefined;
+}
+
+function buildSettings(voiceId: string, runtimeOverride?: Partial<MinimaxVoiceSettings>): MinimaxSettings {
+  // 優先級：runtime (角色 ttsSettings) > PER_VOICE_OVERRIDES (code hardcode) > DEFAULT
+  const hardcode = PER_VOICE_OVERRIDES[voiceId] || {};
   return {
-    model: override.model || DEFAULT_SETTINGS.model,
+    model: hardcode.model || DEFAULT_SETTINGS.model,
     voice: {
       voice_id: voiceId,
-      speed: override.voice?.speed ?? DEFAULT_SETTINGS.voice.speed,
-      vol: override.voice?.vol ?? DEFAULT_SETTINGS.voice.vol,
-      pitch: override.voice?.pitch ?? DEFAULT_SETTINGS.voice.pitch,
-      emotion: override.voice?.emotion ?? DEFAULT_SETTINGS.voice.emotion,
+      speed: runtimeOverride?.speed ?? hardcode.voice?.speed ?? DEFAULT_SETTINGS.voice.speed,
+      vol: runtimeOverride?.vol ?? hardcode.voice?.vol ?? DEFAULT_SETTINGS.voice.vol,
+      pitch: runtimeOverride?.pitch ?? hardcode.voice?.pitch ?? DEFAULT_SETTINGS.voice.pitch,
+      emotion: runtimeOverride?.emotion ?? hardcode.voice?.emotion ?? DEFAULT_SETTINGS.voice.emotion,
     },
   };
 }
@@ -198,7 +212,7 @@ export class MinimaxProvider implements TTSProvider {
 
   // 單次原始呼叫（不含 throttle / retry 邏輯）
   private async rawCall(req: TTSRequest, apiKey: string, groupId: string): Promise<ReadableStream<Uint8Array> | null> {
-    const settings = buildSettings(req.voiceId);
+    const settings = buildSettings(req.voiceId, extractMinimaxSettings(req.settings));
     const url = `https://api.minimax.io/v1/t2a_v2?GroupId=${encodeURIComponent(groupId)}`;
     // 繁→簡轉換：MiniMax 訓練語料以簡體為主，送簡體進去發音穩定度較高
     // 字級對應，不轉詞彙（譬如「專案」不會變「項目」）— 只解決發音，不改用語
