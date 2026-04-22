@@ -5,6 +5,7 @@ interface Character {
   id: string;
   name: string;
   type: string;
+  tier?: 'character' | 'strategist' | 'specialist' | string;
   status: string;
   soulVersion: number;
   mission?: string;
@@ -31,6 +32,29 @@ function StatPill({ label, value }: { label: string; value: number }) {
       <span style={{ fontFamily: 'var(--font-display)', fontSize: 18, fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1 }}>{value}</span>
       <span style={{ fontSize: 11, color: 'var(--text-muted)', letterSpacing: '0.04em' }}>{label}</span>
     </div>
+  );
+}
+
+function TierBadge({ tier }: { tier?: string }) {
+  // 三層 + 未分類：視覺對齊 zhu-core/docs/architecture/character-tiers.md
+  const cfg = (() => {
+    switch (tier) {
+      case 'character':  return { label: '🎭 CHARACTER',  fg: '#2D6A4F', bg: '#D8F3DC', border: '#95D5B2' };
+      case 'strategist': return { label: '🧠 STRATEGIST', fg: '#5A3E7A', bg: '#EDE4F5', border: '#C8B0DC' };
+      case 'specialist': return { label: '🛠 SPECIALIST', fg: '#1E4A6B', bg: '#D6E9F5', border: '#A7C9E0' };
+      default:           return { label: '◦ UNTAGGED',    fg: '#8A887F', bg: '#F0EEE8', border: '#DDD9D0' };
+    }
+  })();
+  return (
+    <span style={{
+      fontSize: 10, fontWeight: 600, letterSpacing: '0.06em',
+      color: cfg.fg,
+      background: cfg.bg,
+      padding: '2px 8px',
+      borderRadius: 20,
+      border: `1px solid ${cfg.border}`,
+      whiteSpace: 'nowrap',
+    }}>{cfg.label}</span>
   );
 }
 
@@ -157,7 +181,10 @@ export default function DashboardPage() {
                       letterSpacing: '-0.02em',
                       marginBottom: 5,
                     }}>{c.name}</div>
-                    <TypeBadge type={c.type} />
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                      <TypeBadge type={c.type} />
+                      <TierBadge tier={c.tier} />
+                    </div>
                   </div>
                   <StatusDot status={c.status} />
                 </div>
