@@ -120,3 +120,96 @@ export async function generateWithGemini(
     outputTokens: usage?.candidatesTokenCount ?? 0,
   };
 }
+
+// ──────────────────────────────────────────────────────────────
+// Specialist 用：多圖並行下載（容錯）+ 無語義 hint 的 refs 生圖
+// @author 築 · Phase 2 · C 方案（讓瞬自己看圖決定角色）
+// ──────────────────────────────────────────────────────────────
+
+export interface RefImageData {
+  data: string;      // base64
+  mimeType: string;
+  sourceUrl: string; // 原 URL（log/debug 用）
+}
+
+/**
+ * 並行下載多張參考圖 → base64
+ * 失敗的跳過不拋錯，把 successful/failed 都回傳給呼叫端決策
+ */
+export async function downloadRefsBase64(
+  urls: string[],
+): Promise<{ successful: RefImageData[]; failed: string[] }> {
+  if (!urls.length) return { successful: [], failed: [] };
+  const results = await Promise.allSettled(
+    urls.map(async (url): Promise<RefImageData> => {
+      const { data, mimeType } = await urlToBase64(url);
+      return { data, mimeType, sourceUrl: url };
+    }),
+  );
+  const successful: RefImageData[] = [];
+  const failed: string[] = [];
+  results.forEach((r, i) => {
+    if (r.status === 'fulfilled') successful.push(r.value);
+    else failed.push(urls[i]);
+  });
+  return { successful, failed };
+}
+
+/**
+ * Refs 模式：不加任何 face-lock 語義，按順序把 refs 塞進 Gemini parts[]，prompt 最後。
+ *
+ * 呼叫前提：prompt 已經由上游（e.g. Sonnet 戴瞬的 soul 動腦後）寫清楚每張圖的角色，
+ * 例如 "The first image is style inspiration. The second image is the product..."
+ *
+ * 專給 specialist/image 這類「讓 AI 自己判斷 refs 角色」的場景使用。
+ * 若是 Emily 體系的「人物一致性」請繼續用 generateWithGemini（face-lock 模式）。
+ */
+export async function generateWithGeminiRefs(
+  prompt: string,
+  refs: RefImageData[],
+  storagePath: string = 'platform-images/gemini',
+): Promise<GeminiImageResult> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error('GEMINI_API_KEY 未設定');
+
+  const parts: unknown[] = [];
+  for (const ref of refs) {
+    parts.push({ inlineData: { mimeType: ref.mimeType, data: ref.data } });
+  }
+  parts.push({ text: prompt });
+
+  const body = {
+    contents: [{ parts }],
+    generationConfig: { responseModalities: ['IMAGE', 'TEXT'] },
+  };
+
+  const res = await fetch(`${GEMINI_ENDPOINT}?key=${apiKey}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Gemini Image (refs-mode) error ${res.status}: ${err.slice(0, 300)}`);
+  }
+
+  const data = await res.json();
+  const imgPart = data?.candidates?.[0]?.content?.parts?.find(
+    (p: { inlineData?: { mimeType: string; data: string } }) => p.inlineData,
+  );
+  if (!imgPart?.inlineData?.data) throw new Error('Gemini 沒有回傳圖片');
+
+  const imageUrl = await persistBase64(
+    imgPart.inlineData.data,
+    imgPart.inlineData.mimeType || 'image/jpeg',
+    storagePath,
+  );
+  const usage = data?.usageMetadata as { promptTokenCount?: number; candidatesTokenCount?: number } | undefined;
+  return {
+    imageUrl,
+    model: GEMINI_IMAGE_MODEL,
+    inputTokens: usage?.promptTokenCount ?? 0,
+    outputTokens: usage?.candidatesTokenCount ?? 0,
+  };
+}

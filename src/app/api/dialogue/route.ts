@@ -139,6 +139,40 @@ const PLATFORM_TOOLS: Anthropic.Tool[] = [
     },
   },
   {
+    name: 'commission_specialist',
+    description: '把視覺工作委託給瞬（攝影/繪圖大師）。非同步執行，妳繼續陪 user 聊，瞬完成後作品自動出現在對話裡。比直接生圖更有質感與靈魂。',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        specialist: {
+          type: 'string',
+          enum: ['painter'],
+          description: 'painter = 瞬（攝影/繪圖大師）',
+        },
+        brief: {
+          type: 'string',
+          description: '給瞬的工作 brief，越具體越好。說清楚畫面、氛圍、用途。英文或中文都行。',
+        },
+        refs: {
+          type: 'array',
+          items: { type: 'string' },
+          maxItems: 3,
+          description: '參考圖 URLs（選填，最多 3 張）。瞬會看過每張圖、自己判斷角色（風格靈感/產品/臉部/場景/紋理…），寫進給 Gemini 的精準指令。妳不用分類 refs，直接傳給他。從知識庫 imageUrl 或 user 上傳圖取得。',
+        },
+        mood: {
+          type: 'string',
+          description: '情緒/風格（選填）：溫暖、銳利、夢幻、極簡…',
+        },
+        aspect_ratio: {
+          type: 'string',
+          enum: ['1:1', '16:9', '9:16', '4:3', '3:4'],
+          description: '比例，預設 1:1',
+        },
+      },
+      required: ['specialist', 'brief'],
+    },
+  },
+    {
     name: 'generate_image',
     description: '心裡浮現畫面就畫。描述用英文更精準，畫完圖會直接出現在對話裡。',
     input_schema: {
@@ -349,6 +383,7 @@ async function executeTool(
   toolInput: Record<string, unknown>,
   characterId: string,
   onHaikuTokens?: (input: number, output: number) => void,
+  context?: { conversationId?: string; userId?: string },
 ): Promise<string> {
   const db = getFirestore();
 
@@ -398,15 +433,47 @@ async function executeTool(
 
 
   if (toolName === 'generate_image') {
+    // Phase 2: generate_image stub → commission_specialist（瞬，非同步）
+    // 待兩週後舊版呼叫清零再移除此 stub
     const prompt = String(toolInput.prompt || '');
-    if (!prompt) return '需要圖像描述才能生成。';
-    const refUrl = toolInput.reference_image_url ? String(toolInput.reference_image_url) : undefined;
-    try {
-      const result = await generateImageForCharacter(characterId, prompt, refUrl);
-      return `IMAGE_URL:${result.imageUrl}`;
-    } catch (e: unknown) {
-      return `⚠️ 生圖錯誤：${e instanceof Error ? e.message : String(e)}`;
-    }
+    const refs = toolInput.reference_image_url ? [String(toolInput.reference_image_url)] : [];
+    return await executeTool(
+      'commission_specialist',
+      { specialist: 'painter', brief: prompt, refs, aspect_ratio: toolInput.aspect_ratio || '1:1' },
+      characterId, onHaikuTokens, context,
+    );
+  }
+
+  if (toolName === 'commission_specialist') {
+    const SPECIALIST_MAP: Record<string, string> = { painter: 'shun-001' };
+    const specialistKey = String(toolInput.specialist || 'painter');
+    const assigneeId = SPECIALIST_MAP[specialistKey];
+    if (!assigneeId) return `⚠️ 找不到 specialist: ${specialistKey}`;
+
+    const brief = String(toolInput.brief || '');
+    if (!brief) return '需要 brief 才能委託瞬。';
+
+    const db2 = getFirestore();
+    const now = new Date().toISOString();
+    const jobRef = await db2.collection('platform_jobs').add({
+      requesterId: characterId,
+      requesterConvId: context?.conversationId || '',
+      requesterUserId: context?.userId || '',
+      assigneeId,
+      jobType: 'image',
+      brief: {
+        prompt: brief,
+        refs: Array.isArray(toolInput.refs) ? toolInput.refs : [],
+        mood: toolInput.mood ? String(toolInput.mood) : null,
+        aspectRatio: toolInput.aspect_ratio ? String(toolInput.aspect_ratio) : '1:1',
+      },
+      status: 'pending',
+      createdAt: now,
+      retryCount: 0,
+    });
+
+    const shortId = jobRef.id.slice(0, 8);
+    return `JOB_PENDING:${jobRef.id}:已委託瞬，工作編號 ${shortId}。他會在 1-2 分鐘內完成，作品會自動出現在對話裡。妳繼續陪 user 聊。`;
   }
 
   if (toolName === 'query_tasks') {
@@ -909,12 +976,36 @@ export async function GET(req: NextRequest) {
     const data = doc.data()!;
     const messages = (data.messages || []) as Array<{ role: string; content: string; timestamp: string }>;
 
+    // 順手撈這對話的 active jobs（給 status bar 推論 5 階段燈用）
+    // 規則：pending / in_progress 全撈；done / failed 只撈近 60 秒（讓 bar 有 5s 收尾動畫）
+    let activeJobs: Array<Record<string, unknown>> = [];
+    try {
+      const jobsSnap = await db.collection('platform_jobs')
+        .where('requesterConvId', '==', conversationId)
+        .get();
+      const cutoff = Date.now() - 60_000;
+      activeJobs = jobsSnap.docs
+        .map(d => ({ id: d.id, ...d.data() }) as Record<string, unknown>)
+        .filter(j => {
+          const s = j.status as string | undefined;
+          if (s === 'pending' || s === 'in_progress') return true;
+          if (s === 'done' || s === 'failed') {
+            const completedAt = j.completedAt as string | undefined;
+            const t = completedAt ? Date.parse(completedAt) : 0;
+            return t > cutoff;
+          }
+          return false;
+        })
+        .sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
+    } catch { /* 若 collection 不存在或權限問題，靜默略過不炸主 GET */ }
+
     return NextResponse.json({
       success: true,
       conversationId,
       characterId: data.characterId,
       messages,
       messageCount: data.messageCount || 0,
+      activeJobs,
     });
   } catch (e: unknown) {
     return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
@@ -1219,13 +1310,52 @@ ${convData.userProfile ? `【我認識這個人】\n${convData.userProfile}\n\n`
       { type: 'text', text: dynamicBlock },
     ];
     // 4. 組歷史訊息（舊圖片不重傳 base64，只帶文字，避免 413）
-    const history = (convData.messages as Array<{ role: string; content: string; imageUrl?: string }> || []).slice(-RECENT_MESSAGES_WINDOW);
+    // system_event（瞬交件通知）要轉成 assistant 口吻的系統提示，
+    // 否則 Anthropic SDK 會 400（只吃 user / assistant role）
+    type HistoryMsg = {
+      role: string;
+      content?: string;
+      imageUrl?: string;
+      // system_event 欄位
+      eventType?: string;
+      specialistName?: string;
+      specialistId?: string;
+      jobId?: string;
+      output?: { imageUrl?: string; docUrl?: string; title?: string; workLog?: string };
+      workLog?: string;
+      error?: string;
+    };
+    const history = (convData.messages as HistoryMsg[] || []).slice(-RECENT_MESSAGES_WINDOW);
     const messages: Anthropic.MessageParam[] = [
-      ...history.map(m => ({
-        role: m.role as 'user' | 'assistant',
-        // 舊訊息有 imageUrl 只帶提示文字，不重傳 base64
-        content: m.imageUrl ? `${m.content} [圖片：${m.imageUrl}]` : m.content,
-      })),
+      ...history.map((m): Anthropic.MessageParam => {
+        // system_event → assistant 口吻的系統通知（讓 Vivi 看得到瞬交件了）
+        if (m.role === 'system_event') {
+          const who = m.specialistName || m.specialistId || '同伴';
+          if (m.eventType === 'specialist_failed') {
+            return {
+              role: 'assistant',
+              content: `[系統通知] ${who} 回報：委託失敗（${m.error || '未知原因'}）。你可以告知 user 並討論是否重試。`,
+            };
+          }
+          // specialist_delivered
+          const parts: string[] = [`[系統通知] ${who} 交件了。`];
+          if (m.output?.title) parts.push(`標題：${m.output.title}`);
+          if (m.output?.imageUrl) parts.push(`圖片：${m.output.imageUrl}`);
+          if (m.output?.docUrl) parts.push(`文件：${m.output.docUrl}`);
+          const wl = m.workLog || m.output?.workLog;
+          if (wl) parts.push(`${who}的工作日誌：${wl}`);
+          parts.push('（作品已出現在對話裡，user 看得到。你可以自然地回應作品。）');
+          return {
+            role: 'assistant',
+            content: parts.join('\n'),
+          };
+        }
+        // 一般訊息：舊訊息有 imageUrl 只帶提示文字，不重傳 base64
+        return {
+          role: m.role as 'user' | 'assistant',
+          content: m.imageUrl ? `${m.content || ''} [圖片：${m.imageUrl}]` : (m.content || ''),
+        };
+      }),
       {
         role: 'user',
         content: image
@@ -1324,10 +1454,27 @@ ${convData.userProfile ? `【我認識這個人】\n${convData.userProfile}\n\n`
                   toolResults.push({ type: 'tool_result', tool_use_id: tb.id, content: '' });
                   continue;
                 }
-                const result = await executeTool(
-                  tb.name, tb.input as Record<string, unknown>, characterId,
-                  (inp, out) => { haikuInputTokens += inp; haikuOutputTokens += out; },
-                );
+                let result: string;
+                try {
+                  result = await executeTool(
+                    tb.name, tb.input as Record<string, unknown>, characterId,
+                    (inp, out) => { haikuInputTokens += inp; haikuOutputTokens += out; },
+                    { conversationId: conversationId || undefined, userId: userId || undefined },
+                  );
+                } catch (toolErr) {
+                  // 天條：任何 tool throw 都必須 push tool_result（可標 is_error），
+                  // 否則下輪 API call 會因 tool_use/tool_result 不配對拋 400
+                  // LESSON：tool_use 後必配 tool_result，一個都不能少
+                  const errMsg = toolErr instanceof Error ? toolErr.message : String(toolErr);
+                  console.error(`[dialogue] tool '${tb.name}' threw: ${errMsg}`);
+                  toolResults.push({
+                    type: 'tool_result',
+                    tool_use_id: tb.id,
+                    content: `工具執行失敗：${errMsg}`,
+                    is_error: true,
+                  });
+                  continue;
+                }
                 if (result.startsWith('IMAGE_URL:')) {
                   const url = result.replace('IMAGE_URL:', '').trim();
                   generatedImageUrl = url;
@@ -1335,6 +1482,16 @@ ${convData.userProfile ? `【我認識這個人】\n${convData.userProfile}\n\n`
                     type: 'tool_result',
                     tool_use_id: tb.id,
                     content: `圖片已生成完成。URL: ${url}\n請在你的回覆裡直接用 markdown 格式帶出這張圖：![圖片](${url})\n然後用幾句話描述這張圖或說說你的感受。`,
+                  });
+                } else if (result.startsWith('JOB_PENDING:')) {
+                  // Phase 2: 瞬接單，非同步進行
+                  const parts = result.split(':');
+                  const jobId = parts[1] || '';
+                  const msg = parts.slice(2).join(':');
+                  toolResults.push({
+                    type: 'tool_result',
+                    tool_use_id: tb.id,
+                    content: `${msg}\n（工作編號：${jobId.slice(0, 8)}）\n妳現在繼續跟 user 聊，瞬完成後圖片會直接出現在這個對話裡。`,
                   });
                 } else {
                   toolResults.push({ type: 'tool_result', tool_use_id: tb.id, content: result });
@@ -1385,6 +1542,17 @@ ${convData.userProfile ? `【我認識這個人】\n${convData.userProfile}\n\n`
           };
           if (generatedImageUrl) assistantEntry.imageUrl = generatedImageUrl;
 
+          // Phase 2 race 修：用 arrayUnion 純 append，避免跟 jobWorker 的 system_event 寫入相殺
+          // 若改成讀-改-寫（舊版），dialogue 中途 jobWorker 寫入的 system_event 會被洗掉
+          // LESSON：Firestore 多 writer collection 不能用讀-改-寫整個陣列
+          await convRef.update({
+            messages: FieldValue.arrayUnion(userEntry, assistantEntry),
+            messageCount: FieldValue.increment(2),
+            updatedAt: new Date().toISOString(),
+          });
+
+          // 組一份 local 的 newMessages 給後續壓縮 / insight 抽取 / profile 更新用
+          // 注意：這份不含 jobWorker 可能並發寫入的 system_event（已知 edge case，壓縮時 race 機率低）
           const newMessages = [
             ...(convData.messages as Array<Record<string, unknown>> || []),
             userEntry,
@@ -1392,16 +1560,11 @@ ${convData.userProfile ? `【我認識這個人】\n${convData.userProfile}\n\n`
           ];
           const newCount = (convData.messageCount as number || 0) + 2;
 
-          await convRef.update({
-            messages: newMessages,
-            messageCount: newCount,
-            updatedAt: new Date().toISOString(),
-          });
-
+          // Redis cache 改用 del 而非 set：強制下次讀從 Firestore 冷讀完整資料（含任何並發寫入）
+          // 舊做法 set local snapshot 會隔離 jobWorker 的 system_event，導致 Vivi 下次看不到瞬交件
           if (conversationId) {
             try {
-              const updatedConvData = { ...convData, messages: newMessages, messageCount: newCount };
-              await redis.set(`conv:${conversationId}`, JSON.stringify(updatedConvData), 60 * 30);
+              await redis.del(`conv:${conversationId}`);
             } catch (_e) { /* Redis 壞掉不影響 */ }
           }
 
