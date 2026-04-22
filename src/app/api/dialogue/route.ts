@@ -157,7 +157,7 @@ const PLATFORM_TOOLS: Anthropic.Tool[] = [
           type: 'array',
           items: { type: 'string' },
           maxItems: 3,
-          description: '參考圖 URLs（選填，最多 3 張）。瞬會看過每張圖、自己判斷角色（風格靈感/產品/臉部/場景/紋理…），寫進給 Gemini 的精準指令。妳不用分類 refs，直接傳給他。從知識庫 imageUrl 或 user 上傳圖取得。',
+          description: '參考圖 URLs（選填，最多 3 張）。⚠️ 必須是完整 https:// URL（例：https://storage.googleapis.com/.../img_3_xxx.jpg），不可用代號或簡寫（如 "img_3"、"img_4"）。即使上一輪已經用過同一張圖，這一輪還是要完整重新附上 URL。來源：知識庫 imageUrl 或 user 上傳圖。瞬會看過每張圖、自己判斷角色（風格靈感/產品/臉部/場景/紋理…），妳不用分類。',
         },
         mood: {
           type: 'string',

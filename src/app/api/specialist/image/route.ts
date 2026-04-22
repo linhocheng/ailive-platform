@@ -74,19 +74,28 @@ export async function POST(req: NextRequest) {
       console.log(`[specialist/image] job=${jobId?.slice(0, 8)} refs 超過 ${REFS_MAX} 張，截斷 ${requestedRefs.length} → ${REFS_MAX}`);
     }
 
+    // 3.1 過濾非 http(s) URL — LLM 多輪迭代會把完整 URL 簡寫成 "img_3" 之類代號，直接丟掉不讓下載器炸
+    const validRefs = cappedRefs.filter(u => /^https?:\/\//i.test(u));
+    const skippedRefs = cappedRefs.filter(u => !/^https?:\/\//i.test(u));
+    if (skippedRefs.length > 0) {
+      console.log(`[specialist/image] job=${jobId?.slice(0, 8)} 跳過 ${skippedRefs.length} 張非 URL refs（LLM 可能用了代號/簡寫）: ${skippedRefs.join(', ')}`);
+    }
+
     let refsSuccessful: Awaited<ReturnType<typeof downloadRefsBase64>>['successful'] = [];
     let refsFailed: string[] = [];
-    if (cappedRefs.length > 0) {
-      const r = await downloadRefsBase64(cappedRefs);
+    if (validRefs.length > 0) {
+      const r = await downloadRefsBase64(validRefs);
       refsSuccessful = r.successful;
       refsFailed = r.failed;
-      // Q3 = C：全失敗才 throw，有一張成功就做
-      if (refsSuccessful.length === 0 && cappedRefs.length > 0) {
-        throw new Error(`所有參考圖下載失敗（${cappedRefs.length} 張）：${refsFailed.map(u => u.slice(-40)).join(', ')}`);
+      // Q3 = C：有效 refs 全失敗才 throw；完全沒有效 refs（全被 filter）則視同空、繼續
+      if (refsSuccessful.length === 0) {
+        throw new Error(`所有參考圖下載失敗（${validRefs.length} 張）：${refsFailed.map(u => u.slice(-40)).join(', ')}`);
       }
       if (refsFailed.length > 0) {
-        console.log(`[specialist/image] job=${jobId?.slice(0, 8)} refs 部分失敗 ${refsFailed.length}/${cappedRefs.length}，繼續`);
+        console.log(`[specialist/image] job=${jobId?.slice(0, 8)} refs 部分失敗 ${refsFailed.length}/${validRefs.length}，繼續`);
       }
+    } else if (cappedRefs.length > 0) {
+      console.log(`[specialist/image] job=${jobId?.slice(0, 8)} 所有 refs 都是無效格式（非 URL），視同沒 refs 繼續`);
     }
 
     const hasRefs = refsSuccessful.length > 0;
