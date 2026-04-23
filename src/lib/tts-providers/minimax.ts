@@ -251,6 +251,24 @@ export class MinimaxProvider implements TTSProvider {
       console.error(`[MinimaxProvider] API ${res.status}: ${errText.slice(0, 200)}`);
       return null;
     }
+
+    // 2026-04-23 新增：限流 / 其他錯誤時 MiniMax 回 HTTP 200 + JSON body（不是 SSE）
+    //   例：{"base_resp":{"status_code":1002,"status_msg":"rate limit exceeded(RPM)"}}
+    //   之前 SSE parser 看不懂 JSON → totalBytes=0 → 整個錯誤訊息被吞
+    //   現在明確判 content-type，印真實 status_code 到 log
+    const contentType = res.headers.get('content-type') || '';
+    if (!contentType.includes('event-stream')) {
+      const text = await res.text().catch(() => '');
+      try {
+        const j = JSON.parse(text);
+        const code = j?.base_resp?.status_code;
+        const msg = j?.base_resp?.status_msg;
+        console.error(`[MinimaxProvider] rejected code=${code} msg="${msg}" (HTTP ${res.status}, ct=${contentType})`);
+      } catch {
+        console.error(`[MinimaxProvider] non-SSE body (HTTP ${res.status}, ct=${contentType}): ${text.slice(0, 200)}`);
+      }
+      return null;
+    }
     return sseToMp3Stream(res.body);
   }
 
@@ -264,32 +282,20 @@ export class MinimaxProvider implements TTSProvider {
     }
     if (!req.text.trim()) return null;
 
-    // 最多嘗試 2 次：第二次是 0B 重試
-    for (let attempt = 0; attempt < 2; attempt++) {
-      await throttleMinimax();
+    // 2026-04-23 砍掉 0B retry：實證 0B 真因是 RPM 限流（status_code 1002）。
+    //   60s 窗口內 immediate retry 必然再撞，只浪費一次配額。
+    //   真正的修法是拉 throttle 或升級 MiniMax RPM 配額。
+    await throttleMinimax();
 
-      const rawStream = await this.rawCall(req, apiKey, groupId);
-      if (!rawStream) {
-        // HTTP 層失敗（4xx/5xx/no body），不重試，交給 cross-provider fallback 處理
-        return null;
-      }
+    const rawStream = await this.rawCall(req, apiKey, groupId);
+    if (!rawStream) return null; // rawCall 已印錯誤原因（HTTP / base_resp status_code）
 
-      // 讀第一個 MP3 chunk 判斷有沒有音訊
-      const { firstChunk, rebuiltStream } = await peekFirstChunk(rawStream);
-      if (firstChunk && firstChunk.length > 0 && rebuiltStream) {
-        return rebuiltStream; // 正常，直接回
-      }
-
-      // 0B：靜默限流跡象。sleep 500ms 後重試一次
-      if (attempt === 0) {
-        console.warn('[MinimaxProvider] empty first chunk (silent rate-limit?), retrying after 500ms');
-        await new Promise(r => setTimeout(r, 500));
-        continue;
-      }
-      // 第二次還 0B：放棄，回 null 給 cross-provider fallback
-      console.error('[MinimaxProvider] empty first chunk after retry, giving up');
-      return null;
+    // 讀第一個 MP3 chunk 確認 SSE 真的帶 audio（罕見：SSE 成立但只有 status 2 summary）
+    const { firstChunk, rebuiltStream } = await peekFirstChunk(rawStream);
+    if (firstChunk && firstChunk.length > 0 && rebuiltStream) {
+      return rebuiltStream;
     }
+    console.warn('[MinimaxProvider] SSE ok but empty audio');
     return null;
   }
 }
