@@ -2,11 +2,10 @@
  * /api/images — 對話生圖檔案夾
  *
  * GET ?characterId=xxx → 撈所有對話中的 assistant imageUrl
- * DELETE ?url=xxx&conversationId=xxx → 從對話中移除該圖的 imageUrl
+ * DELETE ?url=xxx&conversationId=xxx&jobId=xxx → 徹底刪除一張圖（三源清）
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getFirestore } from '@/lib/firebase-admin';
-import { FieldValue } from 'firebase-admin/firestore';
 
 export async function GET(req: NextRequest) {
   try {
@@ -118,51 +117,138 @@ export async function GET(req: NextRequest) {
 
     // 按時間排序（最新在前）
     images.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
-
     return NextResponse.json({ images, total: images.length });
   } catch (e: unknown) {
     return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
   }
 }
 
+/**
+ * DELETE — 徹底刪除一張圖（三源清）
+ *   1. platform_conversations.messages：清 self imageUrl / 移除 specialist_delivered 整條 event（含 workLog）
+ *   2. platform_jobs/{jobId}：整個 doc delete（含 workLog / brief / output）
+ *   3. Firebase Storage 實體 PNG：依 URL 解析 path，白名單校驗後刪
+ * 不可回復。Adam 手動觸發，低頻。
+ */
 export async function DELETE(req: NextRequest) {
   try {
     const db = getFirestore();
     const url = req.nextUrl.searchParams.get('url');
     const conversationId = req.nextUrl.searchParams.get('conversationId');
-    if (!url || !conversationId) return NextResponse.json({ error: 'url, conversationId 必填' }, { status: 400 });
-
-    const convRef = db.collection('platform_conversations').doc(conversationId);
-    const convDoc = await convRef.get();
-    if (!convDoc.exists) return NextResponse.json({ error: '對話不存在' }, { status: 404 });
-
-    const messages = (convDoc.data()!.messages || []) as Array<Record<string, unknown>>;
+    const jobId = req.nextUrl.searchParams.get('jobId');
+    if (!url) return NextResponse.json({ error: 'url 必填' }, { status: 400 });
     const targetUrl = url.replace(/\n/g, '').trim();
-    const updated = messages.map(m => {
-      // 1. 移除 assistant 自生圖
-      if (m.role === 'assistant') {
-        const mUrl = (m.imageUrl as string || '').replace(/\n/g, '').trim();
-        if (mUrl === targetUrl) {
-          const { imageUrl: _, ...rest } = m;
-          void _;
-          return rest;
-        }
-      }
-      // 2. 移除 specialist 交件圖（清 output.imageUrl，保留 workLog 等其他欄位）
-      if (m.role === 'system_event' && m.eventType === 'specialist_delivered') {
-        const output = m.output as { imageUrl?: string } | undefined;
-        const oUrl = (output?.imageUrl || '').replace(/\n/g, '').trim();
-        if (oUrl === targetUrl) {
-          // 保留 system_event 其他資訊，只把 output.imageUrl 清空
-          const newOutput = output ? { ...output, imageUrl: undefined } : undefined;
-          return { ...m, output: newOutput };
-        }
-      }
-      return m;
-    });
 
-    await convRef.update({ messages: updated });
-    return NextResponse.json({ success: true });
+    const result: {
+      conv: boolean;
+      job: boolean;
+      storage: boolean;
+      convErr?: string;
+      jobErr?: string;
+      storageErr?: string;
+    } = { conv: false, job: false, storage: false };
+
+    // 1. 清 conversation.messages — 用 transaction 包住，避免和 dialogue / jobWorker race
+    //    （4-22 lesson：messages 是多 writer collection，禁讀-改-寫；DELETE 又必須精確 slice，
+    //     用 transaction 是唯一安全做法）
+    if (conversationId) {
+      try {
+        const convRef = db.collection('platform_conversations').doc(conversationId);
+        const convChanged = await db.runTransaction(async (tx) => {
+          const snap = await tx.get(convRef);
+          if (!snap.exists) return false;
+          const messages = (snap.data()!.messages || []) as Array<Record<string, unknown>>;
+          let changed = false;
+          const updated: Array<Record<string, unknown>> = [];
+          for (const m of messages) {
+            if (m.role === 'assistant') {
+              const mUrl = ((m.imageUrl as string) || '').replace(/\n/g, '').trim();
+              if (mUrl === targetUrl) {
+                changed = true;
+                const { imageUrl: _omit, ...rest } = m;
+                void _omit;
+                updated.push(rest);
+                continue;
+              }
+            }
+            if (m.role === 'system_event' && m.eventType === 'specialist_delivered') {
+              const output = m.output as { imageUrl?: string } | undefined;
+              const oUrl = ((output?.imageUrl as string) || '').replace(/\n/g, '').trim();
+              if (oUrl === targetUrl) {
+                changed = true;
+                continue;
+              }
+            }
+            updated.push(m);
+          }
+          if (changed) tx.update(convRef, { messages: updated });
+          return changed;
+        });
+        if (convChanged) result.conv = true;
+      } catch (e) {
+        result.convErr = e instanceof Error ? e.message : String(e);
+        console.warn('[DELETE images] conv cleanup failed:', e);
+      }
+    }
+
+    // 2. 刪 platform_jobs doc
+    if (jobId) {
+      try {
+        await db.collection('platform_jobs').doc(jobId).delete();
+        result.job = true;
+      } catch (e) {
+        result.jobErr = e instanceof Error ? e.message : String(e);
+        console.warn('[DELETE images] job delete failed:', e);
+      }
+    }
+
+    // 3. 刪 Firebase Storage 實體 PNG
+    try {
+      const parsed = new URL(targetUrl);
+      if (parsed.hostname !== 'storage.googleapis.com') {
+        throw new Error(`unexpected host: ${parsed.hostname}`);
+      }
+      const segments = parsed.pathname.split('/').filter(Boolean);
+      if (segments.length < 2) throw new Error(`unexpected path: ${parsed.pathname}`);
+      const urlBucketName = segments[0];
+      const filePath = segments.slice(1).join('/');
+
+      const ALLOWED_PREFIXES = [
+        'platform-images/',
+        'platform-specialist-images/',
+        'platform-character-portraits/',
+      ];
+      if (!ALLOWED_PREFIXES.some(p => filePath.startsWith(p))) {
+        throw new Error(`path not in allowed prefixes: ${filePath}`);
+      }
+
+      const admin = (await import('@/lib/firebase-admin')).getFirebaseAdmin();
+      const bucket = admin.storage().bucket();
+      if (bucket.name !== urlBucketName) {
+        throw new Error(`bucket mismatch: url=${urlBucketName}, expected=${bucket.name}`);
+      }
+
+      try {
+        await bucket.file(filePath).delete();
+        result.storage = true;
+      } catch (delErr: unknown) {
+        const code = (delErr as { code?: number }).code;
+        if (code === 404) {
+          result.storage = true;
+        } else {
+          throw delErr;
+        }
+      }
+    } catch (e) {
+      result.storageErr = e instanceof Error ? e.message : String(e);
+      console.warn('[DELETE images] storage cleanup failed:', e);
+    }
+
+    const anyHit = result.conv || result.job || result.storage;
+    return NextResponse.json(
+      { success: anyHit, ...result },
+      { status: anyHit ? 200 : 404 }
+    );
   } catch (e: unknown) {
     return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
   }

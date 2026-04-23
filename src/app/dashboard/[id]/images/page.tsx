@@ -7,6 +7,7 @@ interface ImageItem {
   url: string;
   conversationId: string;
   timestamp: string;
+  jobId?: string;
 }
 
 export default function ImagesPage() {
@@ -31,9 +32,18 @@ export default function ImagesPage() {
   }, [id]);
 
   const del = async (img: ImageItem) => {
-    if (!confirm('確定刪除這張圖的記錄？（Firebase Storage 的圖片不會刪除）')) return;
+    if (!confirm('確定徹底刪除這張圖？\n將同時清除：對話紀錄 + 作品檔案 + 雲端實體圖。\n不可回復。')) return;
     setDeleting(img.url);
-    await fetch(`/api/images?url=${encodeURIComponent(img.url)}&conversationId=${img.conversationId}`, { method: 'DELETE' });
+    const params = new URLSearchParams({
+      url: img.url,
+      conversationId: img.conversationId || '',
+    });
+    if (img.jobId) params.set('jobId', img.jobId);
+    const res = await fetch(`/api/images?${params.toString()}`, { method: 'DELETE' });
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      alert(`刪除失敗：${j.error || res.status}`);
+    }
     setDeleting(null);
     load();
   };
@@ -57,7 +67,7 @@ export default function ImagesPage() {
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <h3 style={{ margin: 0, color: '#1a1a2e' }}>共 {images.length} 張生成圖片</h3>
-        <span style={{ fontSize: 12, color: '#bbb' }}>從對話中生成，永久存於 Firebase Storage</span>
+        <span style={{ fontSize: 12, color: '#bbb' }}>從對話中生成；刪除會三源清（對話/作品/實體）</span>
       </div>
 
       {loading ? (
