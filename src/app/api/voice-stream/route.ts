@@ -565,30 +565,20 @@ export async function POST(req: NextRequest) {
           send({ type: 'text', content: sentence, index: idx });
 
           try {
-            // fallback：MiniMax 失敗自動切 ElevenLabs（反之亦然）
-            // 若角色沒設另一邊的 voiceId，fallback 自動關閉（保守做法）
-            const fallbackVoiceId = ttsProviderName === 'minimax'
-              ? ((charData.voiceId as string) || '')                // MiniMax→ElevenLabs：用角色的 voiceId
-              : ((charData.voiceIdMinimax as string) || '');         // ElevenLabs→MiniMax：用角色的 voiceIdMinimax
-            const fallbackProviderName = ttsProviderName === 'minimax' ? 'elevenlabs' : 'minimax';
-            // 讀角色 ttsSettings（分 provider）作為 runtime override
+            // 2026-04-23 關閉 cross-provider fallback：
+            //   根因—吉娜（MiniMax 克隆音）偶發 0B → 自動切 ElevenLabs → 同場對話聲音跳人。
+            //   決策—聲音一致 > 偶缺一句。primary 失敗就失敗，不切 provider。
             const charTTSSettings = (charData.ttsSettings || {}) as {
               elevenlabs?: import('@/lib/tts-providers/types').TTSVoiceSettings;
               minimax?: import('@/lib/tts-providers/types').TTSVoiceSettings;
             };
             const primarySettings = charTTSSettings[ttsProviderName as 'elevenlabs' | 'minimax'];
-            const fallbackSettings = fallbackVoiceId
-              ? charTTSSettings[fallbackProviderName as 'elevenlabs' | 'minimax']
-              : undefined;
 
             const audioStream = await fetchTTSStream({
               text: sentence,
               primaryVoiceId: voiceId,
               primaryProviderName: ttsProviderName,
               primarySettings,
-              fallbackVoiceId: fallbackVoiceId || undefined,
-              fallbackProviderName: fallbackVoiceId ? fallbackProviderName : undefined,
-              fallbackSettings,
             });
             const base64 = audioStream ? await streamToBase64(audioStream) : '';
             audioBuffer.set(idx, base64);
