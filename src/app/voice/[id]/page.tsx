@@ -438,15 +438,15 @@ export default function VoicePage() {
 
         {/* ping 圈（playing 時） */}
         {state==='playing' && (
-          <div style={{ position:'absolute', width:180, height:180, borderRadius:'50%', border:'1px solid rgba(0,242,255,0.12)', animation:'ping 1.8s ease-out infinite' }} />
+          <div style={{ position:'absolute', width:360, height:360, borderRadius:'50%', border:'1px solid rgba(0,242,255,0.12)', animation:'ping 1.8s ease-out infinite' }} />
         )}
 
         <div
           onClick={disabled ? undefined : handleMainButton}
-          style={{ position:'relative', width:160, height:160, display:'flex', alignItems:'center', justifyContent:'center', pointerEvents:'auto', cursor: disabled ? 'default' : 'pointer' }}
+          style={{ position:'relative', width:320, height:320, display:'flex', alignItems:'center', justifyContent:'center', pointerEvents:'auto', cursor: disabled ? 'default' : 'pointer' }}
         >
           <div style={{
-            width:120, height:120, borderRadius:'50%',
+            width:240, height:240, borderRadius:'50%',
             background:'rgba(255,255,255,0.04)',
             backdropFilter:'blur(20px)',
             border:`1px solid ${ringColor}`,
@@ -456,7 +456,7 @@ export default function VoicePage() {
             animation: state==='processing' ? 'breathe 1s infinite alternate' : 'none',
           }}>
             <div style={{
-              width:20, height:20, borderRadius:'50%',
+              width:40, height:40, borderRadius:'50%',
               background: dotColor,
               boxShadow:`0 0 24px ${dotColor}`,
               transform:`scale(${dotScale})`,
