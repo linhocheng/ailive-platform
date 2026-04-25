@@ -13,7 +13,7 @@
  * 底層 provider：body.ttsProvider > env TTS_PROVIDER > elevenlabs
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { preprocessTTS } from '@/lib/tts-preprocess';
+import { preprocessTTS, type Provider } from '@/lib/tts-preprocess';
 import { getTTSProvider } from '@/lib/tts-providers';
 import type { TTSVoiceSettings } from '@/lib/tts-providers/types';
 
@@ -34,8 +34,11 @@ export async function POST(req: NextRequest) {
     };
     if (!text) return NextResponse.json({ error: 'text 必填' }, { status: 400 });
 
-    const processedText = preprocessTTS(text);
     const provider = getTTSProvider(ttsProvider);
+    const processedText = preprocessTTS(text, {
+      route: 'tts',
+      provider: provider.name as Provider,
+    });
     // MiniMax 沒有「預設女聲」概念，必須由呼叫方帶 voiceId
     const selectedVoice = voiceId
       || (provider.name === 'elevenlabs' ? (gender === 'male' ? VOICE_MALE : VOICE_FEMALE) : '');

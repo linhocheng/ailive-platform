@@ -29,7 +29,7 @@ import { trackCost } from '@/lib/cost-tracker';
 import { redis } from '@/lib/redis';
 import { generateEmbedding, cosineSimilarity } from '@/lib/embeddings';
 import { generateImageForCharacter } from '@/lib/generate-image';
-import { preprocessTTS } from '@/lib/tts-preprocess';
+import { preprocessTTS, type Provider } from '@/lib/tts-preprocess';
 import { getTTSProvider, synthesizeWithFallback } from '@/lib/tts-providers';
 
 export const maxDuration = 120;
@@ -74,7 +74,11 @@ async function fetchTTSStream(opts: {
   fallbackProviderName?: string;
   fallbackSettings?: import('@/lib/tts-providers/types').TTSVoiceSettings;
 }): Promise<ReadableStream<Uint8Array> | null> {
-  const processed = preprocessTTS(opts.text.trim());
+  // 用 primary provider 套規則（fallback 觸發時 text 已照 primary 預處理過 — 微小品質代價，避免重跑）
+  const processed = preprocessTTS(opts.text.trim(), {
+    route: 'voice-stream',
+    provider: opts.primaryProviderName as Provider,
+  });
   if (!processed) return null;
 
   const primary = {
