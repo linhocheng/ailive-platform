@@ -393,7 +393,7 @@ async function executeTool(
     const res = await fetch(`${baseUrl}/api/tools/knowledge-search`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ characterId, query: toolInput.query || '', limit: toolInput.limit || 10 }),
+      body: JSON.stringify({ characterId, userId: context?.userId, query: toolInput.query || '', limit: toolInput.limit || 10 }),
     });
     if (!res.ok) return '（知識庫查詢失敗）';
     const data = await res.json() as { result?: string; haikuTokens?: { input: number; output: number } };
@@ -1156,6 +1156,8 @@ export async function POST(req: NextRequest) {
       const allFiltered = recentSnap.docs
         .map(d => ({ ...d.data(), id: d.id }))
         .filter((d: Record<string, unknown>) => {
+          // Cross-user leak 防護：帶 userId 的只給該用戶看
+          if (d.userId && d.userId !== userId) return false;
           if (d.tier === 'archive') return false;
           const mType = String(d.memoryType || '');
           if (mType === 'identity') return true;

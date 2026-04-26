@@ -287,7 +287,10 @@ export async function POST(req: NextRequest) {
               db.collection('platform_insights').where('characterId', '==', characterId).limit(100).get(),
             ]);
             const knowledgeDocs: Record<string,unknown>[] = knowledgeSnap.docs.map(d => ({ _id: d.id, _type: 'knowledge', ...d.data() }));
-            const insightDocs: Record<string,unknown>[]   = insightSnap.docs.map(d  => ({ _id: d.id, _type: 'insight',   ...d.data() }));
+            // Cross-user leak 防護：insights 帶 userId 的只給該用戶看，無 userId 的是角色通用知識
+            const insightDocs: Record<string,unknown>[]   = insightSnap.docs
+              .map(d  => ({ _id: d.id, _type: 'insight',   ...d.data() } as Record<string, unknown>))
+              .filter(d => !d.userId || d.userId === (userId || ''));
             let queryEmb: number[] | null = null;
             const productNames = Array.from(new Set(knowledgeDocs.map(d => String(d.title || '').split('—')[0].trim()).filter(n => n.length > 2)));
             const matchedProduct = productNames.find(p => query.includes(p) || (p.includes(' ') && query.includes(p.split(' ').slice(1).join(' '))));

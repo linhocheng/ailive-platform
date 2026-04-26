@@ -61,8 +61,8 @@ function findImages(imageDocs: Record<string, unknown>[], keywords: string[], qu
 
 export async function POST(req: NextRequest) {
   try {
-    const { characterId, query, limit = 10 } = await req.json() as {
-      characterId: string; query: string; limit?: number;
+    const { characterId, userId, query, limit = 10 } = await req.json() as {
+      characterId: string; userId?: string; query: string; limit?: number;
     };
     if (!characterId || !query) {
       return NextResponse.json({ error: 'characterId 和 query 必填' }, { status: 400 });
@@ -75,7 +75,10 @@ export async function POST(req: NextRequest) {
     ]);
 
     const allKnowledge: Record<string, unknown>[] = knowledgeSnap.docs.map(d => ({ _id: d.id, _type: 'knowledge', ...d.data() }));
-    const insightDocs: Record<string, unknown>[] = insightSnap.docs.map(d => ({ _id: d.id, _type: 'insight', ...d.data() }));
+    // Cross-user leak 防護：insights 帶 userId 的只給該用戶看，無 userId 的是角色通用知識
+    const insightDocs: Record<string, unknown>[] = insightSnap.docs
+      .map(d => ({ _id: d.id, _type: 'insight', ...d.data() } as Record<string, unknown>))
+      .filter(d => !d.userId || d.userId === (userId || ''));
 
     const textDocs  = allKnowledge.filter(d => d.category !== 'image');
     const imageDocs = allKnowledge.filter(d => d.category === 'image');
