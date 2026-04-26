@@ -637,8 +637,18 @@ export async function POST(req: NextRequest) {
                     .join('\n');
                   const compressRes = await client.messages.create({
                     model: 'claude-haiku-4-5-20251001',
-                    max_tokens: 200,
-                    messages: [{ role: 'user', content: `以下是對話的早期段落，請用 3-5 句話壓縮成摘要，保留重要的人名、話題、關係資訊。直接輸出摘要，不要標題。
+                    max_tokens: 400,
+                    messages: [{ role: 'user', content: `以下是對話的早期段落，請壓縮成摘要。
+
+務必保留（漏寫即失憶）：
+- 用戶說過的具體事（人事時地物、數字、名稱、地點）
+- 用戶的處境與情緒（最近發生什麼、現在感覺怎樣）
+- 角色（你）做過的承諾、答應的事、約定的時間
+- 角色（你）問過但用戶還沒回答的問題
+- 未完成、待續的話題
+
+抽象的「兩人聊了商業策略」這種無細節句子算失敗。
+直接輸出摘要本體，不要標題、不要編號。
 
 ${compressText}` }],
                   });
@@ -648,10 +658,10 @@ ${compressText}` }],
 ${newSummary}` : newSummary;
                   await convRef.update({
                     messages: newMessages.slice(-10),
-                    summary: mergedSummary.slice(-500),
+                    summary: mergedSummary.slice(-800),
                   });
                   // Redis 更新帶 summary
-                  const updatedConv = { ...convData, messages: newMessages.slice(-10), messageCount: newCount, summary: mergedSummary.slice(-500) };
+                  const updatedConv = { ...convData, messages: newMessages.slice(-10), messageCount: newCount, summary: mergedSummary.slice(-800) };
                   await redis.set(convCacheKey, JSON.stringify(updatedConv), 60 * 30);
                 } catch { /* 壓縮失敗不阻斷 */ }
               } else {

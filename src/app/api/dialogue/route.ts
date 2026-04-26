@@ -1588,14 +1588,14 @@ ${convData.userProfile ? `【我認識這個人】\n${convData.userProfile}\n\n`
                   .map(m => `${String(m.role) === 'user' ? '用戶' : '角色'}：${String(m.content || '').slice(0, 100)}`)
                   .join('\n');
                 const compressSummary = await callGemini(
-                  `以下是對話的早期段落，請用 3-5 句話壓縮成摘要，保留重要的人名、話題、關係資訊。直接輸出摘要，不要標題。\n\n${compressText}`,
-                  { maxTokens: 200 }
+                  `以下是對話的早期段落，請壓縮成摘要。\n\n務必保留（漏寫即失憶）：\n- 用戶說過的具體事（人事時地物、數字、名稱、地點）\n- 用戶的處境與情緒（最近發生什麼、現在感覺怎樣）\n- 角色（你）做過的承諾、答應的事、約定的時間\n- 角色（你）問過但用戶還沒回答的問題\n- 未完成、待續的話題\n\n抽象的「兩人聊了商業策略」這種無細節句子算失敗。\n直接輸出摘要本體，不要標題、不要編號。\n\n${compressText}`,
+                  { maxTokens: 400 }
                 );
                 const newSummary = compressSummary || '';
                 if (!newSummary) throw new Error('Gemini 壓縮失敗');
                 const existingSummary = String(convData.summary || '');
                 const mergedSummary = existingSummary ? `${existingSummary}\n${newSummary}` : newSummary;
-                await convRef!.update({ messages: allMessages.slice(-RECENT_MESSAGES_WINDOW), summary: mergedSummary.slice(-500) });
+                await convRef!.update({ messages: allMessages.slice(-RECENT_MESSAGES_WINDOW), summary: mergedSummary.slice(-800) });
               } catch { /* 壓縮失敗不阻斷 */ }
             }
           }
