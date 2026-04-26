@@ -31,6 +31,7 @@ import { generateEmbedding, cosineSimilarity } from '@/lib/embeddings';
 import { generateImageForCharacter } from '@/lib/generate-image';
 import { preprocessTTS, type Provider } from '@/lib/tts-preprocess';
 import { getTTSProvider, synthesizeStreamSafe } from '@/lib/tts-providers';
+import { addUserAction } from '@/lib/character-actions';
 
 export const maxDuration = 120;
 
@@ -205,7 +206,14 @@ export async function POST(req: NextRequest) {
 ✅ 必須：用自然的方式回應，當作你完全聽懂了
 ❌ 禁止：說「你說的 XXX 是什麼意思」「我沒聽清楚」「請再說一次」
 ❌ 禁止：重複用戶說的奇怪詞語，或對轉錄錯誤提出疑問
-比喻：把用戶說的話當成打錯字的簡訊——你會猜意思繼續聊，不會問「你是不是打錯字了？」`;
+比喻：把用戶說的話當成打錯字的簡訊——你會猜意思繼續聊，不會問「你是不是打錯字了？」
+
+【委派紀律】
+你有 specialist 可以調度（painter=瞬負責生圖／攝影）。
+- 用戶請你做長任務（生圖、深度查詢、寫長內容）→ 一定走 commission_specialist
+- 立刻說「好我請瞬處理，等下你看 dashboard / 我下次告訴你」
+- 不要說「我馬上幫你畫」然後等很久——語音 30 秒不出聲用戶就會以為斷線
+- 答應 ≠ 立刻做。承諾是承諾，兌現是兌現。`;
 
         const voiceDynamicBlock = `${summaryBlock}${gapInjection}${lastSessionBlock}${sessionStateBlock}
 
@@ -266,11 +274,31 @@ export async function POST(req: NextRequest) {
             input_schema: { type: 'object' as const, properties: { product_name: { type: 'string', description: '產品關鍵字，例如「卸妝露」「慕斯花」「精華霜」' } }, required: ['product_name'] },
           },
           {
+            name: 'commission_specialist',
+            description: '把長任務委託給 specialist（painter=瞬，攝影/繪圖大師）。非同步執行——你立刻回應、繼續陪 user 聊，瞬完成後作品會出現在 dashboard / 下次對話帶出。承諾是承諾，兌現是兌現。',
+            input_schema: {
+              type: 'object' as const,
+              properties: {
+                specialist: { type: 'string', enum: ['painter'], description: 'painter = 瞬（攝影/繪圖大師）' },
+                brief: { type: 'string', description: '給 specialist 的工作 brief，越具體越好。畫面、氛圍、用途。' },
+                refs: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  maxItems: 3,
+                  description: '參考圖完整 https:// URL（選填，最多 3 張）。即使上輪用過同一張，這輪也要重附完整 URL。',
+                },
+                mood: { type: 'string', description: '情緒/風格（選填）：溫暖、銳利、夢幻、極簡…' },
+                aspect_ratio: { type: 'string', enum: ['1:1', '16:9', '9:16', '4:3', '3:4'], description: '比例，預設 1:1' },
+              },
+              required: ['specialist', 'brief'],
+            },
+          },
+          {
             name: 'generate_image',
-            description: '生成 IG 貼文用的產品圖。有了產品圖片URL就用 reference_image_url 傳入，讓圖更精準。',
+            description: '【已委派化】內部會自動轉走 commission_specialist。直接描述畫面即可，瞬會處理。',
             input_schema: { type: 'object' as const, properties: {
-              prompt: { type: 'string', description: '圖片描述（英文，場景+產品+風格）' },
-              reference_image_url: { type: 'string', description: '產品參考圖URL，從 query_product_card 拿' },
+              prompt: { type: 'string', description: '圖片描述（英文更精準）' },
+              reference_image_url: { type: 'string', description: '產品參考圖完整 URL，從 query_product_card 拿' },
             }, required: ['prompt'] },
           },
         ];
@@ -467,17 +495,63 @@ export async function POST(req: NextRequest) {
             return `【${card.productName}】成分：${ingList}\n功效：${(card.effects||[]).join('、')}\n圖片：\n${imageList}`;
           }
 
-          // ── generate_image ──
+          // ── generate_image → 委派化 stub（轉呼 commission_specialist） ──
+          // 同步等 30-60s 會讓 SSE 卡死。改走 painter（瞬）非同步流。
           if (toolName === 'generate_image') {
             const prompt = String(toolInput.prompt || '');
             if (!prompt) return '需要圖片描述才能生圖。';
-            const refUrl = toolInput.reference_image_url ? String(toolInput.reference_image_url) : undefined;
-            try {
-              const result = await generateImageForCharacter(characterId, prompt, refUrl);
-              return `IMAGE_URL:${result.imageUrl}`;
-            } catch (e: unknown) {
-              return `生圖失敗：${e instanceof Error ? e.message : String(e)}`;
+            const refs = toolInput.reference_image_url ? [String(toolInput.reference_image_url)] : [];
+            return await execVoiceTool('commission_specialist', {
+              specialist: 'painter',
+              brief: prompt,
+              refs,
+              aspect_ratio: toolInput.aspect_ratio || '1:1',
+            });
+          }
+
+          // ── commission_specialist ── 委派 painter（瞬）非同步生圖
+          if (toolName === 'commission_specialist') {
+            const SPECIALIST_MAP: Record<string, string> = { painter: 'shun-001' };
+            const specialistKey = String(toolInput.specialist || 'painter');
+            const assigneeId = SPECIALIST_MAP[specialistKey];
+            if (!assigneeId) return `⚠️ 找不到 specialist: ${specialistKey}`;
+
+            const brief = String(toolInput.brief || '');
+            if (!brief) return '需要 brief 才能委託瞬。';
+
+            const now = new Date().toISOString();
+            const jobRef = await db.collection('platform_jobs').add({
+              requesterId: characterId,
+              requesterConvId: convId,
+              requesterUserId: userId || '',
+              assigneeId,
+              jobType: 'image',
+              brief: {
+                prompt: brief,
+                refs: Array.isArray(toolInput.refs) ? toolInput.refs : [],
+                mood: toolInput.mood ? String(toolInput.mood) : null,
+                aspectRatio: toolInput.aspect_ratio ? String(toolInput.aspect_ratio) : '1:1',
+              },
+              status: 'pending',
+              createdAt: now,
+              retryCount: 0,
+              source: 'voice-stream',
+            });
+
+            // 寫一筆 promise 進 character-actions（兌現由 specialist endpoint 完成後 markFulfilled）
+            if (userId) {
+              addUserAction({
+                characterId,
+                userId,
+                actionType: 'promise',
+                title: `委派瞬畫圖：${brief.slice(0, 30)}`,
+                content: `jobId=${jobRef.id} | brief=${brief.slice(0, 200)}`,
+                source: 'voice_commission',
+              }).catch(e => console.warn('addUserAction (commission) failed:', e));
             }
+
+            const shortId = jobRef.id.slice(0, 8);
+            return `JOB_PENDING:${jobRef.id}:已委託瞬，工作編號 ${shortId}。1-2 分鐘內完成，作品會出現在 dashboard，下次對話我會告訴你。妳繼續陪 user 聊。`;
           }
 
           return '未知工具';
