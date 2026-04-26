@@ -9,6 +9,7 @@ const CHARACTER_NAV = [
   { href: '/identity', label: '身份' },
   { href: '/knowledge', label: '知識庫' },
   { href: '/images', label: '生圖檔' },
+  { href: '/strategies', label: '策略書' },
   { href: '/memory', label: '記憶' },
   { href: '/posts', label: '發文' },
   { href: '/skills', label: '技巧' },
@@ -21,6 +22,7 @@ const STRATEGIST_NAV = [
   { href: '/soul', label: '靈魂' },
   { href: '/assignments', label: '管轄設定' },
   { href: '/tasks', label: '任務提案' },
+  { href: '/strategies', label: '策略書' },
   { href: '/memory', label: '記憶' },
   { href: '/growth', label: '成長' },
 ];
