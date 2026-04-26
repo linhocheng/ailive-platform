@@ -1,4 +1,18 @@
 /**
+ * ⚠️ 此檔已升格為正式 specialist（2026-04-26）
+ *
+ * 正式版：/api/specialist/strategy
+ * 差異：
+ *   - 接 commission_specialist tool（dialogue / voice-stream）
+ *   - 兩階段 Sonnet：caller 濃縮 brief → 奧寫長文
+ *   - assigneeId 由 caller 傳入（B 後門：未來可換 strategist）
+ *   - dashboard /[id]/strategies 顯示
+ *
+ * 本檔保留作 PoC 歷史參考，不要新功能進這裡。
+ * 待刪日：strategist 跑 1 個月穩定後評估（最早 2026-05-26）。
+ *
+ * ───
+ *
  * Cake 2: Strategy Test
  *
  * 目的：驗證 Phase 2 策略 specialist 的完整鏈路
