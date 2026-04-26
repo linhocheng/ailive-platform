@@ -90,11 +90,9 @@ export function detectGear(
 
 /**
  * 取得對應的 max_tokens
- * Haiku 回應較短，Sonnet 給足夠空間
+ * 兩檔/兩種場景統一 8192：與江彬端對齊（不對 token 設硬限制）。
+ * 模型自然會在合適位置收尾，靠變檔器與 system prompt 控制長度感。
  */
-export function getMaxTokens(gear: ModelGear, isVoice = false): number {
-  if (isVoice) {
-    return gear === 'haiku' ? 300 : 800;
-  }
-  return gear === 'haiku' ? 600 : 4096;
+export function getMaxTokens(_gear: ModelGear, _isVoice = false): number {
+  return 8192;
 }

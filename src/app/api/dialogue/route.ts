@@ -1408,6 +1408,7 @@ ${convData.userProfile ? `【我認識這個人】\n${convData.userProfile}\n\n`
             const streamMsg = client.messages.stream({
               model: selectedModel,
               max_tokens: selectedMaxTokens,
+              temperature: 0.9,
               system: systemBlocks as any,  // Prompt Caching blocks
               tools: activeTools,
               tool_choice: { type: 'auto' },

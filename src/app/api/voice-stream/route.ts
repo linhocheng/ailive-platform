@@ -498,7 +498,7 @@ export async function POST(req: NextRequest) {
             ? { type: 'tool' as const, name: 'query_knowledge_base' }
             : { type: 'auto' as const };
           const preRes = await withRetry(() => client.messages.create({
-            model: voiceModel, max_tokens: voiceMaxTokens,
+            model: voiceModel, max_tokens: voiceMaxTokens, temperature: 0.9,
             system: systemBlocks as any, messages: loopMessages,
             tools: [WEB_SEARCH, ...VOICE_TOOLS], tool_choice: toolChoice,
           }));
@@ -521,6 +521,7 @@ export async function POST(req: NextRequest) {
         const claudeStream = client.messages.stream({
           model: voiceModel,
           max_tokens: voiceMaxTokens,
+          temperature: 0.9,
           system: systemBlocks as any,
           messages: loopMessages,
         });
