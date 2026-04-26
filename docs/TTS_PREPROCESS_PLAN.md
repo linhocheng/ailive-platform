@@ -201,7 +201,13 @@ preprocessTTS(text: string, opts?: { provider?: Provider; characterId?: string }
 
 ---
 
-### Task 2.4 · MiniMax 試聽校對工作流
+### Task 2.4 · MiniMax 試聽校對工作流  〔Parked 2026-04-26 — 未來任務〕
+
+> **狀態**：暫停。Adam 拍板：不是當前主線。
+> **重啟條件**：Adam 預備 30-60 min 戴耳機時段，主動指派。
+> **依賴**：本質是「測試 > 建構」— 沒 Adam 耳朵時間就不啟動，避免盲填字典傷角色。
+
+
 
 **動什麼**：
 1. 寫腳本 `scripts/tts-minimax-audit.ts`：撈 Firestore 近 30 通對話的 reply 文本
@@ -221,7 +227,11 @@ preprocessTTS(text: string, opts?: { provider?: Provider; characterId?: string }
 
 ---
 
-### Task 2.5 · 切 MiniMax 預演
+### Task 2.5 · 切 MiniMax 預演  〔Parked 2026-04-26 — 未來任務〕
+
+> **狀態**：暫停。必須先過 2.4 才有意義。
+
+
 
 **動什麼**：
 - 在 dev 環境設 `TTS_PROVIDER=minimax`，用幾個固定角色（如馬雲）跑端到端對話 5 通
