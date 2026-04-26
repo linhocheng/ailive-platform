@@ -209,10 +209,16 @@ export async function POST(req: NextRequest) {
 比喻：把用戶說的話當成打錯字的簡訊——你會猜意思繼續聊，不會問「你是不是打錯字了？」
 
 【委派紀律】
-你有 specialist 可以調度（painter=瞬負責生圖／攝影）。
-- 用戶請你做長任務（生圖、深度查詢、寫長內容）→ 一定走 commission_specialist
-- 立刻說「好我請瞬處理，等下你看 dashboard / 我下次告訴你」
-- 不要說「我馬上幫你畫」然後等很久——語音 30 秒不出聲用戶就會以為斷線
+你有 specialist 可以調度：
+- painter（瞬）= 生圖、攝影、視覺作品
+- strategist（奧）= >2000 字長文檔——規劃書、提案、策略書、市場分析、白皮書、企劃書、研究報告，產出可下載 docx
+
+什麼時候用：用戶要長任務 / 正式文件 / 視覺作品 → 一定走 commission_specialist。
+口頭問答、一兩段意見 → 你自己回，不要派工。
+
+派工時：
+- 立刻說「好我請瞬處理 / 我請奧寫」「等下你看 dashboard」「我下次再帶這件事」
+- 不要說「我馬上畫 / 我馬上寫」然後等很久——語音 30 秒不出聲用戶就以為斷線
 - 答應 ≠ 立刻做。承諾是承諾，兌現是兌現。`;
 
         const voiceDynamicBlock = `${summaryBlock}${gapInjection}${lastSessionBlock}${sessionStateBlock}
@@ -275,20 +281,27 @@ export async function POST(req: NextRequest) {
           },
           {
             name: 'commission_specialist',
-            description: '把長任務委託給 specialist（painter=瞬，攝影/繪圖大師）。非同步執行——你立刻回應、繼續陪 user 聊，瞬完成後作品會出現在 dashboard / 下次對話帶出。承諾是承諾，兌現是兌現。',
+            description: `把長任務委託給專家。非同步執行——立刻回應、繼續陪 user 聊，作品完成後出現在 dashboard。
+
+可調度的 specialist：
+- painter（瞬）：生圖、視覺、海報——產出圖片
+- strategist（奧）：>2000 字長文檔——規劃書、提案、策略書、市場分析、白皮書、企劃書、研究報告——產出可下載的 docx
+
+短回應、口頭意見、一兩段文字 → 你自己回，不要走這個工具。
+承諾是承諾，兌現是兌現——立刻說「好我請 XX 處理，等下你看 dashboard」。`,
             input_schema: {
               type: 'object' as const,
               properties: {
-                specialist: { type: 'string', enum: ['painter'], description: 'painter = 瞬（攝影/繪圖大師）' },
-                brief: { type: 'string', description: '給 specialist 的工作 brief，越具體越好。畫面、氛圍、用途。' },
+                specialist: { type: 'string', enum: ['painter', 'strategist'], description: 'painter=瞬（圖）｜strategist=奧（長文 docx）' },
+                brief: { type: 'string', description: '給 specialist 的工作 brief。painter：畫面、氛圍、用途；strategist：用戶要規劃什麼、為何、給誰看、特殊要求。' },
                 refs: {
                   type: 'array',
                   items: { type: 'string' },
                   maxItems: 3,
-                  description: '參考圖完整 https:// URL（選填，最多 3 張）。即使上輪用過同一張，這輪也要重附完整 URL。',
+                  description: '（painter 用）參考圖完整 https:// URL，最多 3 張。strategist 不用填。',
                 },
-                mood: { type: 'string', description: '情緒/風格（選填）：溫暖、銳利、夢幻、極簡…' },
-                aspect_ratio: { type: 'string', enum: ['1:1', '16:9', '9:16', '4:3', '3:4'], description: '比例，預設 1:1' },
+                mood: { type: 'string', description: '（painter 用）情緒/風格：溫暖、銳利、夢幻、極簡…' },
+                aspect_ratio: { type: 'string', enum: ['1:1', '16:9', '9:16', '4:3', '3:4'], description: '（painter 用）比例，預設 1:1' },
               },
               required: ['specialist', 'brief'],
             },
@@ -509,29 +522,35 @@ export async function POST(req: NextRequest) {
             });
           }
 
-          // ── commission_specialist ── 委派 painter（瞬）非同步生圖
+          // ── commission_specialist ── 派 painter（瞬）/ strategist（奧）非同步
           if (toolName === 'commission_specialist') {
-            const SPECIALIST_MAP: Record<string, string> = { painter: 'shun-001' };
+            const SPECIALIST_MAP: Record<string, { id: string; jobType: 'image' | 'strategy'; name: string; etaText: string }> = {
+              painter:    { id: 'shun-001',              jobType: 'image',    name: '瞬', etaText: '1-2 分鐘' },
+              strategist: { id: 'pEWC5m2MOddyGe9uw0u0',  jobType: 'strategy', name: '奧', etaText: '2-3 分鐘' },
+            };
             const specialistKey = String(toolInput.specialist || 'painter');
-            const assigneeId = SPECIALIST_MAP[specialistKey];
-            if (!assigneeId) return `⚠️ 找不到 specialist: ${specialistKey}`;
+            const sp = SPECIALIST_MAP[specialistKey];
+            if (!sp) return `⚠️ 找不到 specialist: ${specialistKey}`;
 
             const brief = String(toolInput.brief || '');
-            if (!brief) return '需要 brief 才能委託瞬。';
+            if (!brief) return `需要 brief 才能委託${sp.name}。`;
 
             const now = new Date().toISOString();
+            const briefData: Record<string, unknown> = sp.jobType === 'image'
+              ? {
+                  prompt: brief,
+                  refs: Array.isArray(toolInput.refs) ? toolInput.refs : [],
+                  mood: toolInput.mood ? String(toolInput.mood) : null,
+                  aspectRatio: toolInput.aspect_ratio ? String(toolInput.aspect_ratio) : '1:1',
+                }
+              : { prompt: brief };
             const jobRef = await db.collection('platform_jobs').add({
               requesterId: characterId,
               requesterConvId: convId,
               requesterUserId: userId || '',
-              assigneeId,
-              jobType: 'image',
-              brief: {
-                prompt: brief,
-                refs: Array.isArray(toolInput.refs) ? toolInput.refs : [],
-                mood: toolInput.mood ? String(toolInput.mood) : null,
-                aspectRatio: toolInput.aspect_ratio ? String(toolInput.aspect_ratio) : '1:1',
-              },
+              assigneeId: sp.id,
+              jobType: sp.jobType,
+              brief: briefData,
               status: 'pending',
               createdAt: now,
               retryCount: 0,
@@ -540,18 +559,24 @@ export async function POST(req: NextRequest) {
 
             // 寫一筆 promise 進 character-actions（兌現由 specialist endpoint 完成後 markFulfilled）
             if (userId) {
+              const actionTitle = sp.jobType === 'image'
+                ? `委派${sp.name}畫圖：${brief.slice(0, 30)}`
+                : `委派${sp.name}寫策略書：${brief.slice(0, 30)}`;
               addUserAction({
                 characterId,
                 userId,
                 actionType: 'promise',
-                title: `委派瞬畫圖：${brief.slice(0, 30)}`,
+                title: actionTitle,
                 content: `jobId=${jobRef.id} | brief=${brief.slice(0, 200)}`,
                 source: 'voice_commission',
               }).catch(e => console.warn('addUserAction (commission) failed:', e));
             }
 
             const shortId = jobRef.id.slice(0, 8);
-            return `JOB_PENDING:${jobRef.id}:已委託瞬，工作編號 ${shortId}。1-2 分鐘內完成，作品會出現在 dashboard，下次對話我會告訴你。妳繼續陪 user 聊。`;
+            const trailing = sp.jobType === 'image'
+              ? '作品會出現在 dashboard，下次對話我會告訴你。'
+              : '策略書 docx 會出現在 dashboard 的「策略書」頁面可下載。下次對話我會帶出這件事。';
+            return `JOB_PENDING:${jobRef.id}:已委託${sp.name}，工作編號 ${shortId}。${sp.etaText}內完成，${trailing}妳繼續陪 user 聊。`;
           }
 
           return '未知工具';

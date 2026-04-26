@@ -203,25 +203,44 @@ export async function POST(req: NextRequest) {
     };
   };
 
-  const { jobId, assigneeId, brief, context } = body;
+  const { jobId, assigneeId, brief } = body;
   if (!brief?.prompt) return NextResponse.json({ error: 'brief.prompt 必填' }, { status: 400 });
   if (!assigneeId) return NextResponse.json({ error: 'assigneeId 必填' }, { status: 400 });
 
   try {
     const db = getFirestore();
 
-    // 2. 讀 assignee soul
+    // 2. 解析 context — 優先 body.context；否則用 jobId 從 platform_jobs 撈 requester info
+    //   (worker forward body 可能不完整，自己讀 jobs 最穩)
+    let callerCharacterId = body.context?.callerCharacterId || '';
+    let callerName = body.context?.callerCharacterName || '';
+    let recentMessages = body.context?.recentMessages || [];
+    let requesterConvId = '';
+    if (jobId && (!callerCharacterId || recentMessages.length === 0)) {
+      const jobDoc = await db.collection('platform_jobs').doc(jobId).get();
+      if (jobDoc.exists) {
+        const jobData = jobDoc.data()!;
+        if (!callerCharacterId) callerCharacterId = String(jobData.requesterId || '');
+        requesterConvId = String(jobData.requesterConvId || '');
+        // jobs.context.recentMessages（如果 caller 寫了）
+        const jobCtxMsgs = jobData?.context?.recentMessages;
+        if (Array.isArray(jobCtxMsgs) && recentMessages.length === 0) {
+          recentMessages = jobCtxMsgs;
+        }
+      }
+    }
+
+    // 3. 讀 assignee soul
     const assigneeDoc = await db.collection('platform_characters').doc(assigneeId).get();
     if (!assigneeDoc.exists) throw new Error(`assignee ${assigneeId} 不存在`);
     const assignee = assigneeDoc.data()!;
     const assigneeSoul = `${String(assignee.system_soul || '')}\n\n${String(assignee.soul_core || '')}`.trim();
     const assigneeName = String(assignee.name || 'Specialist');
 
-    // 讀 caller soul（B 後門使用一致：caller 在場才濃縮）
+    // 讀 caller soul + name
     let callerSoul = '';
-    let callerName = context?.callerCharacterName || '';
-    if (context?.callerCharacterId) {
-      const callerDoc = await db.collection('platform_characters').doc(context.callerCharacterId).get();
+    if (callerCharacterId) {
+      const callerDoc = await db.collection('platform_characters').doc(callerCharacterId).get();
       if (callerDoc.exists) {
         const caller = callerDoc.data()!;
         callerSoul = `${String(caller.system_soul || '')}\n\n${String(caller.soul_core || '')}`.trim();
@@ -229,15 +248,28 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // recentMessages 還是空 → 用 conversationId 從 platform_conversations 撈最近 8 條
+    if (recentMessages.length === 0 && requesterConvId) {
+      const convDoc = await db.collection('platform_conversations').doc(requesterConvId).get();
+      if (convDoc.exists) {
+        const convData = convDoc.data();
+        const allMsgs = Array.isArray(convData?.messages) ? convData.messages : [];
+        recentMessages = allMsgs.slice(-8).map((m: Record<string, unknown>) => ({
+          role: String(m.role || 'user'),
+          content: String(m.content || '').slice(0, 800),
+        }));
+      }
+    }
+
     const apiKey = (process.env.ANTHROPIC_API_KEY || '').replace(/^"|"$/g, '');
     if (!apiKey) throw new Error('ANTHROPIC_API_KEY missing');
     const anthropic = new Anthropic({ apiKey });
 
-    // 3. 階段 1：caller 把對話脈絡濃縮成 brief
+    // 4. 階段 1：caller 把對話脈絡濃縮成 brief
     let refinedBrief = brief.prompt;
     let stage1Tokens = { input: 0, output: 0 };
     if (callerSoul) {
-      const recentText = (context?.recentMessages || [])
+      const recentText = recentMessages
         .map(m => `${m.role === 'user' ? '用戶' : (callerName || '我')}：${m.content}`)
         .join('\n');
 
@@ -271,7 +303,7 @@ export async function POST(req: NextRequest) {
       };
     }
 
-    // 4. 階段 2：assignee（奧）寫 5000 字 markdown
+    // 5. 階段 2：assignee（奧）寫 5000 字 markdown
     const writeSystem = `${assigneeSoul}\n\n---\n\n${STRUCTURE_GUIDE}`;
     const writeRes = await anthropic.messages.create({
       model: 'claude-sonnet-4-6',
@@ -286,7 +318,7 @@ export async function POST(req: NextRequest) {
       output: writeRes.usage.output_tokens,
     };
 
-    // 5. markdown → docx
+    // 6. markdown → docx
     const blocks = parseMarkdownToBlocks(md);
     const titleBlock = blocks.find(b => b.type === 'h1');
     const docTitle = titleBlock?.text || '策略規劃書';
@@ -294,7 +326,7 @@ export async function POST(req: NextRequest) {
     const doc = buildDocx(blocks, docTitle, creator);
     const buffer = await Packer.toBuffer(doc);
 
-    // 6. 上 Firebase Storage（公開 URL）
+    // 7. 上 Firebase Storage（公開 URL）
     const admin2 = getFirebaseAdmin();
     const bucket = admin2.storage().bucket();
     const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
