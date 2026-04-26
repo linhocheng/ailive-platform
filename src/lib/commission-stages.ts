@@ -40,6 +40,9 @@ export interface StageDerivation {
 // in_progress 超過 3s 才算「手真的在動」（Sonnet 翻 prompt 通常 1-2s 起跳）
 const STAGE3_PROXY_MS = 3_000;
 
+// strategy 走 internal dispatch 用 'processing'；painter 經 worker 用 'in_progress'。視為同義。
+const isRunningLike = (s?: string): boolean => s === 'in_progress' || s === 'processing';
+
 export function deriveStages(
   job: ActiveJob,
   seenBySystemEvent: boolean,
@@ -88,7 +91,7 @@ export function deriveStages(
   }
 
   // 正在走的下一顆變 active
-  if (job.status === 'pending' || job.status === 'in_progress') {
+  if (job.status === 'pending' || isRunningLike(job.status)) {
     const nextIdx = reached;
     if (nextIdx < 5 && lamps[nextIdx] === 'empty') {
       lamps[nextIdx] = 'active';
@@ -97,7 +100,7 @@ export function deriveStages(
 
   const overall: StageDerivation['overall'] =
     job.status === 'done' ? 'done'
-    : job.status === 'in_progress' ? 'running'
+    : isRunningLike(job.status) ? 'running'
     : job.status === 'pending' ? 'pending'
     : 'idle';
 
@@ -144,7 +147,7 @@ export function deriveMiniLight(
   if (!jobs.length) return 'idle';
   const anyFailed = jobs.some(j => j.status === 'failed');
   if (anyFailed) return 'failed';
-  const anyRunning = jobs.some(j => j.status === 'in_progress');
+  const anyRunning = jobs.some(j => isRunningLike(j.status));
   if (anyRunning) return 'running';
   const anyPending = jobs.some(j => j.status === 'pending');
   if (anyPending) return 'pending';

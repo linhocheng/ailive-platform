@@ -1067,7 +1067,8 @@ export async function GET(req: NextRequest) {
         .map(d => ({ id: d.id, ...d.data() }) as Record<string, unknown>)
         .filter(j => {
           const s = j.status as string | undefined;
-          if (s === 'pending' || s === 'in_progress') return true;
+          // strategy 走 internal dispatch 用 'processing'；painter 經 worker 用 'in_progress'；都要顯示
+          if (s === 'pending' || s === 'in_progress' || s === 'processing') return true;
           if (s === 'done' || s === 'failed') {
             const completedAt = j.completedAt as string | undefined;
             const t = completedAt ? Date.parse(completedAt) : 0;

@@ -92,7 +92,11 @@ function JobRow({
 
   const isPainter = job.jobType === 'image' || job.assigneeId === 'shun-001';
   const emoji = isPainter ? '🎨' : '✍️';
-  const roleName = job.assigneeId === 'shun-001' ? '瞬' : job.assigneeId;
+  const ASSIGNEE_NAMES: Record<string, string> = {
+    'shun-001': '瞬',
+    'pEWC5m2MOddyGe9uw0u0': '奧',
+  };
+  const roleName = ASSIGNEE_NAMES[job.assigneeId] || job.assigneeId;
 
   return (
     <div
