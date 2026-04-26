@@ -349,6 +349,19 @@ export async function POST(req: NextRequest) {
 
     console.log(`[specialist/strategy] job=${jobId?.slice(0, 8)} caller=${callerName || '-'} assignee=${assigneeName} chars=${md.length} stop=${stopReason} url=${docUrl.slice(-50)}`);
 
+    // 8. 寫回 platform_jobs（成功）— internal dispatch 模式：worker 不處理 strategy，由我們自己更新
+    if (jobId) {
+      try {
+        await db.collection('platform_jobs').doc(jobId).update({
+          status: 'done',
+          result: { docUrl, docTitle, filename, mdChars: md.length, stopReason },
+          completedAt: new Date().toISOString(),
+        });
+      } catch (e) {
+        console.warn('[specialist/strategy] write back jobs failed:', e);
+      }
+    }
+
     return NextResponse.json({
       docUrl,
       docTitle,
@@ -363,6 +376,17 @@ export async function POST(req: NextRequest) {
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error(`[specialist/strategy] error: ${msg}`);
+    // 寫回 platform_jobs（失敗）
+    if (jobId) {
+      try {
+        const db2 = getFirestore();
+        await db2.collection('platform_jobs').doc(jobId).update({
+          status: 'failed',
+          error: msg,
+          completedAt: new Date().toISOString(),
+        });
+      } catch {}
+    }
     return NextResponse.json({ error: msg }, { status: 500 });
   }
 }

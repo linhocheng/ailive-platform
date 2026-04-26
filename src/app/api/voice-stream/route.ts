@@ -544,6 +544,8 @@ export async function POST(req: NextRequest) {
                   aspectRatio: toolInput.aspect_ratio ? String(toolInput.aspect_ratio) : '1:1',
                 }
               : { prompt: brief };
+            // strategy 走 internal dispatch（worker 不認 jobType=strategy），用 'processing' 讓 worker 跳過
+            const initialStatus = sp.jobType === 'strategy' ? 'processing' : 'pending';
             const jobRef = await db.collection('platform_jobs').add({
               requesterId: characterId,
               requesterConvId: convId,
@@ -551,11 +553,29 @@ export async function POST(req: NextRequest) {
               assigneeId: sp.id,
               jobType: sp.jobType,
               brief: briefData,
-              status: 'pending',
+              status: initialStatus,
               createdAt: now,
               retryCount: 0,
               source: 'voice-stream',
             });
+
+            // strategy → 立刻 fire-and-forget 派出去（不等回應，endpoint 完成時自己寫回 jobs）
+            if (sp.jobType === 'strategy') {
+              const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'https://ailive-platform.vercel.app';
+              const workerSecret = (process.env.WORKER_SECRET || '').replace(/^"|"$/g, '').trim();
+              void fetch(`${baseUrl}/api/specialist/strategy`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'x-worker-secret': workerSecret,
+                },
+                body: JSON.stringify({
+                  jobId: jobRef.id,
+                  assigneeId: sp.id,
+                  brief: briefData,
+                }),
+              }).catch(e => console.warn('[voice-stream] strategy dispatch failed:', e));
+            }
 
             // 寫一筆 promise 進 character-actions（兌現由 specialist endpoint 完成後 markFulfilled）
             if (userId) {
