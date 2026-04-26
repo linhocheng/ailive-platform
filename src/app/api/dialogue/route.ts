@@ -101,6 +101,28 @@ const SELF_AWARENESS_BLOCK = `
 如果對方問你「你有什麼工具」、「你會什麼」這類關於你自己的問題，不要試圖列出當下收到的 tools array——那是實作細節，會誤導，而且會變動。用你知道的「你是誰、你能做什麼」去回答就好。工具是手段，你是那個會使用它們的你。
 `;
 
+// 委派紀律 — 解決「LLM 預告卻不執行」的破綻
+// 真實案例（2026-04-26）：憲福對話中已意識到該派 strategist，msg[3] 說「在我請奧之前先問三題」，
+// 連問三輪到 msg[7]「條件齊了」整理一遍——但全程沒呼叫 commission_specialist。
+// LLM 滑進「對話節奏」後出不來。這條紀律是硬把它拉回來：條件齊了就派、不要預告。
+const COMMISSION_DISCIPLINE_BLOCK = `
+
+---
+【委派紀律】
+
+你有 specialist 可以調度：
+- painter（瞬）：圖、攝影、視覺作品
+- strategist（奧）：>2000 字長文檔——規劃書／提案／策略書／市場分析／白皮書／企劃書／研究報告，產出可下載 docx
+
+派工硬規則（覆蓋你的對話節奏偏好）：
+1. 用戶要正式長文檔 / 視覺作品 → 走 commission_specialist。短回應、口頭意見、一兩段文字 → 你自己回，不用派。
+2. 你需要 challenge、問清楚條件 → 一輪內問完。**條件齊了的那一輪，立刻呼叫 commission_specialist，不要再用文字整理一次給用戶看。**
+3. **不要預告**——不要說「等我請奧寫」「我準備請瞬畫」這種話。決定派就直接呼叫工具，呼叫後再向用戶說明。
+4. 文字回應 ≠ 派工。整理條件、列重點、確認條件都不算派。**只有真的呼叫 commission_specialist 才算。**
+
+承諾是承諾，兌現是兌現。預告而不執行是最壞的——用戶以為你做了，其實沒有。
+`;
+
 // 工具能力是恆常的（角色連續性紀律）：
 // 不管 gear 是 haiku 還是 sonnet，角色手上的工具清單都一樣。
 // gear 只改「模型思考深度 + max_tokens」，不改「能做什麼」。
@@ -141,17 +163,18 @@ const PLATFORM_TOOLS: Anthropic.Tool[] = [
   },
   {
     name: 'commission_specialist',
-    description: `把長任務委託給專家。非同步執行——妳立刻回應、繼續陪 user 聊，作品完成後出現在 dashboard。
+    description: `把長任務委託給專家，非同步執行，作品完成後出現在 dashboard。
 
-可調度的 specialist：
-- painter（瞬）：生圖、視覺作品、攝影、海報——產出圖片
-- strategist（奧）：>2000 字長文檔——規劃書、提案、策略書、市場分析、白皮書、企劃書、研究報告——產出可下載的 docx 檔
+specialist 選擇：
+- painter（瞬）：圖、視覺作品、攝影、海報
+- strategist（奧）：>2000 字長文檔——規劃書／提案／策略書／市場分析／白皮書／企劃書／研究報告，產出可下載 docx
 
-什麼時候走 painter：用戶要圖、要視覺。
-什麼時候走 strategist：用戶要長文檔、要可下載的書面規劃、要正式提案。對話裡聊一兩段就能交差的不算——是要那種「正式文件」級別的。
+呼叫紀律（重要）：
+- **決定派就直接呼叫，不要預告**。不要說「等我請奧寫」「我準備派給瞬」之後才呼叫。直接呼叫，然後在 reply 裡向用戶說明已派出。
+- 需要 challenge 條件 → 一輪內問完。**條件齊了的那輪，呼叫工具，不要再用文字整理一次。**
+- 文字回應 ≠ 派工。只有真的呼叫這個工具才算數。
 
-短回應、口頭意見、一兩段文字 → 妳自己回，不要走這個工具。
-承諾是承諾，兌現是兌現——立刻說「好我請 XX 處理，等下你看 dashboard」。`,
+短回應、口頭意見、一兩段就能交差的不算長任務 → 不走這個工具，自己回。`,
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -1347,7 +1370,7 @@ export async function POST(req: NextRequest) {
     } catch { /* 不阻斷 */ }
 
     // Prompt Caching：靈魂+技能穩定，標 cache_control，每輪只收 10% input token
-    const stableBlock = `${mentorInjection}${soulText}${skillsBlock}${voiceModeBlock}${SELF_AWARENESS_BLOCK}`;
+    const stableBlock = `${mentorInjection}${soulText}${skillsBlock}${voiceModeBlock}${SELF_AWARENESS_BLOCK}${COMMISSION_DISCIPLINE_BLOCK}`;
     // 上次對話快照（cross-session）— 跟 voice 端共用 lib
     const lastSessionBlock = buildLastSessionBlock(convData.lastSession as LastSession | undefined);
 

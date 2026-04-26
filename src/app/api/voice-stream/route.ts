@@ -210,16 +210,17 @@ export async function POST(req: NextRequest) {
 
 【委派紀律】
 你有 specialist 可以調度：
-- painter（瞬）= 生圖、攝影、視覺作品
-- strategist（奧）= >2000 字長文檔——規劃書、提案、策略書、市場分析、白皮書、企劃書、研究報告，產出可下載 docx
+- painter（瞬）：圖、攝影、視覺作品
+- strategist（奧）：>2000 字長文檔——規劃書／提案／策略書／市場分析／白皮書／企劃書／研究報告，產出可下載 docx
 
-什麼時候用：用戶要長任務 / 正式文件 / 視覺作品 → 一定走 commission_specialist。
-口頭問答、一兩段意見 → 你自己回，不要派工。
+派工硬規則（覆蓋你的對話節奏偏好）：
+1. 用戶要正式長文檔 / 視覺作品 → 走 commission_specialist。短回應、口頭意見、一兩段文字 → 你自己回，不用派。
+2. 你需要 challenge、問清楚條件 → 一輪內問完。**條件齊了的那一輪，立刻呼叫 commission_specialist，不要再用文字整理一次給用戶看。**
+3. **不要預告**——不要說「等我請奧寫」「我準備請瞬畫」這種話。決定派就直接呼叫工具，呼叫後再向用戶說明。
+4. 文字回應 ≠ 派工。整理條件、列重點、確認條件都不算派。**只有真的呼叫 commission_specialist 才算。**
+5. 語音模式特別注意：派工的工具呼叫只要不到一秒，立刻 return「好我請 XX 處理，等下你看 dashboard」。**不要說「我馬上幫你」然後同步等 30 秒——用戶會以為斷線。**
 
-派工時：
-- 立刻說「好我請瞬處理 / 我請奧寫」「等下你看 dashboard」「我下次再帶這件事」
-- 不要說「我馬上畫 / 我馬上寫」然後等很久——語音 30 秒不出聲用戶就以為斷線
-- 答應 ≠ 立刻做。承諾是承諾，兌現是兌現。`;
+承諾是承諾，兌現是兌現。預告而不執行是最壞的——用戶以為你做了，其實沒有。`;
 
         const voiceDynamicBlock = `${summaryBlock}${gapInjection}${lastSessionBlock}${sessionStateBlock}
 
@@ -281,14 +282,18 @@ export async function POST(req: NextRequest) {
           },
           {
             name: 'commission_specialist',
-            description: `把長任務委託給專家。非同步執行——立刻回應、繼續陪 user 聊，作品完成後出現在 dashboard。
+            description: `把長任務委託給專家，非同步執行，作品完成後出現在 dashboard。
 
-可調度的 specialist：
-- painter（瞬）：生圖、視覺、海報——產出圖片
-- strategist（奧）：>2000 字長文檔——規劃書、提案、策略書、市場分析、白皮書、企劃書、研究報告——產出可下載的 docx
+specialist 選擇：
+- painter（瞬）：圖、視覺、海報
+- strategist（奧）：>2000 字長文檔——規劃書／提案／策略書／市場分析／白皮書／企劃書／研究報告，產出可下載 docx
 
-短回應、口頭意見、一兩段文字 → 你自己回，不要走這個工具。
-承諾是承諾，兌現是兌現——立刻說「好我請 XX 處理，等下你看 dashboard」。`,
+呼叫紀律（重要）：
+- **決定派就直接呼叫，不要預告**。不要說「等我請奧寫」「我準備派給瞬」之後才呼叫。直接呼叫，然後在 reply 裡向用戶說明。
+- 需要 challenge 條件 → 一輪內問完。**條件齊了的那輪，呼叫工具，不要再用文字整理一次。**
+- 文字回應 ≠ 派工。只有真的呼叫這個工具才算數。
+
+短回應、口頭意見、一兩段就能交差的不算長任務 → 不走這個工具，自己回。`,
             input_schema: {
               type: 'object' as const,
               properties: {
