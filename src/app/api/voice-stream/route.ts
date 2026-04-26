@@ -30,7 +30,7 @@ import { redis } from '@/lib/redis';
 import { generateEmbedding, cosineSimilarity } from '@/lib/embeddings';
 import { generateImageForCharacter } from '@/lib/generate-image';
 import { preprocessTTS, type Provider } from '@/lib/tts-preprocess';
-import { getTTSProvider, synthesizeWithFallback } from '@/lib/tts-providers';
+import { getTTSProvider, synthesizeStreamSafe } from '@/lib/tts-providers';
 
 export const maxDuration = 120;
 
@@ -62,41 +62,26 @@ function sseEvent(data: object): string {
   return `data: ${JSON.stringify(data)}\n\n`;
 }
 
-// ===== TTS 透過 Provider（含 cross-provider fallback），回傳 audio/mpeg stream =====
-// primary 失敗（null / 0B 第一 chunk）→ 自動切 fallback 重試一次
-// 兩邊都失敗 → 回 null
+// ===== TTS 透過 Provider（單 provider，失敗回 null = 該句靜音）=====
+// 不切 provider — 聲音是角色身份，跨 provider = 換人說話。決策見 tts-providers/index.ts。
 async function fetchTTSStream(opts: {
   text: string;
-  primaryVoiceId: string;
-  primaryProviderName: string;
-  primarySettings?: import('@/lib/tts-providers/types').TTSVoiceSettings;
-  fallbackVoiceId?: string;          // 不傳 = 不做 fallback（向後相容）
-  fallbackProviderName?: string;
-  fallbackSettings?: import('@/lib/tts-providers/types').TTSVoiceSettings;
+  voiceId: string;
+  providerName: string;
+  settings?: import('@/lib/tts-providers/types').TTSVoiceSettings;
 }): Promise<ReadableStream<Uint8Array> | null> {
-  // 用 primary provider 套規則（fallback 觸發時 text 已照 primary 預處理過 — 微小品質代價，避免重跑）
   const processed = preprocessTTS(opts.text.trim(), {
     route: 'voice-stream',
-    provider: opts.primaryProviderName as Provider,
+    provider: opts.providerName as Provider,
   });
   if (!processed) return null;
 
-  const primary = {
-    provider: getTTSProvider(opts.primaryProviderName),
-    voiceId: opts.primaryVoiceId,
-    settings: opts.primarySettings,
-  };
-  // 只有 fallback voiceId 有值才掛 fallback（避免 minimax 失敗切到沒設定的 ElevenLabs voice）
-  const fallback = opts.fallbackVoiceId && opts.fallbackProviderName
-    ? {
-        provider: getTTSProvider(opts.fallbackProviderName),
-        voiceId: opts.fallbackVoiceId,
-        settings: opts.fallbackSettings,
-      }
-    : undefined;
-
-  const result = await synthesizeWithFallback({ primary, fallback, text: processed });
-  return result ? result.stream : null;
+  return synthesizeStreamSafe({
+    provider: getTTSProvider(opts.providerName),
+    voiceId: opts.voiceId,
+    text: processed,
+    settings: opts.settings,
+  });
 }
 
 // ===== 讀完整個 stream 拿 base64 =====
@@ -569,20 +554,17 @@ export async function POST(req: NextRequest) {
           send({ type: 'text', content: sentence, index: idx });
 
           try {
-            // 2026-04-23 關閉 cross-provider fallback：
-            //   根因—吉娜（MiniMax 克隆音）偶發 0B → 自動切 ElevenLabs → 同場對話聲音跳人。
-            //   決策—聲音一致 > 偶缺一句。primary 失敗就失敗，不切 provider。
             const charTTSSettings = (charData.ttsSettings || {}) as {
               elevenlabs?: import('@/lib/tts-providers/types').TTSVoiceSettings;
               minimax?: import('@/lib/tts-providers/types').TTSVoiceSettings;
             };
-            const primarySettings = charTTSSettings[ttsProviderName as 'elevenlabs' | 'minimax'];
+            const settings = charTTSSettings[ttsProviderName as 'elevenlabs' | 'minimax'];
 
             const audioStream = await fetchTTSStream({
               text: sentence,
-              primaryVoiceId: voiceId,
-              primaryProviderName: ttsProviderName,
-              primarySettings,
+              voiceId,
+              providerName: ttsProviderName,
+              settings,
             });
             const base64 = audioStream ? await streamToBase64(audioStream) : '';
             audioBuffer.set(idx, base64);

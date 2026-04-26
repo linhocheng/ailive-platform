@@ -1,5 +1,5 @@
 /**
- * TTS Provider 工廠
+ * TTS Provider 工廠 + 安全合成 helper
  *
  * 選擇順序：
  *   1. getTTSProvider(name) 顯式傳入（per-call / per-character）
@@ -8,12 +8,15 @@
  *
  * 單一 instance 仍 cache，但只 cache「預設 provider」。
  * 顯式傳入的不 cache，避免 per-character 切換污染。
+ *
+ * Cross-provider fallback 已廢除（2026-04-23 voice-stream 關閉，2026-04-26 砍 dead code）。
+ * 理由：聲音是角色身份，跨 provider 切換 = 換人說話 > 偶缺一句。
  */
-import type { TTSProvider } from './types';
+import type { TTSProvider, TTSVoiceSettings } from './types';
 import { ElevenLabsProvider } from './elevenlabs';
 import { MinimaxProvider } from './minimax';
 
-export type { TTSProvider, TTSRequest } from './types';
+export type { TTSProvider, TTSRequest, TTSVoiceSettings } from './types';
 export { ElevenLabsProvider, MinimaxProvider };
 
 export type TTSProviderName = 'elevenlabs' | 'minimax';
@@ -40,68 +43,33 @@ export function getTTSProvider(name?: string | null): TTSProvider {
 }
 
 /**
- * 嘗試從 primary provider 取得 TTS stream，失敗則自動 fallback。
+ * 單一 provider 合成，含 0B 預讀 guard。失敗回 null（caller 自行決定靜音 / 跳句）。
  *
  * 「失敗」定義：
  *   - provider.synthesizeStream 回 null（API key 沒設、HTTP 非 200、空文字）
  *   - 拿到 stream 但第一個 chunk 是 0 bytes（MiniMax 靜默限流的症狀）
+ *   - 讀第一個 chunk 時 throw
  *
  * 「成功」定義：
- *   - 拿到 stream 且第一個 chunk 有資料 → 立即回傳，不再重試
- *
- * 注意：fallback voice 必須由 caller 傳入（不同 provider 的 voiceId 格式不同）。
- *
- * @returns { stream, providerUsed } 或 null（兩邊都失敗）
+ *   - 拿到 stream 且第一個 chunk 有資料 → 把 firstChunk 跟剩餘 stream 重新組合回傳
  */
-export async function synthesizeWithFallback(opts: {
-  primary: { provider: TTSProvider; voiceId: string; settings?: import('./types').TTSVoiceSettings };
-  fallback?: { provider: TTSProvider; voiceId: string; settings?: import('./types').TTSVoiceSettings };
+export async function synthesizeStreamSafe(opts: {
+  provider: TTSProvider;
+  voiceId: string;
   text: string;
+  settings?: TTSVoiceSettings;
   characterId?: string;
-}): Promise<{ stream: ReadableStream<Uint8Array>; providerUsed: string } | null> {
-  // 1. 試 primary
-  const primaryResult = await tryProvider(opts.primary, opts.text, opts.characterId);
-  if (primaryResult) {
-    return { stream: primaryResult, providerUsed: opts.primary.provider.name };
-  }
-
-  // 2. 沒 fallback → 直接放棄
-  if (!opts.fallback || !opts.fallback.voiceId) {
-    console.warn(`[tts-fallback] primary=${opts.primary.provider.name} 失敗，無 fallback 可用`);
-    return null;
-  }
-
-  // 3. 試 fallback
-  console.warn(`[tts-fallback] primary=${opts.primary.provider.name} 失敗，切換 fallback=${opts.fallback.provider.name}`);
-  const fallbackResult = await tryProvider(opts.fallback, opts.text, opts.characterId);
-  if (fallbackResult) {
-    return { stream: fallbackResult, providerUsed: opts.fallback.provider.name };
-  }
-
-  console.error(`[tts-fallback] 兩邊都失敗 primary=${opts.primary.provider.name} fallback=${opts.fallback.provider.name}`);
-  return null;
-}
-
-/**
- * 試一個 provider，包裝「拿到 stream + 預讀第一個 chunk 確認非 0B」的邏輯。
- * 成功 → 回傳「重新組合過的 stream」（把預讀的 chunk 還回去 + 原 reader 剩餘的）
- * 失敗 → 回 null
- */
-async function tryProvider(
-  target: { provider: TTSProvider; voiceId: string; settings?: import('./types').TTSVoiceSettings },
-  text: string,
-  characterId?: string,
-): Promise<ReadableStream<Uint8Array> | null> {
+}): Promise<ReadableStream<Uint8Array> | null> {
   let upstream: ReadableStream<Uint8Array> | null;
   try {
-    upstream = await target.provider.synthesizeStream({
-      text,
-      voiceId: target.voiceId,
-      characterId,
-      settings: target.settings,
+    upstream = await opts.provider.synthesizeStream({
+      text: opts.text,
+      voiceId: opts.voiceId,
+      characterId: opts.characterId,
+      settings: opts.settings,
     });
   } catch (e) {
-    console.error(`[tts-fallback] ${target.provider.name} throw:`, e);
+    console.error(`[tts] ${opts.provider.name} throw:`, e);
     return null;
   }
   if (!upstream) return null;
@@ -112,13 +80,13 @@ async function tryProvider(
   try {
     const { done, value } = await reader.read();
     if (done || !value || value.length === 0) {
-      console.warn(`[tts-fallback] ${target.provider.name} 第一 chunk 是 0B 或 done，視為失敗`);
+      console.warn(`[tts] ${opts.provider.name} 第一 chunk 是 0B 或 done，視為失敗`);
       try { reader.releaseLock(); } catch {}
       return null;
     }
     firstChunk = value;
   } catch (e) {
-    console.error(`[tts-fallback] ${target.provider.name} 讀第一 chunk 失敗:`, e);
+    console.error(`[tts] ${opts.provider.name} 讀第一 chunk 失敗:`, e);
     try { reader.releaseLock(); } catch {}
     return null;
   }
@@ -135,7 +103,7 @@ async function tryProvider(
         }
         controller.close();
       } catch (e) {
-        console.error(`[tts-fallback] ${target.provider.name} 串流途中錯誤:`, e);
+        console.error(`[tts] ${opts.provider.name} 串流途中錯誤:`, e);
         controller.error(e);
       }
     },
