@@ -256,7 +256,8 @@ export default function RealtimeCallPage() {
 
       roomRef.current = room;
       callStartRef.current = Date.now();
-      if (state !== 'in-call') setState('waiting-agent');
+      // 用 functional setState 避免 closure race（agent 可能已先 fire ParticipantConnected 把 state 設成 in-call）
+      setState(s => s === 'in-call' ? 'in-call' : 'waiting-agent');
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       setErrorMsg(msg);

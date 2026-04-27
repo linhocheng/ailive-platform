@@ -136,3 +136,12 @@ async def entrypoint(ctx: JobContext):
 
     await session.start(agent=agent, room=ctx.room)
     logger.info("Session started, agent active")
+
+    # 主動打招呼（不等用戶開口）— Phase 2 hello world 確認 TTS pipeline
+    try:
+        await session.generate_reply(
+            instructions="用簡短一句話打招呼，告訴用戶你是即時通話測試 agent，請對方說話試試看。",
+        )
+        logger.info("Initial greeting sent")
+    except Exception as e:
+        logger.error(f"Initial greeting failed: {e}")
