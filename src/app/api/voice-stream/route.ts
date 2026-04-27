@@ -36,27 +36,28 @@ import { addUserAction } from '@/lib/character-actions';
 export const maxDuration = 120;
 
 // ===== 句子切割 =====
-// 只切句末標點（。！？!?\n），不切逗號，避免短碎片造成語氣不自然
-// 短句（< 8 字）合併到下一句，減少過短 TTS 請求
-function splitSentences(text: string): string[] {
-  const raw = text.split(/(?<=[。！？!?\n])\s*/).filter(s => s.trim().length > 0);
-  // 短句合併
-  const merged: string[] = [];
-  let buf = '';
-  for (const s of raw) {
-    buf += s;
-    if (buf.replace(/[，,\s]/g, '').length >= 8) {
-      merged.push(buf);
-      buf = '';
-    }
-  }
-  if (buf.trim()) merged.push(buf);
-  return merged;
-}
-
+// 切句末標點（。！？!?\n），不切逗號，避免短碎片造成語氣不自然
+// 跨 chunk 短句合併由 streaming loop 自己用 buffer + 累積門檻處理（見下方主迴圈）
 function isSentenceEnd(text: string): boolean {
   return /[。！？!?\n]/.test(text);
 }
+
+// 嚴格判定：text 是否「以」句末符號結尾（容忍尾隨空白）
+function endsWithSentenceEnd(text: string): boolean {
+  return /[。！？!?\n]\s*$/.test(text);
+}
+
+// 算實字數（去掉標點空白，只算內容字）— 用於 streaming 層的最小累積門檻
+function countMeaningfulChars(text: string): number {
+  return text.replace(/[，,。！？!?…—、；：\s「」『』""''（）()【】《》]/g, '').length;
+}
+
+// streaming 短句合併門檻：
+// - 第一句設 3：保留首字延遲（首句會立刻送 TTS），只擋極端短碎（如「好。」「嗯。」）
+// - 後續句設 15：第一句已開播，後面緩衝累積 1-2s 不影響體感，反而避免「短檔 + throttle 500ms
+//   + 推理 1-2s」的句間 gap
+const FIRST_CHUNK_MIN_CHARS = 3;
+const NEXT_CHUNK_MIN_CHARS = 15;
 
 // ===== SSE helper =====
 function sseEvent(data: object): string {
@@ -709,16 +710,31 @@ specialist 選擇：
             buffer += token;
             fullText += token;
 
-            // 每次有句子結尾就切出來送
+            // 每出現句末符號就嘗試切送
             if (isSentenceEnd(buffer)) {
-              const sentences = splitSentences(buffer);
-              // 最後一個可能不完整，留在 buffer
-              const complete = sentences.slice(0, -1);
-              const remainder = sentences[sentences.length - 1] || '';
-              // 如果最後一個也是句子結尾，全部都完整
-              const lastIsComplete = isSentenceEnd(remainder);
-              const toProcess = lastIsComplete ? sentences : complete;
-              buffer = lastIsComplete ? '' : remainder;
+              const parts = buffer.split(/(?<=[。！？!?\n])\s*/).filter(s => s.length > 0);
+              const last = parts[parts.length - 1] || '';
+              const tailIsComplete = endsWithSentenceEnd(last);
+              const completes = tailIsComplete ? parts : parts.slice(0, -1);
+              const remainder = tailIsComplete ? '' : last;
+
+              // 跨 chunk 累積：未滿門檻的完整短句留回 buffer，等下一段進來合併送
+              // 為什麼：每個 token 都觸發一次切送，若立刻把短句獨立送 MiniMax，會被 throttle
+              // 500ms + 推理 1-2s 連環撐開 → 句間 gap 1.5-2.5s 可感知（像「不用謝。」播完
+              // 等很久才接「你今晚問的問題...」）
+              const toProcess: string[] = [];
+              let agg = '';
+              for (const s of completes) {
+                agg += s;
+                const min = (sentenceIndex === 0 && toProcess.length === 0)
+                  ? FIRST_CHUNK_MIN_CHARS
+                  : NEXT_CHUNK_MIN_CHARS;
+                if (countMeaningfulChars(agg) >= min) {
+                  toProcess.push(agg);
+                  agg = '';
+                }
+              }
+              buffer = agg + remainder;
 
               for (const s of toProcess) {
                 const idx = sentenceIndex++;
