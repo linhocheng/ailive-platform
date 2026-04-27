@@ -30,7 +30,10 @@ load_dotenv(ROOT_DIR / ".env")
 load_dotenv(ROOT_DIR / ".env.local.fresh")  # 開發時用 ailive-platform 的 env
 
 from livekit.agents import Agent, AgentSession, JobContext
-from livekit.plugins import elevenlabs, silero, anthropic, deepgram
+from livekit.plugins import silero, anthropic, deepgram
+
+# MiniMax 自訂 wrapper（江彬教訓 #6：官方 plugin 不相容 1.5.x）
+from agent.minimax_tts import MiniMaxCustomTTS
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("ailive-realtime")
@@ -106,16 +109,20 @@ async def entrypoint(ctx: JobContext):
         temperature=0.7,
     )
 
-    # TTS — ElevenLabs flash_v2_5（Phase 2 統一用 ElevenLabs，Phase 4 才依角色切 MiniMax）
-    elevenlabs_key = os.environ.get("ELEVENLABS_API_KEY", "")
-    elevenlabs_voice_id = os.environ.get("ELEVENLABS_DEFAULT_VOICE_ID", "")
-    if not elevenlabs_key or not elevenlabs_voice_id:
-        logger.critical("ELEVENLABS_API_KEY or ELEVENLABS_DEFAULT_VOICE_ID missing")
+    # TTS — MiniMax 自訂 wrapper（Phase 4 跳級上線，治本）
+    # ElevenLabs key 端到端證實失效；MiniMax 已驗 HTTP 200，且聖嚴本來就是 minimax
+    minimax_key = os.environ.get("MINIMAX_API_KEY", "")
+    minimax_group_id = os.environ.get("MINIMAX_GROUP_ID", "")
+    minimax_voice_id = os.environ.get("MINIMAX_DEFAULT_VOICE_ID", "")
+    if not minimax_key or not minimax_group_id or not minimax_voice_id:
+        logger.critical("MINIMAX_API_KEY / MINIMAX_GROUP_ID / MINIMAX_DEFAULT_VOICE_ID missing")
         return
-    tts = elevenlabs.TTS(
-        voice_id=elevenlabs_voice_id,
-        model="eleven_flash_v2_5",
-        api_key=elevenlabs_key,
+    tts = MiniMaxCustomTTS(
+        api_key=minimax_key,
+        group_id=minimax_group_id,
+        voice_id=minimax_voice_id,
+        model="speech-02-turbo",
+        speed=1.0,
     )
 
     agent = Agent(instructions=PHASE2_HELLO_PROMPT)
