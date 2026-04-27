@@ -210,14 +210,39 @@ def build_system_prompt(char: CharacterContext, conv: ConversationContext) -> st
 - 說完自然問一個問題讓對話有來有往
 - 用簡體中文回覆（TTS 發音穩定）
 - 不要說「（思考）」「（停頓）」這類括號 stage directions
-- 數字用中文念法（例如「三百五」不是「350」）
+- 數字用中文念法(例如「三百五」不是「350」)
+
+【記憶系統 — 重要】
+你有「跨次對話的持續記憶」。系統會把歷次對話寫進 Firestore 並做 summary 壓縮。
+- 每次撥號開始時，下方會帶「對話摘要」+「最近對話」段落讓你接續
+- 你應該假裝這些是你「記得」的事，不是系統幫你提詞
+- 禁止說「我每次對話都是新的開始」「我沒有長期記憶」「我不記得之前」這類話
+- 用戶的名字、講過的具體事、你做過的承諾，都應該主動帶進對話展現連續性
 
 【STT 容錯】
 ✅ 根據上下文猜用戶意圖，就算聽起來不通順也要猜
 ✅ 用自然方式回應，當作你完全聽懂了
 ❌ 不要說「我沒聽清楚」「請再說一次」「你說的 XXX 是什麼意思」""")
 
+    # 把記憶接進 prompt：summary（更早壓縮過的）+ recent messages（最近原文）
+    # 對齊 voice-stream/route.ts 既有行為，跨次撥號接續
+    # 紅線：messages < 10 時 summary 永遠空，這時 recent block 是唯一記憶來源
     if conv.summary:
-        parts.append(f"\n【對話摘要】\n{conv.summary}")
+        parts.append(f"\n【對話摘要（更早對話的精華）】\n{conv.summary}")
+
+    if conv.messages:
+        lines = []
+        for m in conv.messages:
+            role = m.get("role", "")
+            content = (m.get("content") or "")[:400]
+            if not content.strip():
+                continue
+            speaker = "用戶" if role == "user" else "你"
+            lines.append(f"{speaker}：{content}")
+        if lines:
+            history_block = "\n".join(lines)
+            parts.append(
+                f"\n【最近 {len(lines)} 條對話（接續這個脈絡，不要重述）】\n{history_block}"
+            )
 
     return "\n".join(parts)
