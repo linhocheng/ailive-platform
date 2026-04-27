@@ -12,7 +12,10 @@ from agent.realtime_agent import entrypoint
 if __name__ == "__main__":
     # Cloud Run 自動注入 PORT；不要手動設此 env（會被 Cloud Run 拒絕）
     port = int(os.environ.get("PORT", 8080))
+    # agent_name = 'ailive-realtime'：跟江彬共用同一個 LiveKit project，靠 agent_name 隔離 dispatch
+    # token 簽發時指定 agentName='ailive-realtime' → LiveKit 只 dispatch 給這個 name 的 worker
     cli.run_app(WorkerOptions(
         entrypoint_fnc=entrypoint,
+        agent_name="ailive-realtime",
         port=port,
     ))

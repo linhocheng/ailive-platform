@@ -87,12 +87,12 @@ export async function POST(req: NextRequest) {
   });
 
   // 顯式 dispatch agent（LiveKit 1.5.x 新 project 預設要求 explicit dispatch）
-  // agentName 留空字串 = match 任何沒指定 name 的 worker（即我們的 ailive-realtime-agent）
-  // 也透過 metadata 把 character/conv/user 訊息一起送進 agent JobContext
+  // agentName='ailive-realtime'：跟江彬共用同一個 LiveKit project，用 name 區隔避免 dispatch 串錯
+  // worker 端 main.py WorkerOptions(agent_name='ailive-realtime') 對齊
   at.roomConfig = new RoomConfiguration({
     agents: [
       new RoomAgentDispatch({
-        agentName: '',
+        agentName: 'ailive-realtime',
         metadata: JSON.stringify({
           characterId: body.characterId,
           userId,
