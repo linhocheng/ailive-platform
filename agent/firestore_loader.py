@@ -102,6 +102,94 @@ def load_conversation(conv_id: str) -> ConversationContext:
     )
 
 
+def save_conversation(
+    conv_id: str,
+    character_id: str,
+    user_id: str,
+    new_messages: list,  # [{role: 'user'|'assistant', content: str, timestamp?: str}]
+    anthropic_api_key: str = "",
+) -> dict:
+    """通話結束時 append 新訊息到 conv doc，順手壓縮 summary
+
+    對齊 voice-stream/route.ts:758-790 的邏輯：
+    - merge 新 messages 到既有 messages
+    - 超過 10 條時把「最前面 N-10 條」壓縮進 summary（用 Anthropic Haiku）
+    - 保留 last 10 條原文
+
+    Returns: stats dict（用於 log）
+    """
+    _ensure_init()
+    db = firestore.client()
+    ref = db.collection("platform_conversations").document(conv_id)
+    doc = ref.get()
+    existing = doc.to_dict() or {} if doc.exists else {}
+
+    existing_messages = existing.get("messages") or []
+    existing_summary = existing.get("summary") or ""
+    existing_count = int(existing.get("messageCount") or 0)
+
+    # append + 計數
+    merged_messages = existing_messages + new_messages
+    new_count = existing_count + len(new_messages)
+
+    # summary 壓縮（>10 條時把舊的壓進 summary）
+    new_summary = existing_summary
+    if len(merged_messages) > 10 and anthropic_api_key:
+        older = merged_messages[: len(merged_messages) - 10]
+        if len(older) >= 4:  # 對齊 voice-stream:760
+            try:
+                compress_text = "\n".join(
+                    f"{'用戶' if m.get('role') == 'user' else '角色'}：{(m.get('content') or '')[:100]}"
+                    for m in older
+                )
+                import anthropic as anthropic_sdk
+                client = anthropic_sdk.Anthropic(api_key=anthropic_api_key)
+                resp = client.messages.create(
+                    model="claude-haiku-4-5-20251001",
+                    max_tokens=400,
+                    messages=[{
+                        "role": "user",
+                        "content": (
+                            "以下是對話的早期段落，請壓縮成摘要。\n\n"
+                            "務必保留（漏寫即失憶）：\n"
+                            "- 用戶說過的具體事（人事時地物、數字、名稱、地點）\n"
+                            "- 用戶的處境與情緒（最近發生什麼、現在感覺怎樣）\n"
+                            "- 角色（你）做過的承諾、答應的事、約定的時間\n"
+                            "- 角色（你）問過但用戶還沒回答的問題\n"
+                            "- 未完成、待續的話題\n\n"
+                            "抽象的「兩人聊了商業策略」這種無細節句子算失敗。\n"
+                            "直接輸出摘要本體，不要標題、不要編號。\n\n"
+                            f"{compress_text}"
+                        ),
+                    }],
+                )
+                fresh = resp.content[0].text.strip()
+                merged = (existing_summary + "\n" + fresh) if existing_summary else fresh
+                new_summary = merged[-800:]  # 對齊 voice-stream:788
+                logger.info(f"summary compressed: {len(older)} msgs → {len(fresh)} chars")
+            except Exception as e:
+                logger.error(f"summary compression failed: {e}")
+        # 保留 last 10
+        merged_messages = merged_messages[-10:]
+
+    # 寫回（merge=True 不覆蓋既有其他欄位如 lastSession 等）
+    ref.set({
+        "characterId": character_id,
+        "userId": user_id or "anon",
+        "messages": merged_messages,
+        "messageCount": new_count,
+        "summary": new_summary,
+        "updatedAt": firestore.SERVER_TIMESTAMP,
+    }, merge=True)
+
+    return {
+        "appended": len(new_messages),
+        "total_messages": len(merged_messages),
+        "summary_chars": len(new_summary),
+        "messageCount": new_count,
+    }
+
+
 def build_system_prompt(char: CharacterContext, conv: ConversationContext) -> str:
     """組 agent 用的 system prompt — 對齊 voice-stream voiceStableBlock 結構
 

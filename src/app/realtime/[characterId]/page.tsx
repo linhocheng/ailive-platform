@@ -16,7 +16,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, useSearchParams } from 'next/navigation';
 import {
   Room,
   RoomEvent,
@@ -73,6 +73,20 @@ const INITIAL_HEALTH: Health = {
 export default function RealtimeCallPage() {
   const params = useParams<{ characterId: string }>();
   const characterId = params.characterId;
+  const search = useSearchParams();
+  // userId 順序：?u= query > localStorage 穩定 anon > 新 anon-{ts}
+  // M2 對齊：同一 user×character 共用 voice-{c}-{u} conv，跨次撥號接續記憶
+  const userId = (() => {
+    const fromQuery = search.get('u');
+    if (fromQuery) return fromQuery;
+    if (typeof window === 'undefined') return '';
+    let stable = window.localStorage.getItem('ailive_realtime_anon_uid');
+    if (!stable) {
+      stable = `anon-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      window.localStorage.setItem('ailive_realtime_anon_uid', stable);
+    }
+    return stable;
+  })();
 
   const [state, setState] = useState<CallState>('idle');
   const [errorMsg, setErrorMsg] = useState('');
@@ -168,7 +182,7 @@ export default function RealtimeCallPage() {
       const tokenRes = await fetch('/api/livekit/token', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ characterId }),
+        body: JSON.stringify({ characterId, userId }),
       });
       if (!tokenRes.ok) {
         const err = await tokenRes.json().catch(() => ({}));

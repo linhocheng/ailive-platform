@@ -39,6 +39,7 @@ from agent.minimax_tts import MiniMaxCustomTTS
 from agent.firestore_loader import (
     load_character,
     load_conversation,
+    save_conversation,
     build_system_prompt,
 )
 
@@ -183,10 +184,45 @@ async def entrypoint(ctx: JobContext):
 
     call_start = time.time()
 
+    # Phase 5：收集本次通話的 transcript（user + assistant）→ 通話結束寫回 Firestore
+    transcript: list = []
+
+    @session.on("conversation_item_added")
+    def _on_item_added(event):
+        item = getattr(event, "item", None)
+        if not item:
+            return
+        role = getattr(item, "role", "")
+        text = getattr(item, "text_content", "") or getattr(item, "content", "") or ""
+        if not text or not text.strip():
+            return
+        if role in ("user", "assistant"):
+            transcript.append({
+                "role": role,
+                "content": text.strip(),
+                "timestamp": time.time(),
+            })
+
     @ctx.room.on("disconnected")
     def on_disconnected():
         duration = time.time() - call_start
-        logger.info(f"Room disconnected after {duration:.1f}s")
+        logger.info(f"Room disconnected after {duration:.1f}s, transcript={len(transcript)} msgs")
+        # 通話結束寫回 conv（含 summary 壓縮）
+        if transcript and conv_id and character_id:
+            try:
+                anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
+                stats = save_conversation(
+                    conv_id=conv_id,
+                    character_id=character_id,
+                    user_id=user_id,
+                    new_messages=transcript,
+                    anthropic_api_key=anthropic_key,
+                )
+                logger.info(f"Saved to {conv_id}: {stats}")
+            except Exception as e:
+                logger.error(f"save_conversation failed: {e}")
+        else:
+            logger.info(f"Skip save: transcript={len(transcript)}, conv_id={conv_id}, char_id={character_id}")
 
     await session.start(agent=agent, room=ctx.room)
     logger.info("Session started, agent active")

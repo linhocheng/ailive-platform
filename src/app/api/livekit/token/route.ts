@@ -62,8 +62,11 @@ export async function POST(req: NextRequest) {
 
   const ts = Date.now();
   const userId = body.userId || `anon-${ts}`;
-  const convId = body.convId || `realtime-${body.characterId}-${userId}-${ts}`;
-  const roomName = convId;
+  // M2 對齊：即時撥號 + voice-stream 共用 conv（都是「講話」場景，記憶互通）
+  // convId 用 voice-{c}-{u} 格式，不加 ts → 同 user×character 跨次撥號接續
+  // room name 仍要唯一（LiveKit 規定），用 convId + ts
+  const convId = body.convId || `voice-${body.characterId}-${userId}`;
+  const roomName = `realtime-${body.characterId}-${userId}-${ts}`;
   const identity = userId;
 
   const at = new AccessToken(apiKey, apiSecret, {
