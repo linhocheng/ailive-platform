@@ -42,3 +42,9 @@ next-env.d.ts
 .env*.local
 # 備份檔不進 repo
 *.bak
+
+# python (agent/ 子專案)
+__pycache__/
+*.pyc
+*.pyo
+.venv/
