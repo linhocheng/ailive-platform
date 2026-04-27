@@ -19,6 +19,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { AccessToken } from 'livekit-server-sdk';
+import { RoomConfiguration, RoomAgentDispatch } from '@livekit/protocol';
 import { getFirestore } from '@/lib/firebase-admin';
 
 export const dynamic = 'force-dynamic';
@@ -83,6 +84,25 @@ export async function POST(req: NextRequest) {
     canPublish: true,
     canSubscribe: true,
     canPublishData: true,
+  });
+
+  // 顯式 dispatch agent（LiveKit 1.5.x 新 project 預設要求 explicit dispatch）
+  // agentName 留空字串 = match 任何沒指定 name 的 worker（即我們的 ailive-realtime-agent）
+  // 也透過 metadata 把 character/conv/user 訊息一起送進 agent JobContext
+  at.roomConfig = new RoomConfiguration({
+    agents: [
+      new RoomAgentDispatch({
+        agentName: '',
+        metadata: JSON.stringify({
+          characterId: body.characterId,
+          userId,
+          convId,
+          characterName: charData.name || '',
+          voiceId: charData.voiceId || '',
+          ttsProvider: charData.ttsProvider || 'elevenlabs',
+        }),
+      }),
+    ],
   });
 
   const token = await at.toJwt();
