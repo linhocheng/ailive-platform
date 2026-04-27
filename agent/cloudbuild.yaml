@@ -1,0 +1,27 @@
+# ailive-realtime-agent Cloud Build
+# 用法（從 repo root 執行）：
+#   gcloud builds submit --config=agent/cloudbuild.yaml --project=ailive-realtime-2026
+
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-f'
+      - 'agent/Dockerfile'
+      - '-t'
+      - 'asia-east1-docker.pkg.dev/$PROJECT_ID/ailive-agents/realtime-agent:latest'
+      - '-t'
+      - 'asia-east1-docker.pkg.dev/$PROJECT_ID/ailive-agents/realtime-agent:$BUILD_ID'
+      - '.'
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - '--all-tags'
+      - 'asia-east1-docker.pkg.dev/$PROJECT_ID/ailive-agents/realtime-agent'
+
+images:
+  - 'asia-east1-docker.pkg.dev/$PROJECT_ID/ailive-agents/realtime-agent:latest'
+  - 'asia-east1-docker.pkg.dev/$PROJECT_ID/ailive-agents/realtime-agent:$BUILD_ID'
+
+options:
+  logging: CLOUD_LOGGING_ONLY

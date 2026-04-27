@@ -1,0 +1,22 @@
+# ailive-realtime-agent dependencies
+# 注意：LiveKit 套件全部鎖 ==1.5.1（江彬血淚教訓 #6：版本不一致會 ChunkedStream crash）
+
+# LiveKit 核心
+livekit>=1.0.0,<2.0.0
+livekit-agents==1.5.1
+livekit-plugins-elevenlabs==1.5.1
+livekit-plugins-silero==1.5.1
+livekit-plugins-anthropic==1.5.1
+livekit-plugins-deepgram==1.5.1
+
+# Phase 4 上 MiniMax 用自訂 wrapper（不用官方 plugin，江彬教訓 #6）
+# 屆時加：httpx + 自寫 minimax_tts.py
+
+# Phase 3 上 Firestore：firebase-admin
+# firebase-admin==6.5.0
+
+# 環境變數
+python-dotenv>=1.0.0
+
+# 其他
+httpx>=0.26.0
