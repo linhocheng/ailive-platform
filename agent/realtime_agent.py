@@ -35,20 +35,24 @@ from livekit.plugins import silero, anthropic, deepgram
 # MiniMax 自訂 wrapper（江彬教訓 #6：官方 plugin 不相容 1.5.x）
 from agent.minimax_tts import MiniMaxCustomTTS
 
+# Phase 3：從 Firestore 讀角色 soul + 對話歷史
+from agent.firestore_loader import (
+    load_character,
+    load_conversation,
+    build_system_prompt,
+)
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("ailive-realtime")
 
 # 防跨專案 dispatch 串錯。Next.js token API 的 roomName 是 `realtime-{characterId}-{userId}-{ts}`
 PROJECT_NAMESPACE = os.environ.get("PROJECT_NAMESPACE", "realtime")
 
-PHASE2_HELLO_PROMPT = (
-    "你是一個禮貌、簡短的測試助手。這是即時語音通話的端到端連通測試。\n"
-    "請用一兩句話回應使用者，每次回覆都簡短。不要長篇大論。\n"
-    "規則：\n"
-    "1. 回覆使用簡體中文（TTS 發音穩定）\n"
-    "2. 不要說「（思考）」「（停頓）」這類括號 stage directions\n"
-    "3. 數字用中文念法（例如「三百五」不是「350」）\n"
-    "4. 第一句先打招呼說『你好，我是即時通話測試 agent』\n"
+# Phase 3 後 prompt 由 firestore_loader.build_system_prompt 動態組（角色 soul + summary）
+# 留 fallback 給 metadata 不正常時使用
+FALLBACK_PROMPT = (
+    "你是一個禮貌、簡短的測試助手。這是即時語音通話。\n"
+    "用簡體中文回覆，一兩句話即可。不要說（思考）（停頓）這類 stage directions。"
 )
 
 
@@ -64,19 +68,47 @@ async def entrypoint(ctx: JobContext):
         )
         return
 
+    # Phase 3：解析 dispatch metadata 拿 characterId / userId / convId
+    # token API 透過 RoomAgentDispatch.metadata 傳進來
+    dispatch_metadata = {}
+    try:
+        if ctx.job.metadata:
+            dispatch_metadata = json.loads(ctx.job.metadata)
+            logger.info(f"Job metadata: {dispatch_metadata}")
+    except (json.JSONDecodeError, TypeError) as e:
+        logger.warning(f"Job metadata parse failed: {e}")
+
+    character_id = dispatch_metadata.get("characterId", "")
+    user_id = dispatch_metadata.get("userId", "")
+    conv_id = dispatch_metadata.get("convId", "")
+
+    # 從 Firestore 讀角色 soul + 對話 summary
+    system_prompt = FALLBACK_PROMPT
+    char_name = "agent"
+    if character_id:
+        try:
+            char_ctx = load_character(character_id)
+            conv_ctx = load_conversation(conv_id) if conv_id else None
+            if conv_ctx is None:
+                from agent.firestore_loader import ConversationContext
+                conv_ctx = ConversationContext(conv_id="", summary="", messages=[])
+            system_prompt = build_system_prompt(char_ctx, conv_ctx)
+            char_name = char_ctx.name
+            logger.info(
+                f"Loaded character={char_name} id={character_id} "
+                f"soul_chars={len(char_ctx.soul_text)} summary_chars={len(conv_ctx.summary)} "
+                f"voice_minimax={char_ctx.voice_id_minimax or '(empty, fallback)'}"
+            )
+        except Exception as e:
+            logger.error(f"Firestore load failed, using fallback prompt: {e}")
+    else:
+        logger.warning("No characterId in metadata, using fallback prompt")
+
     await ctx.connect()
     logger.info("Connected to room, waiting for participant...")
 
     participant = await ctx.wait_for_participant()
     logger.info(f"Participant joined: {participant.identity}")
-
-    # Phase 2：room metadata 帶了 characterId 但先不使用，留 log 為 Phase 3 接續做準備
-    if participant.metadata:
-        try:
-            meta = json.loads(participant.metadata)
-            logger.info(f"Participant metadata (Phase 2 ignored, Phase 3 will use): {meta}")
-        except (json.JSONDecodeError, TypeError):
-            logger.warning("Participant metadata not parseable JSON")
 
     # Voice Activity Detection
     vad = silero.VAD.load(
@@ -125,7 +157,8 @@ async def entrypoint(ctx: JobContext):
         speed=1.0,
     )
 
-    agent = Agent(instructions=PHASE2_HELLO_PROMPT)
+    agent = Agent(instructions=system_prompt)
+    logger.info(f"Agent initialized with {char_name} soul, prompt={len(system_prompt)} chars")
 
     session = AgentSession(
         stt=stt,
@@ -144,10 +177,10 @@ async def entrypoint(ctx: JobContext):
     await session.start(agent=agent, room=ctx.room)
     logger.info("Session started, agent active")
 
-    # 主動打招呼（不等用戶開口）— Phase 2 hello world 確認 TTS pipeline
+    # 主動打招呼 — Phase 3：由角色 soul 自己決定打招呼方式（不再 hardcode 內容）
     try:
         await session.generate_reply(
-            instructions="用簡短一句話打招呼，告訴用戶你是即時通話測試 agent，請對方說話試試看。",
+            instructions="用一句話自然打招呼，符合你的人格。如果對話摘要中有上次聊過的東西，可以順手帶出。",
         )
         logger.info("Initial greeting sent")
     except Exception as e:

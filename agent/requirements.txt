@@ -13,6 +13,9 @@ livekit-plugins-deepgram==1.5.1
 # 用 aiohttp 直打 MiniMax t2a_v2 REST API，取得 PCM 後 emit AudioFrame
 aiohttp>=3.9.0
 
+# Phase 3：從 Firestore 讀角色 soul + 對話歷史
+firebase-admin>=6.5.0
+
 # Phase 3 上 Firestore：firebase-admin
 # firebase-admin==6.5.0
 
