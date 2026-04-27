@@ -120,9 +120,11 @@ class MiniMaxChunkedStream(tts.ChunkedStream):
             "stream": False,
             "voice_setting": {
                 "voice_id": self._opts.voice_id,
-                "speed": int(self._opts.speed),
-                "vol": int(self._opts.vol),
-                "pitch": int(self._opts.pitch),
+                # 江彬 minimax_tts 原寫 int()，但 MiniMax API speed/vol 是 float（0.5-2.0），
+                # 0.9 / 1.2 這種小數 cast 成 0/1 → 念太慢或不發聲。修正為 float。
+                "speed": float(self._opts.speed),
+                "vol": float(self._opts.vol),
+                "pitch": int(self._opts.pitch),  # pitch 是 int (-12 ~ 12) 不變
             },
             "audio_setting": {
                 "sample_rate": int(self._opts.sample_rate),

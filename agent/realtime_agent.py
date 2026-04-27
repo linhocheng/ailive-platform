@@ -82,9 +82,10 @@ async def entrypoint(ctx: JobContext):
     user_id = dispatch_metadata.get("userId", "")
     conv_id = dispatch_metadata.get("convId", "")
 
-    # 從 Firestore 讀角色 soul + 對話 summary
+    # 從 Firestore 讀角色 soul + 對話 summary（Phase 3）+ TTS 設定（Phase 4.x）
     system_prompt = FALLBACK_PROMPT
     char_name = "agent"
+    char_ctx = None  # outer scope，給後面 TTS 初始化讀
     if character_id:
         try:
             char_ctx = load_character(character_id)
@@ -141,20 +142,33 @@ async def entrypoint(ctx: JobContext):
         temperature=0.7,
     )
 
-    # TTS — MiniMax 自訂 wrapper（Phase 4 跳級上線，治本）
-    # ElevenLabs key 端到端證實失效；MiniMax 已驗 HTTP 200，且聖嚴本來就是 minimax
+    # TTS — MiniMax 自訂 wrapper
+    # Phase 4.x：voice_id + speed/pitch 從 character doc 讀，沒設則 fallback default
     minimax_key = os.environ.get("MINIMAX_API_KEY", "")
     minimax_group_id = os.environ.get("MINIMAX_GROUP_ID", "")
-    minimax_voice_id = os.environ.get("MINIMAX_DEFAULT_VOICE_ID", "")
-    if not minimax_key or not minimax_group_id or not minimax_voice_id:
+    default_voice_id = os.environ.get("MINIMAX_DEFAULT_VOICE_ID", "")
+    if not minimax_key or not minimax_group_id or not default_voice_id:
         logger.critical("MINIMAX_API_KEY / MINIMAX_GROUP_ID / MINIMAX_DEFAULT_VOICE_ID missing")
         return
+
+    # 角色設定優先：voice_id 從 character.voiceIdMinimax；speed/pitch 從 ttsSettings.minimax
+    char_voice_id = char_ctx.voice_id_minimax if char_ctx else ""
+    voice_id = char_voice_id or default_voice_id
+    settings = (char_ctx.tts_settings_minimax if char_ctx else {}) or {}
+    speed = settings.get("speed", 1.0)
+    pitch = settings.get("pitch", 0)
+    logger.info(
+        f"TTS: MiniMax voice={voice_id} (from {'character' if char_voice_id else 'default'}) "
+        f"speed={speed} pitch={pitch}"
+    )
+
     tts = MiniMaxCustomTTS(
         api_key=minimax_key,
         group_id=minimax_group_id,
-        voice_id=minimax_voice_id,
+        voice_id=voice_id,
         model="speech-02-turbo",
-        speed=1.0,
+        speed=speed,
+        pitch=pitch,
     )
 
     agent = Agent(instructions=system_prompt)
