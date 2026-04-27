@@ -205,17 +205,14 @@ export default function RealtimeCallPage() {
           }
         })
         .on(RoomEvent.ParticipantConnected, (p: RemoteParticipant) => {
+          // LiveKit room 只會有 user + agent 兩個 participant，任何 RemoteParticipant 進來 = agent
           log('info', `participant joined: ${p.identity}`);
-          if (p.identity.startsWith('agent-') || p.identity.includes('agent')) {
-            setHealth(h => ({ ...h, agent: 'present' }));
-            setState('in-call');
-          }
+          setHealth(h => ({ ...h, agent: 'present' }));
+          setState('in-call');
         })
         .on(RoomEvent.ParticipantDisconnected, (p: RemoteParticipant) => {
           log('warn', `participant left: ${p.identity}`);
-          if (p.identity.startsWith('agent-') || p.identity.includes('agent')) {
-            setHealth(h => ({ ...h, agent: 'absent' }));
-          }
+          setHealth(h => ({ ...h, agent: 'absent' }));
         })
         .on(RoomEvent.TrackSubscribed, (track: RemoteTrack, _pub: RemoteTrackPublication, p: RemoteParticipant) => {
           log('info', `track subscribed: kind=${track.kind} from=${p.identity}`);
@@ -250,14 +247,12 @@ export default function RealtimeCallPage() {
       await room.localParticipant.setMicrophoneEnabled(true);
       log('info', 'mic published to room');
 
-      // 檢查目前已在房內的 agent participant（race condition: agent 可能比我先進房）
-      room.remoteParticipants.forEach(p => {
-        if (p.identity.startsWith('agent-') || p.identity.includes('agent')) {
-          setHealth(h => ({ ...h, agent: 'present' }));
-          setState('in-call');
-          log('info', `agent already in room: ${p.identity}`);
-        }
-      });
+      // 檢查目前已在房內的 remote participant（race condition: agent 可能比我先進房）
+      if (room.remoteParticipants.size > 0) {
+        room.remoteParticipants.forEach(p => log('info', `agent already in room: ${p.identity}`));
+        setHealth(h => ({ ...h, agent: 'present' }));
+        setState('in-call');
+      }
 
       roomRef.current = room;
       callStartRef.current = Date.now();
