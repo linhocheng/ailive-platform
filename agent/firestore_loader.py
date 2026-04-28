@@ -53,6 +53,7 @@ class ConversationContext:
     messages: list  # last 10, [{role, content}]
     last_updated_ms: int = 0  # ms epoch；0 = 沒更新過或新 conv
     message_count: int = 0
+    last_session: dict | None = None  # {summary, endingMood, unfinishedThreads, updatedAt}
 
 
 @dataclass
@@ -155,6 +156,7 @@ def load_conversation(conv_id: str) -> ConversationContext:
         messages=msgs[-10:],
         last_updated_ms=last_ms,
         message_count=int(d.get("messageCount") or 0),
+        last_session=d.get("lastSession") or None,
     )
 
 
@@ -206,12 +208,81 @@ def load_recent_actions(
     return items[:limit]
 
 
+def extract_session_summary(
+    transcript: list,
+    anthropic_api_key: str,
+) -> dict | None:
+    """從本次通話 transcript 萃取 lastSession（給下次撥號開場用）
+
+    對齊 src/lib/session-summary.ts:extractSessionSummary 的 prompt + 結構。
+    回傳 None 代表對話太短或解析失敗（caller 應靜默跳過）。
+    """
+    if not transcript or len(transcript) < 4:
+        return None
+    text_parts = []
+    for m in transcript:
+        role = "用戶" if m.get("role") == "user" else "角色"
+        content = (m.get("content") or "")[:300]
+        line = f"{role}：{content}"
+        if len(line) > 5:
+            text_parts.append(line)
+    text = "\n".join(text_parts)
+    if len(text) > 6000:
+        text = text[-6000:]  # 取尾段，最近的對話最重要
+    if len(text) < 30:
+        return None
+
+    try:
+        import anthropic as anthropic_sdk
+        client = anthropic_sdk.Anthropic(api_key=anthropic_api_key)
+        resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=350,
+            messages=[{
+                "role": "user",
+                "content": (
+                    "以下是一段對話記錄。請產出一個 JSON 物件，給「下次對話」開場用的快照。\n\n"
+                    "欄位：\n"
+                    "- summary: 一句話白描這段對話聊了什麼主題（≤40 字，繁體中文）\n"
+                    "- endingMood: positive / neutral / concerned / unfinished 四選一（看對話走向判斷氣氛）\n"
+                    "- unfinishedThreads: 角色提到但沒講完、或用戶問了但沒解決的話題（字串陣列，可空）\n\n"
+                    "回傳格式（只回 JSON，不要其他文字、不要 code fence）：\n"
+                    "{\"summary\":\"...\",\"endingMood\":\"neutral\",\"unfinishedThreads\":[]}\n\n"
+                    f"對話：\n{text}"
+                ),
+            }],
+        )
+        raw = resp.content[0].text.strip()
+        # 容忍 code fence
+        if raw.startswith("```"):
+            raw = raw.split("```")[1] if "```" in raw[3:] else raw
+            if raw.startswith("json\n"):
+                raw = raw[5:]
+            raw = raw.strip()
+        parsed = json.loads(raw)
+        if not parsed.get("summary"):
+            return None
+        return {
+            "summary": str(parsed["summary"])[:80],
+            "endingMood": parsed.get("endingMood") or "neutral",
+            "unfinishedThreads": [
+                str(t) for t in (parsed.get("unfinishedThreads") or [])
+                if t
+            ][:5],
+            "updatedAt": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as e:
+        logger.warning(f"extract_session_summary failed: {e}")
+        return None
+
+
 def save_conversation(
     conv_id: str,
     character_id: str,
     user_id: str,
     new_messages: list,  # [{role: 'user'|'assistant', content: str, timestamp?: str}]
     anthropic_api_key: str = "",
+    last_session: dict | None = None,  # P1: 通話結束抽出的 lastSession 快照
 ) -> dict:
     """通話結束時 append 新訊息到 conv doc，順手壓縮 summary
 
@@ -276,22 +347,52 @@ def save_conversation(
         # 保留 last 10
         merged_messages = merged_messages[-10:]
 
-    # 寫回（merge=True 不覆蓋既有其他欄位如 lastSession 等）
-    ref.set({
+    # 寫回（merge=True 不覆蓋其他欄位）
+    payload = {
         "characterId": character_id,
         "userId": user_id or "anon",
         "messages": merged_messages,
         "messageCount": new_count,
         "summary": new_summary,
         "updatedAt": firestore.SERVER_TIMESTAMP,
-    }, merge=True)
+    }
+    if last_session:
+        payload["lastSession"] = last_session
+    ref.set(payload, merge=True)
 
     return {
         "appended": len(new_messages),
         "total_messages": len(merged_messages),
         "summary_chars": len(new_summary),
         "messageCount": new_count,
+        "last_session_saved": bool(last_session),
     }
+
+
+_MOOD_LABEL = {
+    "positive": "聊得愉快",
+    "concerned": "對方心情不太好",
+    "unfinished": "意猶未盡",
+    # neutral 不顯示，避免雜訊
+}
+
+
+def build_last_session_block(last_session: dict | None) -> str:
+    """對齊 src/lib/last-session-block.ts:buildLastSessionBlock"""
+    if not last_session or not last_session.get("summary"):
+        return ""
+    parts = [f"\n\n---\n【上次對話】{last_session['summary']}"]
+    mood = last_session.get("endingMood")
+    if mood and mood in _MOOD_LABEL:
+        parts.append(f"氣氛：{_MOOD_LABEL[mood]}")
+    threads = last_session.get("unfinishedThreads") or []
+    if isinstance(threads, list) and threads:
+        parts.append(f"未完話題：{'、'.join(threads[:2])}")
+    parts.append(
+        "（可以自然帶出延續上次，也可以完全不提，看情境與對方開場。"
+        "不要硬套、不要報告式複述。）"
+    )
+    return "\n".join(parts)
 
 
 _ACTION_LABEL = {
@@ -397,6 +498,11 @@ def build_system_prompt(
         parts.append(
             f"\n【我對這位用戶說過的話 / 答應過的事（還沒兌現的優先帶進來）】\n{action_block}"
         )
+
+    # P1：上次對話快照（Smart Greeting）
+    last_session_block = build_last_session_block(conv.last_session)
+    if last_session_block:
+        parts.append(last_session_block)
 
     # 把記憶接進 prompt：summary（更早壓縮過的）+ recent messages（最近原文）
     # 對齊 voice-stream/route.ts 既有行為，跨次撥號接續

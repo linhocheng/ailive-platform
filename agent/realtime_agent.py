@@ -42,6 +42,7 @@ from agent.firestore_loader import (
     load_conversation,
     load_recent_actions,
     save_conversation,
+    extract_session_summary,
     build_system_prompt,
 )
 
@@ -222,16 +223,21 @@ async def entrypoint(ctx: JobContext):
     def on_disconnected():
         duration = time.time() - call_start
         logger.info(f"Room disconnected after {duration:.1f}s, transcript={len(transcript)} msgs")
-        # 通話結束寫回 conv（含 summary 壓縮）
+        # 通話結束寫回 conv（含 summary 壓縮 + P1 lastSession 快照）
         if transcript and conv_id and character_id:
             try:
                 anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
+                # P1：抽 lastSession（Smart Greeting 用）
+                last_session = extract_session_summary(transcript, anthropic_key)
+                if last_session:
+                    logger.info(f"lastSession: {last_session}")
                 stats = save_conversation(
                     conv_id=conv_id,
                     character_id=character_id,
                     user_id=user_id,
                     new_messages=transcript,
                     anthropic_api_key=anthropic_key,
+                    last_session=last_session,
                 )
                 logger.info(f"Saved to {conv_id}: {stats}")
             except Exception as e:
