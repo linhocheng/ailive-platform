@@ -1,18 +1,18 @@
 """
-Firestore loader — 從 ailive-platform 既有 schema 讀角色 soul + 對話歷史
+Firestore loader — 從 ailive-platform 既有 schema 讀角色 soul + 對話歷史 + 角色承諾
 
-讀法照抄 voice-stream/route.ts 的優先序，避免「真相分裂」（同一角色在文字 / 語音 /
-即時撥號三種對話模式下用同一份 soul + conv）。
+讀法照抄 voice-stream/route.ts 的優先序，避免「真相分裂」。
 
 - platform_characters.{characterId}: aiName / system_soul / soul_core / enhancedSoul / soul
 - platform_conversations.{convId}:    summary / messages（last 10）/ updatedAt
-
-Phase 3：先讀，不寫。寫回是 Phase 5。
+- platform_insights:                  characterId × userId 的 actions（promise/question/event/note）
 """
 import json
 import logging
+import math
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime, timezone, timedelta
 
 import firebase_admin
 from firebase_admin import credentials, firestore
@@ -51,6 +51,45 @@ class ConversationContext:
     conv_id: str
     summary: str
     messages: list  # last 10, [{role, content}]
+    last_updated_ms: int = 0  # ms epoch；0 = 沒更新過或新 conv
+    message_count: int = 0
+
+
+@dataclass
+class ActionEntry:
+    action_type: str  # promise/question/event/note/general
+    title: str
+    content: str
+    created_at: str  # ISO
+    fulfilled: bool = False
+
+
+# ────────────────────────────────────────────────────────────────────
+# 時間感知（對齊 src/lib/time-awareness.ts）
+# 閾值 10 分鐘 + 4 檔位（分/小時/天/週），統一用 round（不 floor）
+# ────────────────────────────────────────────────────────────────────
+NEW_VISIT_THRESHOLD_MS = 10 * 60 * 1000
+
+
+def format_gap(ms: int) -> str:
+    minutes = ms / 60000
+    if minutes < 60:
+        return f"約 {round(minutes)} 分鐘"
+    if minutes < 1440:
+        return f"約 {round(minutes / 60)} 小時"
+    if minutes < 10080:
+        return f"約 {round(minutes / 1440)} 天"
+    return f"約 {round(minutes / 10080)} 週"
+
+
+def should_inject_gap(last_updated_ms: int, message_count: int) -> tuple[bool, str]:
+    if message_count <= 0 or last_updated_ms <= 0:
+        return (False, "")
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    gap_ms = now_ms - last_updated_ms
+    if gap_ms <= NEW_VISIT_THRESHOLD_MS:
+        return (False, "")
+    return (True, format_gap(gap_ms))
 
 
 def load_character(character_id: str) -> CharacterContext:
@@ -84,7 +123,7 @@ def load_character(character_id: str) -> CharacterContext:
 
 
 def load_conversation(conv_id: str) -> ConversationContext:
-    """讀 platform_conversations doc，回傳 summary + last 10 messages
+    """讀 platform_conversations doc，回傳 summary + last 10 messages + updatedAt
 
     沒有 conv 也回空殼，不 raise（新通話就是新 conv）。
     """
@@ -95,11 +134,76 @@ def load_conversation(conv_id: str) -> ConversationContext:
         return ConversationContext(conv_id=conv_id, summary="", messages=[])
     d = doc.to_dict() or {}
     msgs = d.get("messages") or []
+
+    # 解析 updatedAt（既有 conv 可能存 ISO string 或 firestore Timestamp）
+    last_ms = 0
+    raw = d.get("updatedAt")
+    if raw:
+        try:
+            if isinstance(raw, str):
+                # ISO string，譬如 voice-stream 寫的
+                last_ms = int(datetime.fromisoformat(raw.replace("Z", "+00:00")).timestamp() * 1000)
+            elif hasattr(raw, "timestamp"):
+                # firestore SERVER_TIMESTAMP 解出來是 datetime
+                last_ms = int(raw.timestamp() * 1000)
+        except Exception as e:
+            logger.warning(f"updatedAt parse failed: {e}")
+
     return ConversationContext(
         conv_id=conv_id,
         summary=d.get("summary") or "",
-        messages=msgs[-10:],  # 對齊 voice-stream:165
+        messages=msgs[-10:],
+        last_updated_ms=last_ms,
+        message_count=int(d.get("messageCount") or 0),
     )
+
+
+def load_recent_actions(
+    character_id: str,
+    user_id: str,
+    days: int = 7,
+    limit: int = 5,
+    unfulfilled_only: bool = True,
+) -> list:
+    """讀 platform_insights 該 (角色, 用戶) 對的近期 actions
+
+    對齊 ailive src/lib/character-actions.ts:getRecentUserActions
+    - 不用 orderBy 避免要組合索引；client 端依 createdAt 排序
+    - 預設只撈 unfulfilled（promise/question 還沒兌現的更該帶進 prompt）
+    """
+    _ensure_init()
+    db = firestore.client()
+    q = (
+        db.collection("platform_insights")
+        .where("characterId", "==", character_id)
+        .where("userId", "==", user_id)
+    )
+    if unfulfilled_only:
+        q = q.where("fulfilled", "==", False)
+    snap = q.limit(max(limit * 3, 30)).get()
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    items = []
+    for d in snap:
+        data = d.to_dict() or {}
+        created = data.get("createdAt") or ""
+        if not created:
+            continue
+        try:
+            created_dt = datetime.fromisoformat(str(created).replace("Z", "+00:00"))
+            if created_dt < cutoff:
+                continue
+        except Exception:
+            continue
+        items.append(ActionEntry(
+            action_type=data.get("actionType") or "general",
+            title=str(data.get("title") or ""),
+            content=str(data.get("content") or ""),
+            created_at=str(created),
+            fulfilled=bool(data.get("fulfilled")),
+        ))
+    items.sort(key=lambda a: a.created_at, reverse=True)
+    return items[:limit]
 
 
 def save_conversation(
@@ -190,15 +294,58 @@ def save_conversation(
     }
 
 
-def build_system_prompt(char: CharacterContext, conv: ConversationContext) -> str:
+_ACTION_LABEL = {
+    "promise": "我答應過",
+    "question": "我問過（用戶還沒回）",
+    "event": "他/她的事",
+    "note": "記住",
+    "general": "我說過",
+}
+
+
+def format_action_block(actions: list) -> str:
+    """把 actions 組成 prompt 段落（對齊 voice-stream/dialogue 的注入格式）"""
+    if not actions:
+        return ""
+    lines = []
+    today = datetime.now(timezone.utc).date()
+    for a in actions:
+        # 日期遠近
+        try:
+            ad = datetime.fromisoformat(a.created_at.replace("Z", "+00:00")).date()
+            days_ago = (today - ad).days
+            if days_ago == 0:
+                date_str = "今天"
+            elif days_ago == 1:
+                date_str = "昨天"
+            elif days_ago == 2:
+                date_str = "前天"
+            else:
+                date_str = f"{days_ago} 天前"
+        except Exception:
+            date_str = ""
+        label = _ACTION_LABEL.get(a.action_type, "")
+        title = a.title or a.content[:50]
+        prefix = f"- {date_str}（{label}）" if label else f"- {date_str}"
+        lines.append(f"{prefix}：{title}")
+    return "\n".join(lines)
+
+
+def build_system_prompt(
+    char: CharacterContext,
+    conv: ConversationContext,
+    actions: list | None = None,
+) -> str:
     """組 agent 用的 system prompt — 對齊 voice-stream voiceStableBlock 結構
 
-    精簡版（即時通話 hello world phase 3）：
+    結構：
     - 角色 soul
-    - 語音對話天條（說人話）
-    - STT 容錯
-    - 對話摘要（如有）
-    - 不含委派工具（Phase 7 才接）
+    - 語音對話天條 + STT 容錯 + 記憶系統說明
+    - 當前時間（台北）+ 時間遠近指引
+    - 時間感知 gap（距離上次對話多久）
+    - 角色承諾（platform_insights 近 7 天 unfulfilled actions）
+    - 對話摘要（更早對話精華）
+    - 最近 N 條對話（接續脈絡）
     """
     parts = [char.soul_text]
 
@@ -223,6 +370,33 @@ def build_system_prompt(char: CharacterContext, conv: ConversationContext) -> st
 ✅ 根據上下文猜用戶意圖，就算聽起來不通順也要猜
 ✅ 用自然方式回應，當作你完全聽懂了
 ❌ 不要說「我沒聽清楚」「請再說一次」「你說的 XXX 是什麼意思」""")
+
+    # 當前時間（台北 GMT+8）+ 時間遠近指引（對齊江彬 context_builder:38-43）
+    tw_tz = timezone(timedelta(hours=8))
+    now = datetime.now(tw_tz)
+    weekday_names = ['一', '二', '三', '四', '五', '六', '日']
+    time_str = now.strftime(f"%Y年%m月%d日 星期{weekday_names[now.weekday()]} %H:%M")
+    parts.append(
+        f"\n【當前時間】{time_str}\n"
+        "請依對話紀錄的時間戳判斷遠近：同一天內用「剛才」「剛剛」，"
+        "昨天的用「昨天」，超過兩天才用「前幾天」「上次」。"
+        "絕對不要把幾分鐘前的事說成「上次」「之前」。"
+    )
+
+    # 時間感知 gap（對齊 voice-stream:174-182）
+    gap_inject, gap_text = should_inject_gap(conv.last_updated_ms, conv.message_count)
+    if gap_inject:
+        parts.append(
+            f"\n【時間感知】距離上次跟用戶對話過了 {gap_text}。\n"
+            "可以自然帶出，也可以什麼都不說，看情境決定。"
+        )
+
+    # 角色承諾（platform_insights 近 7 天 unfulfilled）
+    action_block = format_action_block(actions or [])
+    if action_block:
+        parts.append(
+            f"\n【我對這位用戶說過的話 / 答應過的事（還沒兌現的優先帶進來）】\n{action_block}"
+        )
 
     # 把記憶接進 prompt：summary（更早壓縮過的）+ recent messages（最近原文）
     # 對齊 voice-stream/route.ts 既有行為，跨次撥號接續

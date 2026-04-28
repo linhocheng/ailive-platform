@@ -20,6 +20,7 @@ import logging
 import os
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -39,6 +40,7 @@ from agent.minimax_tts import MiniMaxCustomTTS
 from agent.firestore_loader import (
     load_character,
     load_conversation,
+    load_recent_actions,
     save_conversation,
     build_system_prompt,
 )
@@ -94,11 +96,20 @@ async def entrypoint(ctx: JobContext):
             if conv_ctx is None:
                 from agent.firestore_loader import ConversationContext
                 conv_ctx = ConversationContext(conv_id="", summary="", messages=[])
-            system_prompt = build_system_prompt(char_ctx, conv_ctx)
+            # P0：載入 character-actions（近 7 天未兌現的承諾/問題）
+            actions = []
+            if user_id:
+                try:
+                    actions = load_recent_actions(character_id, user_id, days=7, limit=5)
+                except Exception as e:
+                    logger.warning(f"load_recent_actions failed: {e}")
+            system_prompt = build_system_prompt(char_ctx, conv_ctx, actions=actions)
             char_name = char_ctx.name
             logger.info(
                 f"Loaded character={char_name} id={character_id} "
                 f"soul_chars={len(char_ctx.soul_text)} summary_chars={len(conv_ctx.summary)} "
+                f"messages={len(conv_ctx.messages)} actions={len(actions)} "
+                f"last_gap_ms={int(datetime.now(timezone.utc).timestamp()*1000) - conv_ctx.last_updated_ms if conv_ctx.last_updated_ms else 'n/a'} "
                 f"voice_minimax={char_ctx.voice_id_minimax or '(empty, fallback)'}"
             )
         except Exception as e:
