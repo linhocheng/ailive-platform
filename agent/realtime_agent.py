@@ -148,10 +148,14 @@ async def entrypoint(ctx: JobContext):
     if not anthropic_key:
         logger.critical("ANTHROPIC_API_KEY missing")
         return
+    # P3：開啟 prompt caching（cache system prompt + tools + chat history）
+    # 同一 instance 內 5 分鐘內再次請求，cache hit 省 70-90% input token
+    # plugin 會 emit cache_creation/cache_read metrics 到 LLMMetrics
     llm = anthropic.LLM(
         model="claude-haiku-4-5-20251001",
         api_key=anthropic_key,
         temperature=0.7,
+        caching="ephemeral",
     )
 
     # TTS — MiniMax 自訂 wrapper
