@@ -25,6 +25,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
+import { getAnthropicClient } from '@/lib/anthropic-via-bridge';
 import { getFirestore } from '@/lib/firebase-admin';
 import {
   generateWithGemini,
@@ -102,7 +103,7 @@ export async function POST(req: NextRequest) {
 
     // 4. Sonnet 4.6 + 瞬的 soul：brief → Gemini prompt + workLog
     const apiKey = (process.env.ANTHROPIC_API_KEY || '').replace(/^"|"$/g, '');
-    const anthropic = new Anthropic({ apiKey });
+    const anthropic = getAnthropicClient(apiKey);
 
     // 基礎指令
     const baseInstructions = `你現在收到一個出圖委託。你的任務：

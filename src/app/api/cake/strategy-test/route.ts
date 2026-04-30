@@ -33,6 +33,7 @@
  */
 import { NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
+import { getAnthropicClient } from '@/lib/anthropic-via-bridge';
 import {
   Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType,
   PageOrientation, LevelFormat, TableOfContents,
@@ -222,7 +223,7 @@ export async function POST() {
     // 2. Sonnet 4.6 一次大長文 generation
     const apiKey = (process.env.ANTHROPIC_API_KEY || '').replace(/^"|"$/g, '');
     if (!apiKey) throw new Error('ANTHROPIC_API_KEY missing');
-    const anthropic = new Anthropic({ apiKey });
+    const anthropic = getAnthropicClient(apiKey);
 
     const tLLMStart = Date.now();
     const sysPrompt = `${aoSoul}\n\n---\n\n${STRUCTURE_GUIDE}`;

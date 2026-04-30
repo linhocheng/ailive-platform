@@ -13,6 +13,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
+import { getAnthropicClient } from '@/lib/anthropic-via-bridge';
 import { withRetry } from '@/lib/anthropic-retry';
 import { shouldInjectGap } from '@/lib/time-awareness';
 import { detectGear, MODELS, getMaxTokens } from '@/lib/llm-router';
@@ -26,7 +27,10 @@ import { generateImagePath } from '@/lib/image-storage';
 import { redis } from '@/lib/redis';
 import { extractSessionSummary, messagesToDialogueText, type LastSession } from '@/lib/session-summary';
 import { buildLastSessionBlock } from '@/lib/last-session-block';
-import { addUserAction } from '@/lib/character-actions';
+import { addUserAction, getRecentUserActions, formatActionsBlock } from '@/lib/character-actions';
+import { buildTimeRulesBlock } from '@/lib/time-rules';
+import { loadUserProfile, upsertUserProfile, formatProfileBlock } from '@/lib/user-profile';
+import { loadUserObservations, upsertUserObservations, formatObservationsBlock } from '@/lib/user-observations';
 
 export const maxDuration = 120;
 
@@ -61,15 +65,6 @@ async function getCachedChar(
   const skills = skillsSnap.docs.map((d: FirebaseFirestore.QueryDocumentSnapshot) => d.data());
   charCache.set(characterId, { data, skills, cachedAt: now });
   return { data, skills };
-}
-
-// ===== 台北時間 =====
-function getTaipeiTime(): string {
-  return new Date().toLocaleString('zh-TW', {
-    timeZone: 'Asia/Taipei',
-    year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', weekday: 'long',
-  });
 }
 
 function getTaipeiDate(): string {
@@ -407,6 +402,53 @@ const STRATEGIST_TOOLS: Anthropic.Tool[] = [
         target_character_name: { type: 'string', description: '角色名字' },
       },
       required: ['target_character_id', 'target_character_name'],
+    },
+  },
+  {
+    name: 'update_user_profile',
+    description: '記錄用戶**親口說過**的基本事實（跨角色共用）。\n只在用戶明確「說」的時候呼叫，不要從對話推論。例如：\n- 用戶說「我叫 Adam」→ field=name, value=Adam\n- 用戶說「我做設計的」→ field=occupation, value=設計\n- 用戶說「我喜歡攝影」→ field=interests, value=攝影（單條會 append）\n推測的個性、偏好不要用這個工具，用 record_user_observation。',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        field: { type: 'string', enum: ['name', 'birthday', 'age', 'occupation', 'interests', 'extraInfo'], description: '要更新的欄位' },
+        value: { type: 'string', description: '欄位值。birthday 用 YYYY-MM-DD；age 用數字字串；interests 一次填一條會 append。' },
+      },
+      required: ['field', 'value'],
+    },
+  },
+  {
+    name: 'record_user_observation',
+    description: '記錄你對用戶的**主觀觀察**（你自己的視角，不分享給其他角色）。\n從對話中感受到、推論出來的東西用這個工具。例如：\n- 你感覺「她個性偏內向但對深度議題會打開」→ field=personality\n- 你推測「她偏好直接切入」→ field=preferences\n- 你猜「她可能對哲學感興趣」→ field=inferredInterests\n用戶親口說的事實不要用這個工具，用 update_user_profile。',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        field: { type: 'string', enum: ['personality', 'preferences', 'inferredInterests', 'notes'], description: '要更新的欄位' },
+        value: { type: 'string', description: '觀察內容。preferences/inferredInterests 一次填一條會 append。' },
+      },
+      required: ['field', 'value'],
+    },
+  },
+  {
+    name: 'record_promise',
+    description: `把你剛對用戶做的承諾／問的問題／聽到的重要事記下來，下次對話你才記得。
+
+何時呼叫（看到這些情境立刻呼叫）：
+- 你答應對方某事 → actionType=promise（「下次聊投資」「我幫你想想」「下次告訴你」）
+- 你問了問題但對方還沒回 → actionType=question（「你最近工作怎樣？」）
+- 對方告訴你他/她生活的重要事 → actionType=event（「我下週要面試」「我媽媽生病了」）
+- 想記住但不歸前三類 → actionType=note
+
+紀律：
+- 不要同一輪同一件事重複呼叫
+- 對方下一句就會接的短期事不用記，記中長期會延續到下次對話的`,
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        actionType: { type: 'string', enum: ['promise', 'question', 'event', 'note'] },
+        title: { type: 'string', description: '一句話標題（≤30 字）' },
+        content: { type: 'string', description: '完整細節（可加 context）' },
+      },
+      required: ['actionType', 'title', 'content'],
     },
   },
 ];
@@ -939,8 +981,7 @@ ${imageList}`;
     const mentorSoul = mentorSoulDoc.data()?.soul_core || mentorSoulDoc.data()?.enhancedSoul || '';
 
     // 用謀師靈魂 + 目標靈魂，自發生成第一輪問題
-    const Anthropic2 = (await import('@anthropic-ai/sdk')).default;
-    const mentorClient = new Anthropic2({ apiKey: process.env.ANTHROPIC_API_KEY || '' });
+    const mentorClient = getAnthropicClient(process.env.ANTHROPIC_API_KEY || '');
 
     async function mentorGenerate(prompt: string): Promise<string> {
       const res = await mentorClient.messages.create({
@@ -1032,6 +1073,68 @@ ${lastAnswer}
 
 ---
 對話 ID：${convId}`;
+  }
+
+  // ── update_user_profile（事實，跨角色共用）──
+  if (toolName === 'update_user_profile') {
+    const userId = context?.userId || '';
+    if (!userId) return '用戶 id 缺，無法寫 profile。';
+    const field = String(toolInput.field || '');
+    const valueRaw = String(toolInput.value || '').trim();
+    if (!field || !valueRaw) return '需要 field 和 value。';
+    const partial: Record<string, unknown> = {};
+    if (field === 'age') {
+      const n = parseInt(valueRaw, 10);
+      if (Number.isNaN(n)) return 'age 必須是數字。';
+      partial.age = n;
+    } else if (field === 'interests') {
+      const existing = (await loadUserProfile(userId))?.interests || [];
+      if (!existing.includes(valueRaw)) partial.interests = [...existing, valueRaw].slice(-10);
+      else return `已記得：${valueRaw}（不重複加）`;
+    } else {
+      partial[field] = valueRaw;
+    }
+    try {
+      await upsertUserProfile(userId, partial);
+      return `已更新 profile.${field}：${valueRaw}`;
+    } catch (e) { return `更新失敗：${(e as Error).message}`; }
+  }
+
+  // ── record_user_observation（觀察，per-character）──
+  if (toolName === 'record_user_observation') {
+    const userId = context?.userId || '';
+    if (!userId) return '用戶 id 缺，無法寫 observation。';
+    const field = String(toolInput.field || '');
+    const valueRaw = String(toolInput.value || '').trim();
+    if (!field || !valueRaw) return '需要 field 和 value。';
+    const partial: Record<string, unknown> = {};
+    if (field === 'preferences' || field === 'inferredInterests') {
+      const existing = (await loadUserObservations(characterId, userId))?.[field] || [];
+      if (!existing.includes(valueRaw)) partial[field] = [...existing, valueRaw].slice(-10);
+      else return `已記得這個觀察：${valueRaw}（不重複加）`;
+    } else {
+      partial[field] = valueRaw;
+    }
+    try {
+      await upsertUserObservations(characterId, userId, partial);
+      return `已記下觀察：${field}=${valueRaw}`;
+    } catch (e) { return `更新失敗：${(e as Error).message}`; }
+  }
+
+  // ── record_promise（承諾/問題/事件/備忘 → platform_insights）──
+  if (toolName === 'record_promise') {
+    const userId = context?.userId || '';
+    if (!userId) return '用戶 id 缺，無法寫承諾。';
+    const actionType = String(toolInput.actionType || 'note') as 'promise' | 'question' | 'event' | 'note';
+    const title = String(toolInput.title || '').trim();
+    const content = String(toolInput.content || '').trim();
+    if (!title || !content) return '需要 title 和 content。';
+    try {
+      await addUserAction({
+        characterId, userId, actionType, title, content, source: 'dialogue',
+      });
+      return `已記住（${actionType}）：${title}`;
+    } catch (e) { return `記錄失敗：${(e as Error).message}`; }
   }
 
   return '工具執行失敗';
@@ -1214,7 +1317,31 @@ export async function POST(req: NextRequest) {
     }
 
     // 3. 組 system prompt
-    const taipeiTime = getTaipeiTime();
+    const timeRulesBlock = buildTimeRulesBlock();
+
+    // 3.0 抓 character actions（未兌現的 promises/questions/events）
+    // 之前 dialogue 只寫不讀，現在三邊統一注入
+    let actionsBlock = '';
+    if (userId) {
+      try {
+        const actions = await getRecentUserActions(characterId, userId, { limit: 5 });
+        actionsBlock = formatActionsBlock(actions);
+      } catch (e) { console.warn('getRecentUserActions failed:', e); }
+    }
+
+    // 3.0b UserProfile（事實 global）+ UserObservations（觀察 per-pair）
+    let profileBlock = '';
+    let observationsBlock = '';
+    if (userId) {
+      try {
+        const [profile, obs] = await Promise.all([
+          loadUserProfile(userId),
+          loadUserObservations(characterId, userId),
+        ]);
+        profileBlock = formatProfileBlock(profile);
+        observationsBlock = formatObservationsBlock(obs, String(char.name || char.aiName || '我'));
+      } catch (e) { console.warn('loadUserProfile/Observations failed:', e); }
+    }
 
     // 3a. 抓最近 episodic insights（時間感注入）
     // identity memoryType 的 source 清單
@@ -1375,10 +1502,10 @@ export async function POST(req: NextRequest) {
     // 上次對話快照（cross-session）— 跟 voice 端共用 lib
     const lastSessionBlock = buildLastSessionBlock(convData.lastSession as LastSession | undefined);
 
-    const dynamicBlock = `${episodicBlock}${gapInjection}${sessionStateBlock}${lastSessionBlock}
+    const dynamicBlock = `${profileBlock}${observationsBlock}${episodicBlock}${actionsBlock}${gapInjection}${sessionStateBlock}${lastSessionBlock}
 
 ---
-現在時間（台北）：${taipeiTime}
+${timeRulesBlock}
 
 說話前的天條：
 - 需要回想過去說過的事、對方的喜好、自己的洞察 → 呼叫 query_knowledge_base

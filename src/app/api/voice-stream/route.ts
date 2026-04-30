@@ -17,6 +17,7 @@
 
 import { NextRequest } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
+import { getAnthropicClient } from '@/lib/anthropic-via-bridge';
 import { withRetry } from '@/lib/anthropic-retry';
 import { shouldInjectGap } from '@/lib/time-awareness';
 import { buildLastSessionBlock } from '@/lib/last-session-block';
@@ -31,7 +32,11 @@ import { generateEmbedding, cosineSimilarity } from '@/lib/embeddings';
 import { generateImageForCharacter } from '@/lib/generate-image';
 import { preprocessTTS, type Provider } from '@/lib/tts-preprocess';
 import { getTTSProvider, synthesizeStreamSafe } from '@/lib/tts-providers';
-import { addUserAction } from '@/lib/character-actions';
+import { addUserAction, getRecentUserActions, formatActionsBlock } from '@/lib/character-actions';
+import { loadEpisodicBlock } from '@/lib/episodic-memory';
+import { buildTimeRulesBlock } from '@/lib/time-rules';
+import { loadUserProfile, upsertUserProfile, formatProfileBlock } from '@/lib/user-profile';
+import { loadUserObservations, upsertUserObservations, formatObservationsBlock } from '@/lib/user-observations';
 
 export const maxDuration = 120;
 
@@ -165,7 +170,7 @@ export async function POST(req: NextRequest) {
         const history = ((convData.messages as Array<{ role: string; content: string }>) || []).slice(-10);
 
         // 3. 組 systemPrompt（語音模式）
-        const taipeiTime = new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' });
+        const timeRulesBlock = buildTimeRulesBlock();
         const summaryBlock = convData.summary ? `\n\n對話摘要：${convData.summary}` : '';
 
         // ── 時間感知（gapInjection）──
@@ -192,6 +197,34 @@ export async function POST(req: NextRequest) {
           const sessionRaw = await redis.get(`session:${convId}`);
           if (sessionRaw) sessionStateBlock = `\n\n---\n${sessionRaw}`;
         } catch { /* 不阻斷 */ }
+
+        // ── Episodic memory 注入（與 dialogue 對齊，破真相分裂）──
+        // 從 platform_insights 撈最近 3 條 + 資源認知；user 隔離；不阻斷
+        const episodicBlock = await loadEpisodicBlock(db, characterId, userId);
+
+        // ── Character actions 注入（unfulfilled promises/questions/events，filter relevant）──
+        // 之前 voice-stream 只寫不讀，現在三邊統一注入
+        let actionsBlock = '';
+        if (userId) {
+          try {
+            const actions = await getRecentUserActions(characterId, userId, { limit: 5 });
+            actionsBlock = formatActionsBlock(actions);
+          } catch (e) { console.warn('getRecentUserActions failed:', e); }
+        }
+
+        // ── B3：UserProfile（事實 global）+ UserObservations（觀察 per-pair）──
+        let profileBlock = '';
+        let observationsBlock = '';
+        if (userId) {
+          try {
+            const [profile, obs] = await Promise.all([
+              loadUserProfile(userId),
+              loadUserObservations(characterId, userId),
+            ]);
+            profileBlock = formatProfileBlock(profile);
+            observationsBlock = formatObservationsBlock(obs, String(charData.name || charData.aiName || '我'));
+          } catch (e) { console.warn('loadUserProfile/Observations failed:', e); }
+        }
 
         // Prompt Caching：soul+語音天條穩定不變，標 cache_control，每輪只收 10% input token
         const voiceStableBlock = `${soulText}
@@ -223,10 +256,10 @@ export async function POST(req: NextRequest) {
 
 承諾是承諾，兌現是兌現。預告而不執行是最壞的——用戶以為你做了，其實沒有。`;
 
-        const voiceDynamicBlock = `${summaryBlock}${gapInjection}${lastSessionBlock}${sessionStateBlock}
+        const voiceDynamicBlock = `${profileBlock}${observationsBlock}${summaryBlock}${gapInjection}${lastSessionBlock}${sessionStateBlock}${actionsBlock}${episodicBlock}
 
 ---
-現在時間（台北）：${taipeiTime}`;
+${timeRulesBlock}`;
 
         type SystemBlock = { type: 'text'; text: string; cache_control?: { type: 'ephemeral' } };
         const systemBlocks: SystemBlock[] = [
@@ -319,6 +352,53 @@ specialist 選擇：
               prompt: { type: 'string', description: '圖片描述（英文更精準）' },
               reference_image_url: { type: 'string', description: '產品參考圖完整 URL，從 query_product_card 拿' },
             }, required: ['prompt'] },
+          },
+          {
+            name: 'update_user_profile',
+            description: '記錄用戶**親口說過**的基本事實（跨角色共用）。\n只在用戶明確「說」的時候呼叫，不要從對話推論。例如：\n- 用戶說「我叫 Adam」→ field=name, value=Adam\n- 用戶說「我做設計的」→ field=occupation, value=設計\n- 用戶說「我喜歡攝影」→ field=interests, value=攝影（單條會 append 到陣列）\n推測的個性、偏好不要用這個工具，用 record_user_observation。',
+            input_schema: {
+              type: 'object' as const,
+              properties: {
+                field: { type: 'string', enum: ['name', 'birthday', 'age', 'occupation', 'interests', 'extraInfo'], description: '要更新的欄位' },
+                value: { type: 'string', description: '欄位值。birthday 用 YYYY-MM-DD；age 用數字字串；interests 一次填一條會 append 到陣列' },
+              },
+              required: ['field', 'value'],
+            },
+          },
+          {
+            name: 'record_user_observation',
+            description: '記錄你對用戶的**主觀觀察**（你自己的視角，不分享給其他角色）。\n從對話中感受到、推論出來的東西用這個工具。例如：\n- 你感覺「她個性偏內向但對深度議題會打開」→ field=personality\n- 你推測「她偏好直接切入、不喜歡寒暄」→ field=preferences\n- 你猜「她可能對哲學感興趣」→ field=inferredInterests\n用戶親口說的事實不要用這個工具，用 update_user_profile。',
+            input_schema: {
+              type: 'object' as const,
+              properties: {
+                field: { type: 'string', enum: ['personality', 'preferences', 'inferredInterests', 'notes'], description: '要更新的欄位' },
+                value: { type: 'string', description: '觀察內容。preferences/inferredInterests 一次填一條會 append。' },
+              },
+              required: ['field', 'value'],
+            },
+          },
+          {
+            name: 'record_promise',
+            description: `把你剛對用戶做的承諾／問的問題／聽到的重要事記下來，下次撥電話你才記得。
+
+何時呼叫（看到這些情境立刻呼叫）：
+- 你答應對方某事 → actionType=promise（「下次聊投資」「我幫你想想」「下次告訴你」）
+- 你問了問題但對方還沒回 → actionType=question（「你最近工作怎樣？」）
+- 對方告訴你他/她生活的重要事 → actionType=event（「我下週要面試」「我媽媽生病了」）
+- 想記住但不歸前三類 → actionType=note
+
+紀律：
+- 不要同一輪同一件事重複呼叫
+- 對方下一句就會接的短期事不用記，記中長期會延續到下次撥號的`,
+            input_schema: {
+              type: 'object' as const,
+              properties: {
+                actionType: { type: 'string', enum: ['promise', 'question', 'event', 'note'] },
+                title: { type: 'string', description: '一句話標題（≤30 字）' },
+                content: { type: 'string', description: '完整細節（可加 context）' },
+              },
+              required: ['actionType', 'title', 'content'],
+            },
           },
         ];
         const WEB_SEARCH = { type: 'web_search_20250305', name: 'web_search' } as unknown as Anthropic.Tool;
@@ -456,7 +536,7 @@ specialist 選擇：
             const targetSoul = targetDoc.data()?.enhancedSoul || targetDoc.data()?.soul_core || '（無靈魂文件）';
             const mentorSoulDoc = await db.collection('platform_characters').doc(characterId).get();
             const mentorSoul = mentorSoulDoc.data()?.soul_core || mentorSoulDoc.data()?.enhancedSoul || '';
-            const client2 = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY || '' });
+            const client2 = getAnthropicClient(process.env.ANTHROPIC_API_KEY || '');
             async function mentorGen(prompt: string): Promise<string> {
               const res = await client2.messages.create({
                 model: 'claude-sonnet-4-6', max_tokens: 400,
@@ -603,6 +683,65 @@ specialist 選擇：
               ? '作品會出現在 dashboard，下次對話我會告訴你。'
               : '策略書 docx 會出現在 dashboard 的「策略書」頁面可下載。下次對話我會帶出這件事。';
             return `JOB_PENDING:${jobRef.id}:已委託${sp.name}，工作編號 ${shortId}。${sp.etaText}內完成，${trailing}妳繼續陪 user 聊。`;
+          }
+
+          // ── update_user_profile（事實，跨角色共用）──
+          if (toolName === 'update_user_profile') {
+            if (!userId) return '用戶 id 缺，無法寫 profile。';
+            const field = String(toolInput.field || '');
+            const valueRaw = String(toolInput.value || '').trim();
+            if (!field || !valueRaw) return '需要 field 和 value。';
+            const partial: Record<string, unknown> = {};
+            if (field === 'age') {
+              const n = parseInt(valueRaw, 10);
+              if (Number.isNaN(n)) return 'age 必須是數字。';
+              partial.age = n;
+            } else if (field === 'interests') {
+              const existing = (await loadUserProfile(userId))?.interests || [];
+              if (!existing.includes(valueRaw)) partial.interests = [...existing, valueRaw].slice(-10);
+              else return `已記得：${valueRaw}（不重複加）`;
+            } else {
+              partial[field] = valueRaw;
+            }
+            try {
+              await upsertUserProfile(userId, partial);
+              return `已更新 profile.${field}：${valueRaw}`;
+            } catch (e) { return `更新失敗：${(e as Error).message}`; }
+          }
+
+          // ── record_user_observation（觀察，per-character）──
+          if (toolName === 'record_user_observation') {
+            if (!userId) return '用戶 id 缺，無法寫 observation。';
+            const field = String(toolInput.field || '');
+            const valueRaw = String(toolInput.value || '').trim();
+            if (!field || !valueRaw) return '需要 field 和 value。';
+            const partial: Record<string, unknown> = {};
+            if (field === 'preferences' || field === 'inferredInterests') {
+              const existing = (await loadUserObservations(characterId, userId))?.[field] || [];
+              if (!existing.includes(valueRaw)) partial[field] = [...existing, valueRaw].slice(-10);
+              else return `已記得這個觀察：${valueRaw}（不重複加）`;
+            } else {
+              partial[field] = valueRaw;
+            }
+            try {
+              await upsertUserObservations(characterId, userId, partial);
+              return `已記下觀察：${field}=${valueRaw}`;
+            } catch (e) { return `更新失敗：${(e as Error).message}`; }
+          }
+
+          // ── record_promise（承諾/問題/事件/備忘 → platform_insights）──
+          if (toolName === 'record_promise') {
+            if (!userId) return '用戶 id 缺，無法寫承諾。';
+            const actionType = String(toolInput.actionType || 'note') as 'promise' | 'question' | 'event' | 'note';
+            const title = String(toolInput.title || '').trim();
+            const content = String(toolInput.content || '').trim();
+            if (!title || !content) return '需要 title 和 content。';
+            try {
+              await addUserAction({
+                characterId, userId, actionType, title, content, source: 'voice',
+              });
+              return `已記住（${actionType}）：${title}`;
+            } catch (e) { return `記錄失敗：${(e as Error).message}`; }
           }
 
           return '未知工具';

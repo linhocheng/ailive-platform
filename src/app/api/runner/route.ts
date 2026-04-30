@@ -15,6 +15,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
+import { getAnthropicClient } from '@/lib/anthropic-via-bridge';
 import { redis } from '@/lib/redis';
 import { getFirestore } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
@@ -65,7 +66,7 @@ function stripJson(s: string): string {
 async function runLearnTask(
   _characterId: string,
   _char: Record<string, unknown>,
-  _client: Anthropic,
+  _client: unknown,
   _dateStr: string,
 ): Promise<string> {
   // learn 任務由 task-run 接管，runner 略過
@@ -76,11 +77,10 @@ async function runSleepTask(characterId: string, char: Record<string, unknown>, 
   // 直接呼叫 sleep 邏輯（不走 HTTP，直接 import lib）
   // 讀 insights，跑升降級 + 合併 + 自我洞察
   const { generateEmbedding, cosineSimilarity } = await import('@/lib/embeddings');
-  const Anthropic = (await import('@anthropic-ai/sdk')).default;
   const { FieldValue } = await import('firebase-admin/firestore');
 
   const apiKey = process.env.ANTHROPIC_API_KEY || '';
-  const client = new Anthropic({ apiKey });
+  const client = getAnthropicClient(apiKey);
 
   const snap = await db.collection('platform_insights')
     .where('characterId', '==', characterId)
@@ -264,7 +264,7 @@ ${insightSummary}
 async function runReflectTask(
   _characterId: string,
   _char: Record<string, unknown>,
-  _client: Anthropic,
+  _client: unknown,
   _dateStr: string,
 ): Promise<string> {
   // reflect 任務由 task-run 接管，runner 略過
@@ -274,7 +274,7 @@ async function runReflectTask(
 async function runPostTask(
   _characterId: string,
   _char: Record<string, unknown>,
-  _client: Anthropic,
+  _client: unknown,
   _dateStr: string,
   _task: Record<string, unknown>,
 ): Promise<string> {
@@ -296,7 +296,7 @@ export async function POST(req: NextRequest) {
   if (!apiKey) return NextResponse.json({ error: 'ANTHROPIC_API_KEY 未設定' }, { status: 500 });
 
   const now = getTaipeiNow();
-  const client = new Anthropic({ apiKey });
+  const client = getAnthropicClient(apiKey);
   const results: Record<string, unknown>[] = [];
 
   try {

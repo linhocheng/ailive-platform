@@ -8,6 +8,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
+import { getAnthropicClient } from '@/lib/anthropic-via-bridge';
 import { getFirestore } from '@/lib/firebase-admin';
 import { generateEmbedding } from '@/lib/embeddings';
 import { trackCost } from '@/lib/cost-tracker';
@@ -58,7 +59,7 @@ export async function POST(req: NextRequest) {
 
     // 5. 呼叫 Claude Haiku
     const apiKey = process.env.ANTHROPIC_API_KEY!;
-    const client = new Anthropic({ apiKey });
+    const client = getAnthropicClient(apiKey);
 
     const systemPrompt = `${strategistSoul}
 

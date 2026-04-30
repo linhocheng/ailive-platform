@@ -12,6 +12,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
+import { getAnthropicClient } from '@/lib/anthropic-via-bridge';
 import { getFirestore } from '@/lib/firebase-admin';
 import { trackCost } from '@/lib/cost-tracker';
 import { generateEmbedding, cosineSimilarity } from '@/lib/embeddings';
@@ -192,7 +193,7 @@ export async function POST(req: NextRequest) {
     }
 
     // 3. 自我洞察
-    const client = new Anthropic({ apiKey });
+    const client = getAnthropicClient(apiKey);
     const coreInsights = insights
       .filter(i => i.tier === 'core' || (i.hitCount as number) >= 2)
       .slice(0, 5)

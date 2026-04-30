@@ -14,6 +14,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
+import { getAnthropicClient } from '@/lib/anthropic-via-bridge';
 import { getFirestore } from '@/lib/firebase-admin';
 import { generateEmbedding, cosineSimilarity } from '@/lib/embeddings';
 import { FieldValue } from 'firebase-admin/firestore';
@@ -185,7 +186,7 @@ export async function POST(req: NextRequest) {
     if (scored.length >= 2) {
       try {
         const apiKey = process.env.ANTHROPIC_API_KEY || '';
-        const haikuClient = new Anthropic({ apiKey });
+        const haikuClient = getAnthropicClient(apiKey);
         const reasonRes = await haikuClient.messages.create({
           model: 'claude-haiku-4-5-20251001',
           max_tokens: 400,
