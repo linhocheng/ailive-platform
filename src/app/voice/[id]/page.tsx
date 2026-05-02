@@ -95,6 +95,9 @@ export default function VoicePage() {
   const streamRef = useRef<MediaStream | null>(null);
   const speechRecRef = useRef<any>(null);
   const finalTextRef = useRef('');
+  const maxDurationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const MAX_RECORDING_MS = 90_000;
+  const stopRecordingRef = useRef<(() => void) | null>(null); // 計時器用，避免 useCallback 循環依賴
 
   // ── 粒子 Canvas ──
   useEffect(() => {
@@ -363,10 +366,16 @@ export default function VoicePage() {
     isRecordingRef.current=true;
     startWebSpeechSession(SR);
     setVoiceState('recording');
+    if (maxDurationTimerRef.current) clearTimeout(maxDurationTimerRef.current);
+    maxDurationTimerRef.current = setTimeout(() => {
+      if (isRecordingRef.current) stopRecordingRef.current?.();
+    }, MAX_RECORDING_MS);
     return true;
   }, [setVoiceState, startWebSpeechSession]);
 
   const stopWebSpeechAndSend = useCallback(() => {
+    if (maxDurationTimerRef.current) { clearTimeout(maxDurationTimerRef.current); maxDurationTimerRef.current=null; }
+    stopRecordingRef.current = null;
     isRecordingRef.current=false; // 先關旗，避免 onend 觸發重啟
     const rec=speechRecRef.current; if(rec){try{rec.stop();}catch{} speechRecRef.current=null;}
     setVoiceState('processing'); // 立刻切換，不等異步
@@ -382,10 +391,16 @@ export default function VoicePage() {
       const mr=new MediaRecorder(stream, mimeType ? {mimeType} : {}); chunksRef.current=[];
       mr.ondataavailable=e=>{if(e.data.size>0)chunksRef.current.push(e.data);}; mr.start(100);
       mediaRecorderRef.current=mr; setVoiceState('recording'); setEndDone(false);
+      if (maxDurationTimerRef.current) clearTimeout(maxDurationTimerRef.current);
+      maxDurationTimerRef.current = setTimeout(() => {
+        if (mediaRecorderRef.current) stopRecordingRef.current?.();
+      }, MAX_RECORDING_MS);
     } catch { /* mic denied */ }
   }, [setVoiceState]);
 
   const stopGeminiAndSend = useCallback(() => {
+    if (maxDurationTimerRef.current) { clearTimeout(maxDurationTimerRef.current); maxDurationTimerRef.current=null; }
+    stopRecordingRef.current = null;
     const mr=mediaRecorderRef.current; if(!mr) return;
     setVoiceState('processing'); // 立刻切換，不等 STT 回來
     mr.onstop=async()=>{
@@ -414,7 +429,10 @@ export default function VoicePage() {
     if (!unlockedAudioRef.current) {
       try { const a=new Audio(); a.play().catch(()=>{}); a.pause(); unlockedAudioRef.current=a; } catch {}
     }
-    if (state==='idle') { if(usingSpeechAPI) startWebSpeech(); else startGemini(); }
+    if (state==='idle') {
+      if(usingSpeechAPI) { stopRecordingRef.current=stopWebSpeechAndSend; startWebSpeech(); }
+      else { stopRecordingRef.current=stopGeminiAndSend; startGemini(); }
+    }
     else if (state==='recording') { if(usingSpeechAPI) stopWebSpeechAndSend(); else stopGeminiAndSend(); }
     else if (state==='playing') { audioRef.current?.pause(); setVoiceState('idle'); }
   }, [state, usingSpeechAPI, startWebSpeech, startGemini, stopWebSpeechAndSend, stopGeminiAndSend, setVoiceState]);
