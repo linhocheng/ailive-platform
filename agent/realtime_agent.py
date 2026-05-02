@@ -15,9 +15,11 @@ Phase 2 限制：
   - PROJECT_NAMESPACE 防止跨專案 dispatch 串錯（馬雲事件）
   - room name 必須以 'realtime-' 開頭（對齊 Next.js token API 的 roomName 格式）
 """
+import asyncio
 import json
 import logging
 import os
+import re
 import sys
 import time
 from datetime import datetime, timezone
@@ -155,12 +157,18 @@ async def entrypoint(ctx: JobContext):
     participant = await ctx.wait_for_participant()
     logger.info(f"Participant joined: {participant.identity}")
 
+    # ── 主動打斷設定 ──────────────────────────────────────────────
+    MAX_UTTERANCE_SECS = 90          # 超過 90 秒強制截斷
+    QUESTION_RE = re.compile(r'[？?]\s*$')   # interim 以問句結尾 → 立刻截斷
+    INTERIM_CHAR_LIMIT = 200         # interim 累積超過 200 字 → 截斷
+
     # Voice Activity Detection
     vad = silero.VAD.load(
         min_silence_duration=0.4,
         prefix_padding_duration=0.3,
         min_speech_duration=0.1,
         activation_threshold=0.5,
+        max_buffered_speech=90.0,    # 對齊 MAX_UTTERANCE_SECS，避免 VAD 丟棄音訊
     )
 
     # STT — Deepgram Nova-2（中文 language="zh"，無串流時間限制）
@@ -261,6 +269,53 @@ async def entrypoint(ctx: JobContext):
                 "content": text.strip(),
                 "timestamp": time.time(),
             })
+
+    # ── 主動打斷：90 秒 timeout + 問句即時截斷 ────────────────────
+    _utterance_timer: asyncio.Task | None = None
+    _interrupted_this_turn: bool = False   # 防同一句話打斷兩次
+
+    async def _do_interrupt() -> None:
+        try:
+            await session.interrupt()
+        except Exception as e:
+            logger.warning(f"interrupt failed: {e}")
+
+    @session.on("user_state_changed")
+    def _on_user_state(event) -> None:
+        nonlocal _utterance_timer, _interrupted_this_turn
+        new_state = str(getattr(event, "new_state", ""))
+
+        if new_state == "speaking":
+            _interrupted_this_turn = False
+            if _utterance_timer:
+                _utterance_timer.cancel()
+            async def _timeout_task():
+                await asyncio.sleep(MAX_UTTERANCE_SECS)
+                logger.info(f"[interrupt] utterance exceeded {MAX_UTTERANCE_SECS}s")
+                await _do_interrupt()
+            _utterance_timer = asyncio.ensure_future(_timeout_task())
+
+        elif new_state in ("listening", "away"):
+            if _utterance_timer:
+                _utterance_timer.cancel()
+                _utterance_timer = None
+
+    @session.on("user_input_transcribed")
+    def _on_transcribed(event) -> None:
+        nonlocal _interrupted_this_turn
+        if _interrupted_this_turn:
+            return
+        if getattr(event, "is_final", True):
+            return  # 只處理 interim
+        text: str = getattr(event, "transcript", "") or ""
+        if not text:
+            return
+        should_cut = QUESTION_RE.search(text) or len(text) > INTERIM_CHAR_LIMIT
+        if should_cut:
+            reason = "question" if QUESTION_RE.search(text) else f"len={len(text)}"
+            logger.info(f"[interrupt] {reason}: {text[-30:]!r}")
+            _interrupted_this_turn = True
+            asyncio.ensure_future(_do_interrupt())
 
     @ctx.room.on("disconnected")
     def on_disconnected():
