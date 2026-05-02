@@ -11,7 +11,7 @@
  * Header（自動化必填）: x-worker-secret
  */
 import { NextRequest, NextResponse } from 'next/server';
-import Anthropic from '@anthropic-ai/sdk';
+import { getAnthropicClient } from '@/lib/anthropic-via-bridge';
 import { getFirestore } from '@/lib/firebase-admin';
 import { generateWithGemini } from '@/lib/gemini-imagen';
 import { publishPhoto } from '@/lib/instagram-api';
@@ -20,7 +20,7 @@ export const maxDuration = 300;
 
 const VIVI_ID = 'kTwsX44G0ImsApEACDuE';
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
+const anthropic = getAnthropicClient(process.env.ANTHROPIC_API_KEY || '');
 
 interface MirrorContent {
   topic: string;
