@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, useSearchParams } from 'next/navigation';
 
 type VoiceState = 'idle' | 'recording' | 'processing' | 'playing' | 'ending';
 
@@ -52,6 +52,20 @@ const STATE_LABEL: Record<VoiceState, string> = {
 
 export default function VoicePage() {
   const { id: characterId } = useParams<{ id: string }>();
+  const search = useSearchParams();
+  // userId 順序：?u= query > localStorage（共用 realtime/voice/dialogue 同一 anon key）> 新 anon
+  // 共用 key 讓三模式記憶打通；?u= 蓋過 anon 給識別過的用戶
+  const userId = (() => {
+    const fromQuery = search.get('u');
+    if (fromQuery) return fromQuery;
+    if (typeof window === 'undefined') return '';
+    let stable = window.localStorage.getItem('ailive_realtime_anon_uid');
+    if (!stable) {
+      stable = `anon-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      window.localStorage.setItem('ailive_realtime_anon_uid', stable);
+    }
+    return stable;
+  })();
   const [char, setChar] = useState<Character | null>(null);
   const [state, setState] = useState<VoiceState>('idle');
   const [interimText, setInterimText] = useState('');
@@ -61,6 +75,7 @@ export default function VoicePage() {
   const [endDone, setEndDone] = useState(false);
   const [insightCount, setInsightCount] = useState(0);
   const [usingSpeechAPI, setUsingSpeechAPI] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   useEffect(() => {
     const w = window as any;
     const isAndroid = /Android/i.test(navigator.userAgent);
@@ -189,7 +204,7 @@ export default function VoicePage() {
     try {
       const res = await fetch('/api/voice-stream', {
         method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ characterId, userId:`voice-${characterId}`, message: userText, conversationId }),
+        body: JSON.stringify({ characterId, userId, message: userText, conversationId }),
       });
       if (!res.ok || !res.body) throw new Error('voice-stream 失敗');
 
@@ -269,10 +284,12 @@ export default function VoicePage() {
                 setVoiceState('playing');
               }
             }
+            if (ev.type==='ping') continue;
             if (ev.type==='error') throw new Error(ev.message);
           } catch(e){ if(e instanceof SyntaxError) continue; throw e; }
         }
       }
+      clearTimeout(thinkingTimer);
       if (audio) await new Promise<void>(resolve=>{
         // 主路徑：等 audio.ended
         (audio as HTMLAudioElement).addEventListener('ended', ()=>resolve(), {once:true});
@@ -283,8 +300,21 @@ export default function VoicePage() {
       // 播完：先讓粒子慢下來再切 idle
       setVoiceState('ending');
       setTimeout(() => setVoiceState('idle'), 800);
-    } catch { clearTimeout(thinkingTimer); setVoiceState('idle'); }
-  }, [characterId, conversationId, setVoiceState, setProcessingLabel]);
+    } catch (e) {
+      clearTimeout(thinkingTimer);
+      console.error('[voice] sendToDialogue error:', e);
+      const raw = e instanceof Error ? e.message : '';
+      // 把技術性錯誤訊息轉成用戶能讀的中文
+      const friendly = raw.includes('voice-stream') ? '連線失敗，請重試'
+        : raw.includes('fetch') || raw.includes('network') || raw.includes('aborted') || raw.includes('abort') ? '網路不穩，請重試'
+        : raw.includes('atob') || raw.includes('decode') ? '音訊解碼失敗，請重試'
+        : raw ? raw
+        : '連線失敗，請重試';
+      setErrorMsg(friendly);
+      setTimeout(() => setErrorMsg(null), 3000);
+      setVoiceState('idle');
+    }
+  }, [characterId, conversationId, userId, setVoiceState, setProcessingLabel]);
 
   // ── Web Speech API ──
   const isRecordingRef = useRef(false); // 追蹤「用戶是否還在錄音」，用於自動重啟判斷
@@ -368,7 +398,11 @@ export default function VoicePage() {
         const sttRes=await fetch('/api/stt',{method:'POST',body:form});
         const sttData=await sttRes.json() as {text?:string};
         if(sttData.text) await sendToDialogue(sttData.text);
-        else setVoiceState('idle');
+        else {
+          setErrorMsg('沒有聽到聲音，請再試一次');
+          setTimeout(() => setErrorMsg(null), 3000);
+          setVoiceState('idle');
+        }
       } catch { setVoiceState('idle'); }
     };
     mr.stop();
@@ -496,6 +530,15 @@ export default function VoicePage() {
           </div>
         )}
       </div>
+
+      {/* 錯誤提示 */}
+      {errorMsg && (
+        <div style={{ position:'absolute', top:80, left:0, right:0, display:'flex', justifyContent:'center', pointerEvents:'none' }}>
+          <div style={{ fontSize:13, letterSpacing:'0.1em', color:'rgba(255,80,60,0.9)', background:'rgba(0,0,0,0.6)', padding:'8px 20px', borderRadius:20, border:'1px solid rgba(255,80,60,0.3)' }}>
+            {errorMsg}
+          </div>
+        </div>
+      )}
 
       {/* 底部：輪數 / 結束 / 沉澱結果 */}
       <div style={{ position:'absolute', bottom:32, left:0, right:0, display:'flex', flexDirection:'column', alignItems:'center', gap:12 }}>

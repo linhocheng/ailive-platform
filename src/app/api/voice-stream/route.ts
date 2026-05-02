@@ -117,6 +117,11 @@ export async function POST(req: NextRequest) {
         controller.enqueue(encoder.encode(sseEvent(data)));
       };
 
+      // SSE 心跳：每 5 秒送一次 ping，防止手機網路因靜默斷線
+      const heartbeat = setInterval(() => {
+        try { controller.enqueue(encoder.encode(sseEvent({ type: 'ping' }))); } catch { clearInterval(heartbeat); }
+      }, 5000);
+
       try {
         const { characterId, userId, message, conversationId } = await req.json();
 
@@ -125,7 +130,7 @@ export async function POST(req: NextRequest) {
 
         if (!characterId || !message) {
           send({ type: 'error', message: 'characterId 和 message 必填' });
-          controller.close(); return;
+          clearInterval(heartbeat); controller.close(); return;
         }
 
         const db = getFirestore();
@@ -767,7 +772,7 @@ specialist 選擇：
           const preRes = await withRetry(() => client.messages.create({
             model: voiceModel, max_tokens: voiceMaxTokens, temperature: 0.9,
             system: systemBlocks as any, messages: loopMessages,
-            tools: [WEB_SEARCH, ...VOICE_TOOLS], tool_choice: toolChoice,
+            tools: [...VOICE_TOOLS], tool_choice: toolChoice,
           }));
           if (preRes.stop_reason !== 'tool_use') {
             // 不需要工具了，直接進 streaming（不把 assistant 再 push，保持最後是 user）
@@ -1016,9 +1021,11 @@ ${recentMessages}` }],
           })();
         }
 
+        clearInterval(heartbeat);
         send({ type: 'done', fullText, conversationId: convId });
 
       } catch (err) {
+        clearInterval(heartbeat);
         console.error('voice-stream error:', err);
         controller.enqueue(encoder.encode(sseEvent({
           type: 'error',

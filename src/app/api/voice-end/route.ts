@@ -6,11 +6,13 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
+import { getAnthropicClient } from '@/lib/anthropic-via-bridge';
 import { getFirestore } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 import { generateEmbedding } from '@/lib/embeddings';
 import { redis } from '@/lib/redis';
 import { extractSessionSummary } from '@/lib/session-summary';
+import { reflectAndMarkFulfilled } from '@/lib/promise-reflection';
 
 export const maxDuration = 60;
 
@@ -44,7 +46,7 @@ export async function POST(req: NextRequest) {
       .join('\n');
 
     // 用 Haiku 抽 insights（這支 API 專用）
-    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    const client = getAnthropicClient(process.env.ANTHROPIC_API_KEY || '');
     const extractRes = await client.messages.create({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 600,
@@ -115,12 +117,28 @@ ${dialogueText}`,
       try { await redis.del(`conv:${conversationId}`); } catch (_e) { /* 不阻斷 */ }
     }
 
+    // ── B2.4：promise-reflection — 自動標記 unfulfilled actions 哪些被兌現 ──
+    // 失敗不阻斷；env PROMISE_REFLECTION_ENABLED=false 可全關
+    let reflectionStats: Awaited<ReturnType<typeof reflectAndMarkFulfilled>> | null = null;
+    const userId = String(convDoc.data()?.userId || '');
+    if (userId) {
+      try {
+        reflectionStats = await reflectAndMarkFulfilled({
+          characterId,
+          userId,
+          transcript: dialogueText,
+          anthropicApiKey: process.env.ANTHROPIC_API_KEY || '',
+        });
+      } catch (e) { console.warn('reflectAndMarkFulfilled failed:', e); }
+    }
+
     return NextResponse.json({
       success: true,
       insights,
       sessionSummary,
       saved: saved.length,
-      message: `已沉澱 ${saved.length} 條記憶${sessionSummary ? '、寫入 lastSession' : ''}`,
+      reflection: reflectionStats,
+      message: `已沉澱 ${saved.length} 條記憶${sessionSummary ? '、寫入 lastSession' : ''}${reflectionStats?.marked ? `、自動標 ${reflectionStats.marked} 條已兌現` : ''}`,
     });
   } catch (e: unknown) {
     return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
