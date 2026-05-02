@@ -41,10 +41,14 @@ from agent.firestore_loader import (
     load_character,
     load_conversation,
     load_recent_actions,
+    load_episodic_block,
     save_conversation,
     extract_session_summary,
     build_system_prompt,
 )
+from agent.promise_reflection import reflect_and_mark_fulfilled
+from agent.user_profile import load_user_profile, format_profile_block
+from agent.user_observations import load_user_observations, format_observations_block
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("ailive-realtime")
@@ -104,12 +108,39 @@ async def entrypoint(ctx: JobContext):
                     actions = load_recent_actions(character_id, user_id, days=7, limit=5)
                 except Exception as e:
                     logger.warning(f"load_recent_actions failed: {e}")
-            system_prompt = build_system_prompt(char_ctx, conv_ctx, actions=actions)
+            # M1：episodic memory（platform_insights 近期記憶 + 資源認知）
+            episodic_block = ""
+            try:
+                episodic_block = load_episodic_block(character_id, user_id)
+            except Exception as e:
+                logger.warning(f"load_episodic_block failed: {e}")
+            # B3：UserProfile（事實 global）+ UserObservations（觀察 per-pair）
+            profile_block = ""
+            observations_block = ""
+            if user_id:
+                try:
+                    profile = load_user_profile(user_id)
+                    profile_block = format_profile_block(profile)
+                except Exception as e:
+                    logger.warning(f"load_user_profile failed: {e}")
+                try:
+                    obs = load_user_observations(character_id, user_id)
+                    observations_block = format_observations_block(obs, char_ctx.name)
+                except Exception as e:
+                    logger.warning(f"load_user_observations failed: {e}")
+            system_prompt = build_system_prompt(
+                char_ctx, conv_ctx,
+                actions=actions,
+                episodic_block=episodic_block,
+                profile_block=profile_block,
+                observations_block=observations_block,
+            )
             char_name = char_ctx.name
             logger.info(
                 f"Loaded character={char_name} id={character_id} "
                 f"soul_chars={len(char_ctx.soul_text)} summary_chars={len(conv_ctx.summary)} "
                 f"messages={len(conv_ctx.messages)} actions={len(actions)} "
+                f"episodic_chars={len(episodic_block)} "
                 f"last_gap_ms={int(datetime.now(timezone.utc).timestamp()*1000) - conv_ctx.last_updated_ms if conv_ctx.last_updated_ms else 'n/a'} "
                 f"voice_minimax={char_ctx.voice_id_minimax or '(empty, fallback)'}"
             )
@@ -144,20 +175,32 @@ async def entrypoint(ctx: JobContext):
         api_key=deepgram_key,
     )
 
-    # LLM — Claude Haiku 4.5（低延遲）
+    # LLM — 優先走 Bridge VM（Max 月費），fallback 直接 API key
+    bridge_url = os.environ.get("BRIDGE_URL", "")
+    bridge_secret = os.environ.get("BRIDGE_SECRET", "")
     anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not anthropic_key:
-        logger.critical("ANTHROPIC_API_KEY missing")
+
+    if bridge_url and bridge_secret:
+        # 走 Bridge VM（Max OAuth），不燒 API 餘額
+        logger.info(f"LLM: using Bridge VM at {bridge_url}")
+        llm = anthropic.LLM(
+            model="claude-sonnet-4-6",
+            api_key=bridge_secret,
+            base_url=bridge_url,
+            temperature=0.7,
+            caching="ephemeral",
+        )
+    elif anthropic_key:
+        logger.info("LLM: using direct Anthropic API key")
+        llm = anthropic.LLM(
+            model="claude-haiku-4-5-20251001",
+            api_key=anthropic_key,
+            temperature=0.7,
+            caching="ephemeral",
+        )
+    else:
+        logger.critical("No LLM credentials: set BRIDGE_URL+BRIDGE_SECRET or ANTHROPIC_API_KEY")
         return
-    # P3：開啟 prompt caching（cache system prompt + tools + chat history）
-    # 同一 instance 內 5 分鐘內再次請求，cache hit 省 70-90% input token
-    # plugin 會 emit cache_creation/cache_read metrics 到 LLMMetrics
-    llm = anthropic.LLM(
-        model="claude-haiku-4-5-20251001",
-        api_key=anthropic_key,
-        temperature=0.7,
-        caching="ephemeral",
-    )
 
     # TTS — MiniMax 自訂 wrapper
     # Phase 4.x：voice_id + speed/pitch 從 character doc 讀，沒設則 fallback default
@@ -240,6 +283,23 @@ async def entrypoint(ctx: JobContext):
                     last_session=last_session,
                 )
                 logger.info(f"Saved to {conv_id}: {stats}")
+
+                # B2.4：promise-reflection — 自動標記哪些 unfulfilled actions 被兌現
+                if user_id:
+                    try:
+                        transcript_text = "\n".join(
+                            f"{'用戶' if m.get('role') == 'user' else '角色'}：{(m.get('content') or '')[:300]}"
+                            for m in transcript
+                        )
+                        ref_stats = reflect_and_mark_fulfilled(
+                            character_id=character_id,
+                            user_id=user_id,
+                            transcript=transcript_text,
+                            anthropic_api_key=anthropic_key,
+                        )
+                        logger.info(f"promise-reflection: {ref_stats}")
+                    except Exception as e:
+                        logger.warning(f"promise-reflection failed: {e}")
             except Exception as e:
                 logger.error(f"save_conversation failed: {e}")
         else:

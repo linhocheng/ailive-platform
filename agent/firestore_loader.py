@@ -188,6 +188,9 @@ def load_recent_actions(
     items = []
     for d in snap:
         data = d.to_dict() or {}
+        # isRelevant client filter（既有 doc 沒這欄 → 預設 True）
+        if data.get("isRelevant") is False:
+            continue
         created = data.get("createdAt") or ""
         if not created:
             continue
@@ -206,6 +209,114 @@ def load_recent_actions(
         ))
     items.sort(key=lambda a: a.created_at, reverse=True)
     return items[:limit]
+
+
+_EPISODIC_IDENTITY_SOURCES = {
+    "sleep_time", "self_awareness", "sleep_self_awareness",
+    "reflect", "scheduler_reflect", "scheduler_sleep",
+    "post_reflection", "pre_publish_reflection",
+    "conversation", "awakening",
+    "resource_awareness",
+}
+
+
+def load_episodic_block(character_id: str, user_id: str | None) -> str:
+    """對齊 src/lib/episodic-memory.ts:loadEpisodicBlock
+
+    從 platform_insights 撈該角色近期值得帶進 system prompt 的「最近的事」+
+    「我的資源清單」兩塊。user 隔離（帶 userId 的只給該用戶看）。
+    """
+    _ensure_init()
+    db = firestore.client()
+    try:
+        snap = db.collection("platform_insights").where(
+            "characterId", "==", character_id
+        ).limit(50).get()
+
+        all_filtered: list[dict] = []
+        for d in snap:
+            data = d.to_dict() or {}
+            data["id"] = d.id
+            uid = data.get("userId")
+            if uid and uid != user_id:
+                continue
+            if data.get("tier") == "archive":
+                continue
+            mtype = str(data.get("memoryType") or "")
+            if mtype == "identity":
+                all_filtered.append(data)
+                continue
+            if mtype == "knowledge":
+                continue
+            if str(data.get("source") or "") in _EPISODIC_IDENTITY_SOURCES:
+                all_filtered.append(data)
+
+        # 資源認知獨立帶入（完整內容，不截斷，不佔記憶名額）
+        resource_doc = next(
+            (d for d in all_filtered if d.get("source") == "resource_awareness"),
+            None,
+        )
+        resource_block = ""
+        if resource_doc:
+            resource_block = (
+                "\n\n【我的資源清單】\n"
+                + str(resource_doc.get("content") or "")
+            )
+
+        # 一般記憶：core 優先 → hitCount 加權 → 最近日期
+        def _tier_score(t: str) -> int:
+            return 2 if t == "core" else (1 if t == "fresh" else 0)
+
+        recent = [d for d in all_filtered if d.get("source") != "resource_awareness"]
+        recent.sort(
+            key=lambda d: (
+                _tier_score(str(d.get("tier") or "")),
+                int(d.get("hitCount") or 0),
+                str(d.get("eventDate") or ""),
+            ),
+            reverse=True,
+        )
+        recent = recent[:3]
+
+        if not recent and not resource_block:
+            return ""
+
+        # time label（台北時區）
+        today = datetime.now(timezone(timedelta(hours=8))).date()
+        lines: list[str] = []
+        for ins in recent:
+            event_date = str(ins.get("eventDate") or "")
+            time_label = ""
+            if event_date:
+                try:
+                    ed = datetime.fromisoformat(event_date).date()
+                    diff_days = (today - ed).days
+                    if diff_days == 0:
+                        time_label = "（今天）"
+                    elif diff_days == 1:
+                        time_label = "（昨天）"
+                    elif diff_days <= 7:
+                        time_label = f"（{diff_days}天前）"
+                    else:
+                        time_label = f"（{event_date}）"
+                except Exception:
+                    pass
+            tier_label = "[關於我自己]" if ins.get("tier") == "self" else "[記憶]"
+            title = str(ins.get("title") or "")
+            content = str(ins.get("content") or "")[:80]
+            lines.append(f"- {tier_label}{time_label} {title}：{content}")
+
+        recent_block = ""
+        if lines:
+            recent_block = (
+                "\n\n【最近的事】\n"
+                + "\n".join(lines)
+                + "\n這些是我心裡還留著的片段，自然地帶進對話，不要每句都提。"
+            )
+        return resource_block + recent_block
+    except Exception as e:
+        logger.warning(f"load_episodic_block failed: {e}")
+        return ""
 
 
 def extract_session_summary(
@@ -436,6 +547,9 @@ def build_system_prompt(
     char: CharacterContext,
     conv: ConversationContext,
     actions: list | None = None,
+    episodic_block: str = "",
+    profile_block: str = "",
+    observations_block: str = "",
 ) -> str:
     """組 agent 用的 system prompt — 對齊 voice-stream voiceStableBlock 結構
 
@@ -472,16 +586,19 @@ def build_system_prompt(
 ✅ 用自然方式回應，當作你完全聽懂了
 ❌ 不要說「我沒聽清楚」「請再說一次」「你說的 XXX 是什麼意思」""")
 
-    # 當前時間（台北 GMT+8）+ 時間遠近指引（對齊江彬 context_builder:38-43）
+    # 當前時間（台北 GMT+8）+ 時間遠近指引
+    # 文字對齊 src/lib/time-rules.ts:buildTimeRulesBlock，破真相分裂
     tw_tz = timezone(timedelta(hours=8))
     now = datetime.now(tw_tz)
     weekday_names = ['一', '二', '三', '四', '五', '六', '日']
     time_str = now.strftime(f"%Y年%m月%d日 星期{weekday_names[now.weekday()]} %H:%M")
     parts.append(
-        f"\n【當前時間】{time_str}\n"
-        "請依對話紀錄的時間戳判斷遠近：同一天內用「剛才」「剛剛」，"
-        "昨天的用「昨天」，超過兩天才用「前幾天」「上次」。"
-        "絕對不要把幾分鐘前的事說成「上次」「之前」。"
+        f"\n【當前時間】{time_str}（台北時間）\n\n"
+        "請依對話紀錄的時間戳判斷時間遠近：\n"
+        "- 同一天內（幾分鐘到幾小時前）的事用「剛才」「剛剛」\n"
+        "- 昨天發生的用「昨天」\n"
+        "- 超過兩天才用「前幾天」「上次」\n"
+        "- 絕對不要把幾分鐘前的事說成「上次」「之前」"
     )
 
     # 時間感知 gap（對齊 voice-stream:174-182）
@@ -498,6 +615,18 @@ def build_system_prompt(
         parts.append(
             f"\n【我對這位用戶說過的話 / 答應過的事（還沒兌現的優先帶進來）】\n{action_block}"
         )
+
+    # M1：episodic memory（與 dialogue / voice-stream 對齊）
+    # 內含「【最近的事】」+「【我的資源清單】」block，自帶換行前綴
+    if episodic_block:
+        parts.append(episodic_block)
+
+    # B3：UserProfile（事實 global）+ UserObservations（觀察 per-pair）
+    # 各自帶換行前綴
+    if profile_block:
+        parts.append(profile_block)
+    if observations_block:
+        parts.append(observations_block)
 
     # P1：上次對話快照（Smart Greeting）
     last_session_block = build_last_session_block(conv.last_session)
