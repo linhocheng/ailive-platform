@@ -87,7 +87,18 @@ export default function ChatPage() {
   const searchParams = useSearchParams();
   const cidFromUrl = searchParams.get('cid');
   const [conversationId, setConversationId] = useState<string | null>(cidFromUrl);
-  const [userId] = useState(() => `web-${Math.random().toString(36).slice(2, 8)}`);
+  // 穩定 userId：與 voice/realtime 共用同一 localStorage key，記憶跨模式打通
+  const [userId] = useState(() => {
+    if (typeof window === 'undefined') return '';
+    let id = localStorage.getItem('ailive_realtime_anon_uid');
+    if (!id) {
+      id = `anon-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      localStorage.setItem('ailive_realtime_anon_uid', id);
+    }
+    return id;
+  });
+  // ref 讓 event handler 能讀到最新 conversationId（閉包不更新）
+  const conversationIdRef = useRef<string | null>(cidFromUrl);
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -109,6 +120,7 @@ export default function ChatPage() {
       const saved = localStorage.getItem(`conv-${characterId}`);
       if (saved) {
         setConversationId(saved);
+        conversationIdRef.current = saved;
         loadHistory(saved);
       }
     }
@@ -117,6 +129,41 @@ export default function ChatPage() {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, loading]);
+
+  // ── dialogue-end 觸發器：visibilitychange / beforeunload / 10 分鐘閒置 ──
+  useEffect(() => {
+    const IDLE_MS = 10 * 60 * 1000;
+    let idleTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const fire = () => {
+      const cid = conversationIdRef.current;
+      if (!cid || !characterId || !userId) return;
+      const payload = JSON.stringify({ characterId, conversationId: cid, userId });
+      navigator.sendBeacon('/api/dialogue-end', new Blob([payload], { type: 'application/json' }));
+    };
+
+    const resetIdle = () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(fire, IDLE_MS);
+    };
+
+    const onVisibility = () => { if (document.hidden) fire(); };
+    const onUnload = () => fire();
+
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('beforeunload', onUnload);
+    window.addEventListener('mousemove', resetIdle);
+    window.addEventListener('keydown', resetIdle);
+    resetIdle();
+
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('beforeunload', onUnload);
+      window.removeEventListener('mousemove', resetIdle);
+      window.removeEventListener('keydown', resetIdle);
+      if (idleTimer) clearTimeout(idleTimer);
+    };
+  }, [characterId, userId]);
 
   // ── Polling：每 5s 更新 messages + activeJobs（捕捉 system_event 交件 + 委託狀態）──
   useEffect(() => {
@@ -274,6 +321,7 @@ export default function ChatPage() {
             if (ev.type === 'done') {
               if (ev.conversationId && !conversationId) {
                 setConversationId(ev.conversationId);
+                conversationIdRef.current = ev.conversationId;
                 localStorage.setItem(`conv-${characterId}`, ev.conversationId);
               }
               if (ev.imageUrl) extractedImageUrl = ev.imageUrl;
