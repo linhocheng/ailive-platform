@@ -10,6 +10,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
+import { getAnthropicClient } from '@/lib/anthropic-via-bridge';
 import { redis } from '@/lib/redis';
 import { getFirestore } from '@/lib/firebase-admin';
 import { trackCost } from '@/lib/cost-tracker';
@@ -90,7 +91,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'rawSoul 尚未填入' }, { status: 400 });
     }
 
-    const client = new Anthropic({ apiKey });
+    const client = getAnthropicClient(apiKey);
 
     let soulSource = String(char.rawSoul);
     let refineInputTokens = 0;

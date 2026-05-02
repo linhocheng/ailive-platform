@@ -19,6 +19,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
+import { getAnthropicClient } from '@/lib/anthropic-via-bridge';
 import {
   Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType,
   PageOrientation, LevelFormat, TableOfContents,
@@ -263,7 +264,7 @@ export async function POST(req: NextRequest) {
 
     const apiKey = (process.env.ANTHROPIC_API_KEY || '').replace(/^"|"$/g, '');
     if (!apiKey) throw new Error('ANTHROPIC_API_KEY missing');
-    const anthropic = new Anthropic({ apiKey });
+    const anthropic = getAnthropicClient(apiKey);
 
     // 4. 階段 1：caller 把對話脈絡濃縮成 brief
     let refinedBrief = brief.prompt;

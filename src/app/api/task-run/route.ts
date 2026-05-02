@@ -19,6 +19,7 @@ import { trackCost } from '@/lib/cost-tracker';
 import { generateEmbedding, cosineSimilarity } from '@/lib/embeddings';
 import { generateImageForCharacter } from '@/lib/generate-image';
 import Anthropic from '@anthropic-ai/sdk';
+import { getAnthropicClient } from '@/lib/anthropic-via-bridge';
 
 export const maxDuration = 120;
 
@@ -495,7 +496,7 @@ ${outputFormat}`;
     }
 
     // 呼叫 Claude（謀謀模式：直接輸出，不走 dialogue）
-    const client = new Anthropic({ apiKey });
+    const client = getAnthropicClient(apiKey);
     const response = await client.messages.create({
       model: 'claude-sonnet-4-6',
       max_tokens: taskType === 'post' ? 2000 : 1000,

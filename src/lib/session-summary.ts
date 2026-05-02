@@ -12,6 +12,7 @@
  *   - 回 null 代表「萃取失敗或對話太短」，caller 應靜默跳過
  */
 import type Anthropic from '@anthropic-ai/sdk';
+import type { AnthropicBridge } from './anthropic-via-bridge';
 
 export type EndingMood = 'positive' | 'neutral' | 'concerned' | 'unfinished';
 
@@ -55,7 +56,7 @@ export function messagesToDialogueText(
  * 萃取 sessionSummary
  */
 export async function extractSessionSummary(
-  client: Anthropic,
+  client: Anthropic | AnthropicBridge,
   dialogueText: string,
   _opts: ExtractOptions = {},
 ): Promise<SessionSummaryResult | null> {
