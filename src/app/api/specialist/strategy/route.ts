@@ -356,10 +356,35 @@ export async function POST(req: NextRequest) {
         await db.collection('platform_jobs').doc(jobId).update({
           status: 'done',
           result: { docUrl, docTitle, filename, mdChars: md.length, stopReason },
+          output: { type: 'document', docUrl, title: docTitle },  // 對齊 image job schema，讓 system_event 讀得到
           completedAt: new Date().toISOString(),
         });
       } catch (e) {
         console.warn('[specialist/strategy] write back jobs failed:', e);
+      }
+
+      // 9. 寫 system_event 進對話（對齊 image job 的 pushSystemEvent 行為）
+      if (requesterConvId) {
+        try {
+          const admin = getFirebaseAdmin();
+          await db.collection('platform_conversations').doc(requesterConvId).update({
+            messages: admin.firestore.FieldValue.arrayUnion({
+              role: 'system_event',
+              eventType: 'specialist_delivered',
+              specialistId: assigneeId,
+              specialistName: assigneeName || '奧',
+              jobId,
+              output: { type: 'document', docUrl, title: docTitle },
+              workLog: null,
+              error: null,
+              timestamp: new Date().toISOString(),
+            }),
+            messageCount: admin.firestore.FieldValue.increment(1),
+            updatedAt: new Date().toISOString(),
+          });
+        } catch (e) {
+          console.warn('[specialist/strategy] system_event push failed:', e);
+        }
       }
     }
 
