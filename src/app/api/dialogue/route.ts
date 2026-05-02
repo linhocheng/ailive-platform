@@ -542,8 +542,8 @@ async function executeTool(
           aspectRatio: toolInput.aspect_ratio ? String(toolInput.aspect_ratio) : '1:1',
         }
       : { prompt: brief };
-    // strategy 走 internal dispatch（worker 不認 jobType=strategy），用 'processing' 讓 worker 跳過
-    const initialStatus = sp.jobType === 'strategy' ? 'processing' : 'pending';
+    // strategy 由 bridge VM worker 輪詢執行（30s），用 'pending' 讓 worker 接走
+    const initialStatus = 'pending';
     const jobRef = await db2.collection('platform_jobs').add({
       requesterId: characterId,
       requesterConvId: context?.conversationId || '',
@@ -556,24 +556,6 @@ async function executeTool(
       retryCount: 0,
       source: 'dialogue',
     });
-
-    // strategy → 立刻 fire-and-forget 派出去（不等回應，endpoint 完成時自己寫回 jobs）
-    if (sp.jobType === 'strategy') {
-      const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'https://ailive-platform.vercel.app';
-      const workerSecret = (process.env.WORKER_SECRET || '').replace(/^"|"$/g, '').trim();
-      void fetch(`${baseUrl}/api/specialist/strategy`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-worker-secret': workerSecret,
-        },
-        body: JSON.stringify({
-          jobId: jobRef.id,
-          assigneeId: sp.id,
-          brief: briefData,
-        }),
-      }).catch(e => console.warn('[dialogue] strategy dispatch failed:', e));
-    }
 
     // 寫一筆 promise 進 character-actions（兌現由 specialist endpoint 完成後 markFulfilled）
     if (context?.userId) {
@@ -1530,7 +1512,7 @@ ${convData.userProfile ? `【我認識這個人】\n${convData.userProfile}\n\n`
       specialistName?: string;
       specialistId?: string;
       jobId?: string;
-      output?: { imageUrl?: string; docUrl?: string; title?: string; workLog?: string };
+      output?: { imageUrl?: string; docUrl?: string; slideUrl?: string; title?: string; workLog?: string };
       workLog?: string;
       error?: string;
     };
@@ -1551,6 +1533,7 @@ ${convData.userProfile ? `【我認識這個人】\n${convData.userProfile}\n\n`
           if (m.output?.title) parts.push(`標題：${m.output.title}`);
           if (m.output?.imageUrl) parts.push(`圖片：${m.output.imageUrl}`);
           if (m.output?.docUrl) parts.push(`文件：${m.output.docUrl}`);
+          if (m.output?.slideUrl) parts.push(`投影片連結：${m.output.slideUrl}`);
           const wl = m.workLog || m.output?.workLog;
           if (wl) parts.push(`${who}的工作日誌：${wl}`);
           parts.push('（作品已出現在對話裡，user 看得到。你可以自然地回應作品。）');

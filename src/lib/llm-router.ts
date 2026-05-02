@@ -52,40 +52,12 @@ const SONNET_FORCE_PATTERNS = [
  * @param message 用戶訊息
  * @param conversationTurns 目前對話輪數（新對話較保守）
  */
+// Max 吃到飽後無需變檔，統一 Sonnet
 export function detectGear(
-  message: string,
-  conversationTurns = 0,
+  _message: string,
+  _conversationTurns = 0,
 ): ModelGear {
-  const msg = message.trim();
-
-  // 【天條】強制 Sonnet：使用者說「認真」→ 一律升檔，優先於所有其他判斷
-  if (SONNET_FORCE_PATTERNS.some(r => r.test(msg))) {
-    return 'sonnet';
-  }
-
-  // 強制 Haiku（簡單問候）
-  if (HAIKU_FORCE_PATTERNS.some(r => r.test(msg))) {
-    return 'haiku';
-  }
-
-  // 升 Sonnet：有觸發關鍵字
-  if (SONNET_PATTERNS.some(r => r.test(msg))) {
-    return 'sonnet';
-  }
-
-  // 升 Sonnet：訊息偏長（超過 30 字，通常有複雜需求）
-  if (msg.length > 30) {
-    return 'sonnet';
-  }
-
-  // 升 Sonnet：對話初期（前 2 輪，角色自我介紹 / 打招呼）
-  // 這時候用 Sonnet 讓第一印象好
-  if (conversationTurns < 2) {
-    return 'sonnet';
-  }
-
-  // 預設 Haiku（短訊息 + 無特殊需求）
-  return 'haiku';
+  return 'sonnet';
 }
 
 /**
