@@ -15,7 +15,7 @@ interface Message {
   specialistName?: string;
   specialistId?: string;
   jobId?: string;
-  output?: { type: string; imageUrl?: string; docUrl?: string; title?: string };
+  output?: { type: string; imageUrl?: string; docUrl?: string; slideUrl?: string; title?: string; workLog?: string };
   workLog?: string;
   error?: string;
 }
@@ -497,6 +497,17 @@ export default function ChatPage() {
                           color: 'var(--text-primary)', fontSize: 13, textDecoration: 'none', fontWeight: 500,
                         }}>
                           {'📄 ' + (msg.output.title || '查看文件')}
+                        </a>
+                      </div>
+                    )}
+                    {msg.output?.slideUrl && (
+                      <div style={{ padding: '10px 14px' }}>
+                        <a href={msg.output.slideUrl} target="_blank" rel="noreferrer" style={{
+                          display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 12px',
+                          borderRadius: 8, border: '1px solid var(--border)', background: 'white',
+                          color: 'var(--text-primary)', fontSize: 13, textDecoration: 'none', fontWeight: 500,
+                        }}>
+                          {'▶ 查看投影片'}
                         </a>
                       </div>
                     )}

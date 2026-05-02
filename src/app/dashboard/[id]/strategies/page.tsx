@@ -20,14 +20,17 @@ export default function StrategiesPage() {
   const { id } = useParams<{ id: string }>();
   const [items, setItems] = useState<StrategyRec[]>([]);
   const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const [charName, setCharName] = useState('');
 
   const load = () => {
     setLoading(true);
-    fetch(`/api/strategies?characterId=${id}`).then(r => r.json()).then(d => {
-      setItems(d.strategies || []);
-      setLoading(false);
-    });
+    setFetchError(null);
+    fetch(`/api/strategies?characterId=${id}`)
+      .then(r => r.ok ? r.json() : Promise.reject(new Error(`伺服器錯誤（HTTP ${r.status}）`)))
+      .then(d => { setItems(d.strategies || []); })
+      .catch(e => { setFetchError(e instanceof Error ? e.message : '載入失敗，請稍後再試'); })
+      .finally(() => { setLoading(false); });
   };
 
   useEffect(() => {
@@ -82,6 +85,16 @@ export default function StrategiesPage() {
 
       {loading ? (
         <div style={{ color: '#999', padding: 40, textAlign: 'center' }}>載入中...</div>
+      ) : fetchError ? (
+        <div style={{ textAlign: 'center', padding: 60, border: '2px dashed #f5c6cb', borderRadius: 12, background: '#fff8f8' }}>
+          <div style={{ fontSize: 28, marginBottom: 12 }}>⚠️</div>
+          <div style={{ color: '#842029', fontWeight: 600, marginBottom: 6 }}>載入失敗</div>
+          <div style={{ fontSize: 12, color: '#999', marginBottom: 20 }}>{fetchError}</div>
+          <button
+            onClick={load}
+            style={{ fontSize: 13, padding: '8px 20px', border: '1px solid #1a1a2e', borderRadius: 6, background: '#1a1a2e', color: '#fff', cursor: 'pointer' }}
+          >↻ 重新載入</button>
+        </div>
       ) : items.length === 0 ? (
         <div style={{ color: '#bbb', textAlign: 'center', padding: 60, border: '2px dashed #e0e0e0', borderRadius: 12 }}>
           還沒有策略書檔案

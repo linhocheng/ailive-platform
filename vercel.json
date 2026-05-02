@@ -14,6 +14,9 @@
     },
     "src/app/api/dialogue/route.ts": {
       "maxDuration": 120
+    },
+    "src/app/api/soul-enhance/route.ts": {
+      "maxDuration": 120
     }
   }
 }

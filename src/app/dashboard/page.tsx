@@ -96,6 +96,15 @@ const IconMic = () => (
   </svg>
 );
 
+const IconLive = () => (
+  <span style={{
+    display: 'inline-block',
+    width: 6, height: 6, borderRadius: '50%',
+    background: '#fff',
+    boxShadow: '0 0 0 2px rgba(255,255,255,0.35)',
+  }} />
+);
+
 export default function DashboardPage() {
   const [characters, setCharacters] = useState<Character[]>([]);
   const [loading, setLoading] = useState(true);
@@ -253,6 +262,20 @@ export default function DashboardPage() {
                       onMouseEnter={e => (e.currentTarget.style.opacity = '0.8')}
                       onMouseLeave={e => (e.currentTarget.style.opacity = '1')}
                     ><IconMic /> 語音</a>
+                    <a href={`/realtime/${c.id}`} target="_blank" rel="noopener noreferrer"
+                      onClick={e => e.stopPropagation()}
+                      style={{
+                        fontSize: 12, fontWeight: 500,
+                        color: '#fff',
+                        background: '#C2410C',
+                        borderRadius: 20,
+                        padding: '4px 12px',
+                        display: 'inline-flex', alignItems: 'center', gap: 5,
+                        transition: 'opacity 0.15s',
+                      }}
+                      onMouseEnter={e => (e.currentTarget.style.opacity = '0.85')}
+                      onMouseLeave={e => (e.currentTarget.style.opacity = '1')}
+                    ><IconLive /> 即時</a>
                   </div>
                 </div>
               </div>
