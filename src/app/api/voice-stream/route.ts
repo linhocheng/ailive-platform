@@ -172,7 +172,21 @@ export async function POST(req: NextRequest) {
           }
         } catch (_e) {}
 
-        const history = ((convData.messages as Array<{ role: string; content: string }>) || []).slice(-10);
+        // system_event（specialist 瞬交件通知）要轉成 assistant 口吻訊息，
+        // 否則 Anthropic SDK 會 400（只吃 user / assistant role）— 對齊 dialogue route
+        type HistoryMsg = {
+          role: string;
+          content?: string;
+          imageUrl?: string;
+          eventType?: string;
+          specialistName?: string;
+          specialistId?: string;
+          jobId?: string;
+          output?: { imageUrl?: string; docUrl?: string; slideUrl?: string; title?: string; workLog?: string };
+          workLog?: string;
+          error?: string;
+        };
+        const history = ((convData.messages as HistoryMsg[]) || []).slice(-10);
 
         // 3. 組 systemPrompt（語音模式）
         const timeRulesBlock = buildTimeRulesBlock();
@@ -755,7 +769,32 @@ specialist 選擇：
         // 6. Tool-use loop（最多 3 輪）再進入 streaming
         const client = new Anthropic({ apiKey: anthropicKey });
         let loopMessages: Anthropic.MessageParam[] = [
-          ...history.map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
+          ...history.map((m): Anthropic.MessageParam => {
+            // system_event → assistant 口吻的系統通知（讓角色感知到 specialist 交件了）
+            if (m.role === 'system_event') {
+              const who = m.specialistName || m.specialistId || '同伴';
+              if (m.eventType === 'specialist_failed') {
+                return {
+                  role: 'assistant',
+                  content: `[系統通知] ${who} 回報：委託失敗（${m.error || '未知原因'}）。你可以告知 user 並討論是否重試。`,
+                };
+              }
+              const parts: string[] = [`[系統通知] ${who} 交件了。`];
+              if (m.output?.title) parts.push(`標題：${m.output.title}`);
+              if (m.output?.imageUrl) parts.push(`圖片：${m.output.imageUrl}`);
+              if (m.output?.docUrl) parts.push(`文件：${m.output.docUrl}`);
+              if (m.output?.slideUrl) parts.push(`投影片連結：${m.output.slideUrl}`);
+              const wl = m.workLog || m.output?.workLog;
+              if (wl) parts.push(`${who}的工作日誌：${wl}`);
+              parts.push('（作品已出現在對話裡，user 看得到。你可以自然地回應作品。）');
+              return { role: 'assistant', content: parts.join('\n') };
+            }
+            // 一般訊息：舊訊息有 imageUrl 只帶提示文字，不重傳 base64
+            return {
+              role: m.role as 'user' | 'assistant',
+              content: m.imageUrl ? `${m.content || ''} [圖片：${m.imageUrl}]` : (m.content || ''),
+            };
+          }),
           { role: 'user', content: message },
         ];
 
