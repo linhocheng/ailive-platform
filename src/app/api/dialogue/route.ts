@@ -1643,6 +1643,8 @@ ${convData.userProfile ? `【我認識這個人】\n${convData.userProfile}\n\n`
 
             if (finalMsg.stop_reason === 'tool_use') {
               const toolResults: Anthropic.ToolResultBlockParam[] = [];
+              // 同回合追蹤：query_product_card 執行後立刻存圖片 URL，給 generate_image 用
+              let sameRoundProductImageUrl: string | null = null;
               for (const tb of toolUseBlocks) {
                 toolsUsed.push(tb.name);
                 // web_search 是 server-side tool，Anthropic 自己執行，
@@ -1651,10 +1653,37 @@ ${convData.userProfile ? `【我認識這個人】\n${convData.userProfile}\n\n`
                   toolResults.push({ type: 'tool_result', tool_use_id: tb.id, content: '' });
                   continue;
                 }
+
+                // generate_image 程式層兜底：若 Vivi 忘記填 reference_image_url，
+                // 自動從本回合或前幾輪 query_product_card 結果中提取產品圖 URL
+                const toolInput = tb.input as Record<string, unknown>;
+                if (tb.name === 'generate_image' && !toolInput.reference_image_url) {
+                  const productUrl = sameRoundProductImageUrl || (() => {
+                    // 從 currentMessages 往回掃，找 query_product_card 回傳的圖片 URL
+                    for (let mi = currentMessages.length - 1; mi >= 0; mi--) {
+                      const msg = currentMessages[mi] as { role: string; content: unknown };
+                      if (msg.role !== 'user' || !Array.isArray(msg.content)) continue;
+                      for (const blk of msg.content as Array<Record<string, unknown>>) {
+                        if (blk.type !== 'tool_result') continue;
+                        const c = typeof blk.content === 'string' ? blk.content : '';
+                        // query_product_card 結果有「圖片（」標記，裡面有真實產品圖 URL
+                        if (!c.includes('圖片（') && !c.includes('reference_image_url')) continue;
+                        const m = c.match(/https?:\/\/\S+/);
+                        if (m) return m[0];
+                      }
+                    }
+                    return null;
+                  })();
+                  if (productUrl) {
+                    toolInput.reference_image_url = productUrl;
+                    console.log(`[dialogue] auto-inject product image URL into generate_image: ${productUrl.slice(0, 60)}`);
+                  }
+                }
+
                 let result: string;
                 try {
                   result = await executeTool(
-                    tb.name, tb.input as Record<string, unknown>, characterId,
+                    tb.name, toolInput, characterId,
                     (inp, out) => { haikuInputTokens += inp; haikuOutputTokens += out; },
                     { conversationId: conversationId || undefined, userId: userId || undefined },
                   );
@@ -1691,6 +1720,11 @@ ${convData.userProfile ? `【我認識這個人】\n${convData.userProfile}\n\n`
                     content: `${msg}\n（工作編號：${jobId.slice(0, 8)}）\n妳現在繼續跟 user 聊，瞬完成後圖片會直接出現在這個對話裡。`,
                   });
                 } else {
+                  // query_product_card 執行完，存圖片 URL 供同回合 generate_image 用
+                  if (tb.name === 'query_product_card') {
+                    const urlMatch = result.match(/https?:\/\/\S+/);
+                    if (urlMatch) sameRoundProductImageUrl = urlMatch[0];
+                  }
                   toolResults.push({ type: 'tool_result', tool_use_id: tb.id, content: result });
                 }
               }
