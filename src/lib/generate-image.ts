@@ -192,7 +192,7 @@ export async function generateImageForCharacter(
  * 在 dialogue route 組裝 tools 時呼叫
  */
 export function buildGenerateImageDescription(refs: RefImage[]): string {
-  const base = '心裡浮現畫面就畫。描述用英文更精準。如果畫面裡有妳自己出現，不需要特別說——妳的臉已在系統裡，會自動帶著。';
+  const base = '心裡浮現畫面就畫。描述用英文更精準。如果畫面裡有妳自己出現，不需要特別說——妳的臉已在系統裡，會自動帶著。如果畫面裡有產品（保養品/商品/包裝），必須先 call query_product_card 拿到產品圖 URL，再把 imageUrl 填進 reference_image_url——不查就畫是憑空捏造，繪圖師沒有真實參考圖。';
 
   if (!refs || refs.length === 0) return base;
 

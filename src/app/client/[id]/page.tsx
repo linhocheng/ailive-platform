@@ -10,7 +10,7 @@ interface Character {
 }
 interface Post {
   id: string; content: string; imageUrl?: string; topic: string;
-  status: string; createdAt: string; igPostId?: string; imagePrompt?: string;
+  status: string; createdAt: string; scheduledAt?: string; igPostId?: string; imagePrompt?: string;
 }
 interface Task {
   id: string; type: string; description: string; intent?: string; enabled: boolean;
@@ -221,7 +221,10 @@ function PostsTab({ charId }: { charId:string }) {
                   )}
                 </div>
                 <div style={{display:'flex',gap:6,alignItems:'center'}}>
-                  <span style={{fontSize:11,color:'var(--text-muted)'}}>{new Date(post.createdAt).toLocaleDateString('zh-TW')}</span>
+                  {post.status==='scheduled' && post.scheduledAt
+                    ? <span style={{fontSize:11,color:'var(--green)',fontWeight:600}}>排程：{new Date(post.scheduledAt).toLocaleString('zh-TW',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}</span>
+                    : <span style={{fontSize:11,color:'var(--text-muted)'}}>{new Date(post.createdAt).toLocaleDateString('zh-TW')}</span>
+                  }
                   <button onClick={()=>del(post.id)} disabled={!!acting}
                     style={{background:'none',border:'none',color:'var(--text-muted)',cursor:'pointer',display:'flex',alignItems:'center',padding:0,transition:'color 0.15s'}}
                     onMouseEnter={e=>(e.currentTarget.style.color='var(--red)')}

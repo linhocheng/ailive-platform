@@ -510,9 +510,13 @@ async function executeTool(
 
   if (toolName === 'generate_image') {
     // Phase 2: generate_image stub → commission_specialist（瞬，非同步）
-    // 待兩週後舊版呼叫清零再移除此 stub
     const prompt = String(toolInput.prompt || '');
-    const refs = toolInput.reference_image_url ? [String(toolInput.reference_image_url)] : [];
+    // 自動帶入角色 characterSheet 為第一張 ref（臉部一致性）
+    const charDoc2 = await db.collection('platform_characters').doc(characterId).get();
+    const charSheet = String(charDoc2.data()?.visualIdentity?.characterSheet || '');
+    const refs: string[] = [];
+    if (charSheet) refs.push(charSheet);
+    if (toolInput.reference_image_url) refs.push(String(toolInput.reference_image_url));
     return await executeTool(
       'commission_specialist',
       { specialist: 'painter', brief: prompt, refs, aspect_ratio: toolInput.aspect_ratio || '1:1' },

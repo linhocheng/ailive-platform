@@ -11,12 +11,12 @@ interface Task {
 }
 
 const TYPE_LABELS: Record<string, string> = {
-  learn: '🎓 主動學習',
-  reflect: '🌙 每日省思',
-  post: '📝 生成草稿',
-  explore: '🔍 探索學習',
-  sleep: '💤 作夢沉殿',
-  engage: '💬 互動',
+  learn: '主動學習',
+  reflect: '每日省思',
+  post: '生成草稿',
+  explore: '探索學習',
+  sleep: '作夢沉澱',
+  engage: '互動',
 };
 
 const TYPE_INTENT_HINTS: Record<string, string> = {

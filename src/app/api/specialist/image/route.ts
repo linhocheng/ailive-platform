@@ -31,7 +31,7 @@ import {
   generateWithGemini,
   generateWithGeminiRefs,
   downloadRefsBase64,
-} from '@/lib/openai-imagen';
+} from '@/lib/gemini-imagen';
 
 export const maxDuration = 300;
 export const runtime = 'nodejs';
