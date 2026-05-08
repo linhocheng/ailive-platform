@@ -644,13 +644,63 @@ function KnowledgeTab({ charId }: { charId:string }) {
 }
 
 // ══════════════════════════════════════
+// ImagesTab — 生圖紀錄（唯讀）
+// ══════════════════════════════════════
+interface ImageItem {
+  url: string; conversationId: string; timestamp: string;
+  source: string; specialistName?: string; workLog?: string; jobId?: string; brief?: string;
+}
+
+function ImagesTab({ charId }: { charId:string }) {
+  const [images, setImages] = useState<ImageItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [lightbox, setLightbox] = useState<ImageItem|null>(null);
+
+  useEffect(()=>{
+    fetch(`/api/images?characterId=${charId}`).then(r=>r.json()).then(d=>{setImages(d.images||[]);setLoading(false);});
+  },[charId]);
+
+  if (loading) return <div style={{color:'var(--text-muted)',fontSize:13}}>載入中…</div>;
+  if (images.length===0) return <div style={{color:'var(--text-muted)',textAlign:'center',padding:40,border:'1.5px dashed var(--border)',borderRadius:'var(--r-lg)',fontSize:13}}>還沒有生圖紀錄</div>;
+
+  return (
+    <div>
+      <div style={{fontSize:12,color:'var(--text-muted)',marginBottom:12}}>共 {images.length} 張</div>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(140px,1fr))',gap:10}}>
+        {images.map((img,i)=>(
+          <div key={i} onClick={()=>setLightbox(img)} style={{cursor:'pointer',borderRadius:'var(--r-sm)',overflow:'hidden',border:'1px solid var(--border)',background:'var(--bg)',aspectRatio:'1',position:'relative'}}>
+            <img src={img.url} alt="" style={{width:'100%',height:'100%',objectFit:'cover',display:'block'}}/>
+            {img.source?.startsWith('specialist')&&(
+              <div style={{position:'absolute',bottom:0,left:0,right:0,background:'linear-gradient(transparent,rgba(0,0,0,0.55))',padding:'16px 6px 5px',fontSize:10,color:'rgba(255,255,255,0.9)',overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}}>
+                {img.specialistName||'繪師'}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {lightbox&&(
+        <div onClick={()=>setLightbox(null)} style={{position:'fixed',inset:0,zIndex:200,background:'rgba(0,0,0,0.82)',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',padding:20}}>
+          <img src={lightbox.url} alt="" style={{maxWidth:'90vw',maxHeight:'65vh',objectFit:'contain',borderRadius:'var(--r-sm)',display:'block'}} onClick={e=>e.stopPropagation()}/>
+          <div style={{marginTop:14,maxWidth:480,width:'100%',color:'#fff',fontSize:12,textAlign:'center',lineHeight:1.6}} onClick={e=>e.stopPropagation()}>
+            {lightbox.workLog&&<div style={{background:'rgba(255,255,255,0.1)',borderRadius:'var(--r-sm)',padding:'8px 12px',marginBottom:8,color:'rgba(255,255,255,0.85)',textAlign:'left'}}>{lightbox.workLog}</div>}
+            <div style={{color:'rgba(255,255,255,0.45)',fontSize:11}}>{new Date(lightbox.timestamp).toLocaleString('zh-TW')}</div>
+          </div>
+          <button onClick={()=>setLightbox(null)} style={{marginTop:16,background:'none',border:'1px solid rgba(255,255,255,0.3)',color:'#fff',borderRadius:'var(--r-sm)',padding:'6px 18px',cursor:'pointer',fontSize:13}}>關閉</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════
 // Main
 // ══════════════════════════════════════
 export default function ClientPage() {
   const { id: charId } = useParams<{ id:string }>();
   const [char, setChar] = useState<Character|null>(null);
   const [unlocked, setUnlocked] = useState(false);
-  const [tab, setTab] = useState<'posts'|'tasks'|'knowledge'|'chat'>('posts');
+  const [tab, setTab] = useState<'posts'|'tasks'|'knowledge'|'chat'|'images'>('posts');
 
   useEffect(()=>{
     fetch(`/api/characters/${charId}`).then(r=>r.json()).then(d=>setChar(d.character||null));
@@ -677,6 +727,7 @@ export default function ClientPage() {
     {key:'posts',     label:'貼文',  icon:<Ic.File/>},
     {key:'tasks',     label:'排程',  icon:<Ic.Calendar/>},
     {key:'knowledge', label:'知識庫', icon:<Ic.Book/>},
+    {key:'images',    label:'生圖',  icon:<Ic.Image/>},
     {key:'chat',      label:'聊天',  icon:<Ic.Chat/>},
   ] as const;
 
@@ -725,6 +776,7 @@ export default function ClientPage() {
       {tab==='posts'     && <PostsTab charId={charId}/>}
       {tab==='tasks'     && <TasksTab charId={charId}/>}
       {tab==='knowledge' && <KnowledgeTab charId={charId}/>}
+      {tab==='images'    && <ImagesTab charId={charId}/>}
     </div>
 
     {tab==='chat'&&(
