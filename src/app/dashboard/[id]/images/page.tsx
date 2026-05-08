@@ -166,6 +166,8 @@ export default function ImagesPage() {
               <span style={{ fontSize: 11, color: '#999' }}>{formatDate(preview.timestamp)}</span>
             </div>
 
+            <DebugRow label="來源" value={preview.source || 'self'} />
+            <DebugRow label="Job ID" value={preview.jobId || '（無 — 角色自己生圖，不走 specialist job）'} mono />
             {preview.specialistName && (
               <DebugRow label="作者" value={preview.specialistName} />
             )}
@@ -175,9 +177,11 @@ export default function ImagesPage() {
             {preview.imagePromptPrefix && (
               <DebugRow label="Prefix（瞬靈魂）" value={preview.imagePromptPrefix} mono accent="#c08" />
             )}
-            {preview.geminiPrompt && (
+            {preview.geminiPrompt ? (
               <DebugRow label="送進 Gemini 的 Prompt" value={preview.geminiPrompt} mono accent="#06c" />
-            )}
+            ) : preview.jobId ? (
+              <DebugRow label="送進 Gemini 的 Prompt" value="（這張圖在 v0.2.7.005 之前生成，沒寫回真相鏈；之後生的圖才會有）" />
+            ) : null}
             {preview.refsUsed && preview.refsUsed.length > 0 && (
               <div style={{ marginBottom: 14 }}>
                 <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>參考圖（{preview.refsUsed.length}）</div>
@@ -192,9 +196,6 @@ export default function ImagesPage() {
             )}
             {preview.workLog && (
               <DebugRow label="工作日誌" value={preview.workLog} />
-            )}
-            {preview.jobId && (
-              <DebugRow label="Job ID" value={preview.jobId} mono />
             )}
             <div style={{ marginTop: 16 }}>
               <a href={preview.url} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: '#06c' }}>原圖 ↗</a>
