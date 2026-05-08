@@ -3,11 +3,41 @@ import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { CharNav } from '../page';
 
+function DebugRow({ label, value, mono, accent }: { label: string; value: string; mono?: boolean; accent?: string }) {
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>{label}</div>
+      <div
+        style={{
+          fontFamily: mono ? 'ui-monospace, SFMono-Regular, Menlo, monospace' : undefined,
+          fontSize: mono ? 11 : 13,
+          color: accent || '#333',
+          background: '#fafaf8',
+          border: '1px solid #efeeea',
+          borderRadius: 6,
+          padding: '8px 10px',
+          wordBreak: 'break-word',
+          whiteSpace: 'pre-wrap',
+        }}
+      >
+        {value}
+      </div>
+    </div>
+  );
+}
+
 interface ImageItem {
   url: string;
   conversationId: string;
   timestamp: string;
   jobId?: string;
+  source?: string;
+  specialistName?: string;
+  workLog?: string;
+  brief?: string;
+  geminiPrompt?: string;
+  imagePromptPrefix?: string;
+  refsUsed?: string[];
 }
 
 export default function ImagesPage() {
@@ -16,7 +46,7 @@ export default function ImagesPage() {
   const [loading, setLoading] = useState(true);
   const [charName, setCharName] = useState('');
   const [deleting, setDeleting] = useState<string | null>(null);
-  const [preview, setPreview] = useState<string | null>(null);
+  const [preview, setPreview] = useState<ImageItem | null>(null);
 
   const load = () => {
     setLoading(true);
@@ -81,7 +111,7 @@ export default function ImagesPage() {
           {images.map((img, i) => (
             <div key={i} style={{ position: 'relative', borderRadius: 10, overflow: 'hidden', border: '1px solid #e0e0e0', background: '#f8f9fa', cursor: 'pointer' }}>
               {/* 圖片 */}
-              <div onClick={() => setPreview(img.url)} style={{ aspectRatio: '3/4', overflow: 'hidden' }}>
+              <div onClick={() => setPreview(img)} style={{ aspectRatio: '3/4', overflow: 'hidden' }}>
                 <img
                   src={img.url}
                   alt={`生圖 ${i + 1}`}
@@ -115,16 +145,66 @@ export default function ImagesPage() {
         </div>
       )}
 
-      {/* 燈箱預覽 */}
+      {/* 燈箱預覽（含除錯面板） */}
       {preview && (
         <div
           onClick={() => setPreview(null)}
-          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, cursor: 'zoom-out' }}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'stretch', zIndex: 1000, cursor: 'zoom-out' }}
         >
-          <img src={preview} alt="預覽" style={{ maxHeight: '90vh', maxWidth: '90vw', borderRadius: 10, boxShadow: '0 8px 40px rgba(0,0,0,0.5)' }} />
+          {/* 左：圖 */}
+          <div style={{ flex: '1 1 auto', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, minWidth: 0 }}>
+            <img src={preview.url} alt="預覽" style={{ maxHeight: '90vh', maxWidth: '100%', borderRadius: 10, boxShadow: '0 8px 40px rgba(0,0,0,0.5)' }} />
+          </div>
+
+          {/* 右：除錯面板 */}
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{ width: 380, flexShrink: 0, background: '#fff', overflowY: 'auto', cursor: 'default', padding: '24px 20px', fontSize: 13, lineHeight: 1.6, color: '#333' }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+              <strong style={{ color: '#1a1a2e', fontSize: 15 }}>真相鏈</strong>
+              <span style={{ fontSize: 11, color: '#999' }}>{formatDate(preview.timestamp)}</span>
+            </div>
+
+            {preview.specialistName && (
+              <DebugRow label="作者" value={preview.specialistName} />
+            )}
+            {preview.brief && (
+              <DebugRow label="原 Brief" value={preview.brief} mono />
+            )}
+            {preview.imagePromptPrefix && (
+              <DebugRow label="Prefix（瞬靈魂）" value={preview.imagePromptPrefix} mono accent="#c08" />
+            )}
+            {preview.geminiPrompt && (
+              <DebugRow label="送進 Gemini 的 Prompt" value={preview.geminiPrompt} mono accent="#06c" />
+            )}
+            {preview.refsUsed && preview.refsUsed.length > 0 && (
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>參考圖（{preview.refsUsed.length}）</div>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {preview.refsUsed.map((u, i) => (
+                    <a key={i} href={u} target="_blank" rel="noreferrer" title={u}>
+                      <img src={u} alt={`ref ${i + 1}`} style={{ width: 60, height: 60, objectFit: 'cover', borderRadius: 6, border: '1px solid #e0e0e0' }} />
+                    </a>
+                  ))}
+                </div>
+              </div>
+            )}
+            {preview.workLog && (
+              <DebugRow label="工作日誌" value={preview.workLog} />
+            )}
+            {preview.jobId && (
+              <DebugRow label="Job ID" value={preview.jobId} mono />
+            )}
+            <div style={{ marginTop: 16 }}>
+              <a href={preview.url} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: '#06c' }}>原圖 ↗</a>
+            </div>
+          </div>
+
+          {/* 關閉鈕 */}
           <button
             onClick={() => setPreview(null)}
-            style={{ position: 'fixed', top: 20, right: 24, background: 'none', border: 'none', color: '#fff', fontSize: 28, cursor: 'pointer' }}
+            style={{ position: 'fixed', top: 20, right: 24, background: 'none', border: 'none', color: '#fff', fontSize: 28, cursor: 'pointer', zIndex: 1001 }}
           >✕</button>
         </div>
       )}

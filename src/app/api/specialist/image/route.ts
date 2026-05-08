@@ -186,6 +186,20 @@ WORKLOG: <工作日誌，繁體中文，2-4 句>`;
 
     console.log(`[specialist/image] job=${jobId?.slice(0, 8)} refs=${refsSuccessful.length}/${cappedRefs.length} url=${imgResult.imageUrl.slice(-30)}`);
 
+    // 5.1 寫除錯資訊回 platform_jobs.output（dot notation 不影響 worker 寫的 imageUrl/workLog）
+    // 後台對賬：brief.prompt → geminiPrompt → 真實送進 Gemini 的字串
+    if (jobId) {
+      try {
+        await db.collection('platform_jobs').doc(jobId).update({
+          'output.geminiPrompt': geminiPrompt,
+          'output.imagePromptPrefix': imagePromptPrefix,
+          'output.refsUsed': refsSuccessful.map(r => r.sourceUrl),
+        });
+      } catch (e) {
+        console.warn('[specialist/image] write debug fields failed:', e);
+      }
+    }
+
     return NextResponse.json({
       imageUrl: imgResult.imageUrl,
       workLog,

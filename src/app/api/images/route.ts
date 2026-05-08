@@ -22,6 +22,10 @@ export async function GET(req: NextRequest) {
       workLog?: string;                // 瞬的工作日誌（只有 specialist 圖才有）
       jobId?: string;
       brief?: string;                  // specialist job 的 brief（補來源時有）
+      // 除錯欄（specialist/image 寫回 output 的真相鏈）
+      geminiPrompt?: string;
+      imagePromptPrefix?: string;
+      refsUsed?: string[];
     }
     const images: ImageRec[] = [];
     const seenJobIds = new Set<string>();   // 去重：已見過的 jobId（primary key）
@@ -89,7 +93,13 @@ export async function GET(req: NextRequest) {
       for (const jd of jobsSnap.docs) {
         const j = jd.data();
         if (j.status !== 'done') continue;
-        const output = j.output as { imageUrl?: string; workLog?: string } | undefined;
+        const output = j.output as {
+          imageUrl?: string;
+          workLog?: string;
+          geminiPrompt?: string;
+          imagePromptPrefix?: string;
+          refsUsed?: string[];
+        } | undefined;
         const url = output?.imageUrl ? cleanHttpUrl(output.imageUrl) : null;
         if (!url) continue;
         // 去重：若 job 對應的 system_event 已被源 1 帶進，跳過
@@ -108,6 +118,9 @@ export async function GET(req: NextRequest) {
           workLog: output?.workLog || undefined,
           jobId: jd.id,
           brief: (j.brief as { prompt?: string } | undefined)?.prompt || undefined,
+          geminiPrompt: output?.geminiPrompt || undefined,
+          imagePromptPrefix: output?.imagePromptPrefix || undefined,
+          refsUsed: Array.isArray(output?.refsUsed) ? output.refsUsed : undefined,
         });
       }
     } catch (jobsErr) {
