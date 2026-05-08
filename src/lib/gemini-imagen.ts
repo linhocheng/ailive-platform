@@ -13,7 +13,7 @@
 import { generateImagePath } from '@/lib/image-storage';
 import { getFirebaseAdmin } from '@/lib/firebase-admin';
 
-const GEMINI_IMAGE_MODEL = 'gemini-2.5-flash-image';
+const GEMINI_IMAGE_MODEL = 'gemini-3.1-flash-image-preview';
 const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_IMAGE_MODEL}:generateContent`;
 
 export interface GeminiImageResult {
