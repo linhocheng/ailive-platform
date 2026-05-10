@@ -357,6 +357,7 @@ export async function POST(req: NextRequest) {
           status: 'done',
           result: { docUrl, docTitle, filename, mdChars: md.length, stopReason },
           output: { type: 'document', docUrl, title: docTitle },  // 對齊 image job schema，讓 system_event 讀得到
+          mdContent: md,  // 中間態：給 strategy_html follow-up worker 讀，免得重抓 docx→md 掉格式
           completedAt: new Date().toISOString(),
         });
       } catch (e) {
