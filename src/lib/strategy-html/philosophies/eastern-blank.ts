@@ -795,54 +795,11 @@ export const referenceHtml = String.raw`<!doctype html>
   <div class="punch">這兩個市場有一個共同的消費者，但他們目前沒有一個共同的媒體。</div>
 </section>
 
-<!-- competitor three col -->
-<section class="block" data-reveal>
-  <div class="eyebrow">— Stat 02</div>
-  <h4>競爭地形</h4>
-  <p class="lead">三類競品都有缺角。沒有任何一個競爭者同時擁有現代靈性語言的親近感，以及台灣宮廟文化的在地深度。</p>
-
-  <div class="three-col">
-    <div class="col">
-      <div class="tag">第一類 · TYPE A</div>
-      <div class="name">西方靈性創作者</div>
-      <dl>
-        <dt>STRENGTH</dt><dd>觸及年輕族群強</dd>
-        <dt>WEAKNESS</dt><dd class="weak">高度同質、缺文化根基</dd>
-      </dl>
-    </div>
-    <div class="col">
-      <div class="tag">第二類 · TYPE B</div>
-      <div class="name">宮廟數位化嘗試</div>
-      <dl>
-        <dt>STRENGTH</dt><dd>線下資產龐大</dd>
-        <dt>WEAKNESS</dt><dd class="weak">無現代品牌意識</dd>
-      </dl>
-    </div>
-    <div class="col">
-      <div class="tag">第三類 · TYPE C</div>
-      <div class="name">泛健康生活媒體</div>
-      <dl>
-        <dt>STRENGTH</dt><dd>佔據既有流量</dd>
-        <dt>WEAKNESS</dt><dd class="weak">沒立場、不深度</dd>
-      </dl>
-    </div>
-  </div>
-
-  <div class="insight">沒有任何一個競爭者同時擁有現代靈性語言的親近感，以及台灣宮廟文化的在地深度。</div>
-</section>
-
 <!-- blank space — the empty position -->
 <section class="blank" data-reveal>
   <div class="kicker">市場結論 · CONCLUSION</div>
   <p class="quote">這個位置，<br><span class="accent">是空的。</span></p>
   <p class="after">整個台灣靈性消費市場，沒有任何一個品牌站在「現代語言 × 在地文化」的交叉點上。這不是擠進已飽和的市場，是走進一塊還沒有人標記的土地。</p>
-</section>
-
-<!-- ============ PART 02 ============ -->
-<section class="section-div" data-no="02">
-  <div class="kicker">PART 02</div>
-  <h3>品牌定位</h3>
-  <p class="sub">不選邊站，是這個品牌的力量</p>
 </section>
 
 <!-- manifesto -->
@@ -855,118 +812,6 @@ export const referenceHtml = String.raw`<!doctype html>
     <p>這個品牌說：<br>這兩個你是同一個你。</p>
     <p>這個組合是你的力量，<br>不是你的矛盾。</p>
   </div>
-</section>
-
-<!-- voice comparison -->
-<section class="block" data-reveal>
-  <div class="eyebrow">— Brand Voice</div>
-  <h4>品牌聲音的四個禁區</h4>
-  <p class="lead">這四種語調最容易讓品牌變得平庸。它們都是「正確的」，但任何一條都會把品牌拉向已被佔據的位置。</p>
-
-  <div class="compare">
-    <div class="wrong-col">
-      <h5>避開 · AVOID</h5>
-      <ul class="wrong-list">
-        <li><span class="n">傳教式</span><span class="d">高高在上，讓人感到被說教</span></li>
-        <li><span class="n">療癒式</span><span class="d">過度溫柔，缺乏力量</span></li>
-        <li><span class="n">神秘式</span><span class="d">故意製造距離感</span></li>
-        <li><span class="n">學術式</span><span class="d">正確但沒有溫度</span></li>
-      </ul>
-    </div>
-    <div class="right-col">
-      <h5>瞄準 · TARGET</h5>
-      <p class="target">像一個你信任的朋友——他剛好既研究過榮格的原型理論，也在北港朝天宮跟進香隊伍走過一整個晚上。</p>
-    </div>
-  </div>
-</section>
-
-<!-- ============ PART 03 ============ -->
-<section class="section-div" data-no="03">
-  <div class="kicker">PART 03</div>
-  <h3>數位行銷</h3>
-  <p class="sub">五個平台、五種角色，組成完整品牌體驗</p>
-</section>
-
-<!-- platforms grid -->
-<section class="block" data-reveal>
-  <div class="eyebrow">— Platform Mix</div>
-  <h4>平台分工</h4>
-  <p class="lead">不是同一套內容複製貼上。每個平台有自己的角色與節奏，加總起來才是品牌。</p>
-
-  <div class="platforms">
-    <div class="pf">
-      <div class="name">Instagram</div>
-      <div><div class="role">視覺門面</div><div class="fn">Reels 短影音 + 輪播知識卡，做情感共鳴主場</div></div>
-    </div>
-    <div class="pf">
-      <div class="name">TikTok</div>
-      <div><div class="role">新受眾加速器</div><div class="fn">命理 / 靈性題材有機傳播強，推 30–60 秒短片</div></div>
-    </div>
-    <div class="pf">
-      <div class="name">YouTube</div>
-      <div><div class="role">深度信任 + 長尾搜尋</div><div class="fn">宮廟紀錄片、長冥想引導、20–30 分鐘訪談</div></div>
-    </div>
-    <div class="pf">
-      <div class="name">Facebook</div>
-      <div><div class="role">30+ 族群社團</div><div class="fn">東方靈性生活交流社團，深度討論場域</div></div>
-    </div>
-    <div class="pf" style="grid-column: 1 / -1;">
-      <div class="name">Podcast</div>
-      <div><div class="role">通勤陪伴</div><div class="fn">週更節目，建立長期人格信任</div></div>
-    </div>
-  </div>
-</section>
-
-<!-- KOL bullets -->
-<section class="block" data-reveal>
-  <div class="eyebrow">— KOL Strategy</div>
-  <h4>KOL 不追求大網紅</h4>
-  <p class="lead">深入三個微型生態圈，重疊度高、成本低，是這個品牌與大水晶療癒帳號競爭的非對稱武器。</p>
-
-  <div class="bullets">
-    <div class="bullet">
-      <div class="no">01</div>
-      <div class="name">宮廟文化記錄者</div>
-      <div class="desc">5K–30K 粉，攝影師 / 文字工作者 / 廟會紀錄者，信任度極高。</div>
-    </div>
-    <div class="bullet">
-      <div class="no">02</div>
-      <div class="name">身心靈美容師社群</div>
-      <div class="desc">兼做水晶 / 精油 / 脈輪療癒，與客戶有深度個人關係。</div>
-    </div>
-    <div class="bullet">
-      <div class="no">03</div>
-      <div class="name">心靈書寫創作者</div>
-      <div class="desc">Threads / IG 上的長文寫手，受眾與品牌目標重合度最高。</div>
-    </div>
-  </div>
-</section>
-
-<!-- roadmap -->
-<section class="block" data-reveal>
-  <div class="eyebrow">— Year One Roadmap</div>
-  <h4>首年三階段</h4>
-  <p class="lead">從 0 到一個具體的收入規模。每階段不超前、不延後——靈性品牌的信任是線性累積的，不能用流量公式跳級。</p>
-
-  <div class="roadmap">
-    <div class="phase">
-      <div class="q">Q1</div>
-      <div class="pname">建立認同</div>
-      <div class="pdesc">純內容、不變現。建立「現代語言詮釋東方靈性」的品牌識別，讓第一波受眾認得這個聲音。</div>
-    </div>
-    <div class="phase">
-      <div class="q">Q2</div>
-      <div class="pname">啟動社群</div>
-      <div class="pdesc">FB 社團 + IG 直播，把單向追蹤者轉成參與式社群。社群密度比社群人數重要。</div>
-    </div>
-    <div class="phase">
-      <div class="q">Q3 — Q4</div>
-      <div class="pname">啟動變現</div>
-      <div class="pdesc">課程 + 訂閱 + 線下小型聚會，建立可持續收入結構。線下聚會是品牌信任的最終驗證點。</div>
-    </div>
-  </div>
-
-  <p class="footnote">每階段不超前、不延後——靈性品牌的信任是線性累積的，不能用流量公式跳級。</p>
 </section>
 
 <!-- ============ END ============ -->
