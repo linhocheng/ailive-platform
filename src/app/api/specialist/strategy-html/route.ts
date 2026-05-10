@@ -67,7 +67,7 @@ export async function POST(req: NextRequest) {
 
     const res = await anthropic.messages.create({
       model: 'claude-sonnet-4-6',
-      max_tokens: 12000,
+      max_tokens: 16000,
       system: sysPrompt,
       messages: [{ role: 'user', content: userPrompt }],
     });
@@ -85,9 +85,17 @@ export async function POST(req: NextRequest) {
     // 3. 七題自查
     const qa = qaHtml(html);
     if (!qa.ok) {
-      console.warn(`[strategy-html] QA FAILED: ${qa.reasons.join(', ')}`);
-      // Phase 1: 不 retry, 直接拋. 觀察幾次再決定要不要加 retry/fallback.
-      throw new Error(`QA failed: ${qa.reasons.join('; ')}`);
+      const tail = html.slice(-300).replace(/\s+/g, ' ');
+      console.warn(`[strategy-html] QA FAILED: ${qa.reasons.join(', ')} | bytes=${html.length} stop=${stopReason} out=${usage.output} | tail="${tail}"`);
+      // 失敗時把 stop / bytes / tail 寫進 Firestore 方便除錯
+      try {
+        await jobRef.update({
+          htmlError: `QA failed: ${qa.reasons.join('; ')} | stop=${stopReason} bytes=${html.length} out=${usage.output}`,
+          htmlDebugTail: tail,
+          htmlGeneratedAt: new Date().toISOString(),
+        });
+      } catch {}
+      throw new Error(`QA failed: ${qa.reasons.join('; ')} | stop=${stopReason} bytes=${html.length} out=${usage.output}`);
     }
 
     // 4. Storage 上傳 public

@@ -64,7 +64,7 @@ ${html}
    - 列點可重組成 .bullets / .three-col
    - 數字統計突出視覺：.stat .num 用 clamp() 大字級
 7. **Cormorant Garamond italic** 用於英文小標、章節序號（PART 01 / Q1）、引號裝飾
-8. **長度約束（硬門檻）**：完整 HTML 控制在 30KB-45KB 之間（含 CSS 與內容）；output token 預算 12000，超過會被截斷。精簡優先，不要為了塞滿 layout 而灌水字。
+8. **長度約束（硬門檻）**：完整 HTML 控制在 30KB-45KB 之間（含 CSS 與內容）；output token 預算 16000，**必須留收尾空間給 </body></html>**。精簡優先，不要為了塞滿 layout 而灌水字。CSS 變數區整段沿用、不要重寫。
 
 # 輸出格式
 
@@ -82,6 +82,6 @@ export function buildUserPrompt(mdContent: string, docTitle: string): string {
 ${mdContent}
 
 請依美學心法 + 結構規範，產出完整 HTML 長卷。
-**輸出長度目標 30-40KB**（output token 上限 12000，超過會截斷致 QA 失敗）。
+**輸出長度目標 30-40KB**（output token 上限 16000，**最後一定要寫到 </body></html> 收尾**，否則 QA 失敗）。
 第一個字元 <。`;
 }
