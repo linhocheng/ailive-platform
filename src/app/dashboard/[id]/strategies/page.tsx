@@ -14,6 +14,8 @@ interface StrategyRec {
   createdAt: string;
   completedAt?: string;
   error?: string;
+  htmlUrl?: string;
+  htmlGeneratedAt?: string;
 }
 
 export default function StrategiesPage() {
@@ -130,20 +132,36 @@ export default function StrategiesPage() {
                   </td>
                   <td style={{ padding: '12px', verticalAlign: 'top' }}>{statusBadge(item.status)}</td>
                   <td style={{ padding: '12px', verticalAlign: 'top' }}>
-                    {item.docUrl ? (
-                      <a
-                        href={item.docUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        style={{
-                          fontSize: 12, color: '#fff', background: '#1a1a2e',
-                          padding: '6px 12px', borderRadius: 4, textDecoration: 'none',
-                          display: 'inline-block',
-                        }}
-                      >下載 docx</a>
-                    ) : (
-                      <span style={{ fontSize: 11, color: '#bbb' }}>—</span>
-                    )}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      {item.htmlUrl ? (
+                        <a
+                          href={item.htmlUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          style={{
+                            fontSize: 12, color: '#fff', background: '#0d6efd',
+                            padding: '6px 12px', borderRadius: 4, textDecoration: 'none',
+                            display: 'inline-block', textAlign: 'center',
+                          }}
+                        >閱讀 HTML</a>
+                      ) : item.status === 'done' ? (
+                        <span style={{ fontSize: 11, color: '#bbb' }}>HTML 生成中…</span>
+                      ) : null}
+                      {item.docUrl ? (
+                        <a
+                          href={item.docUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          style={{
+                            fontSize: 12, color: '#fff', background: '#1a1a2e',
+                            padding: '6px 12px', borderRadius: 4, textDecoration: 'none',
+                            display: 'inline-block', textAlign: 'center',
+                          }}
+                        >下載 docx</a>
+                      ) : !item.htmlUrl ? (
+                        <span style={{ fontSize: 11, color: '#bbb' }}>—</span>
+                      ) : null}
+                    </div>
                   </td>
                 </tr>
               ))}

@@ -33,6 +33,7 @@ import { generateImageForCharacter } from '@/lib/generate-image';
 import { preprocessTTS, type Provider } from '@/lib/tts-preprocess';
 import { getTTSProvider, synthesizeStreamSafe } from '@/lib/tts-providers';
 import { addUserAction, getRecentUserActions, formatActionsBlock } from '@/lib/character-actions';
+import { enqueueStrategy } from '@/lib/cloud-tasks';
 import { loadEpisodicBlock } from '@/lib/episodic-memory';
 import { buildTimeRulesBlock } from '@/lib/time-rules';
 import { loadUserProfile, upsertUserProfile, formatProfileBlock } from '@/lib/user-profile';
@@ -182,7 +183,7 @@ export async function POST(req: NextRequest) {
           specialistName?: string;
           specialistId?: string;
           jobId?: string;
-          output?: { imageUrl?: string; docUrl?: string; slideUrl?: string; title?: string; workLog?: string };
+          output?: { imageUrl?: string; docUrl?: string; htmlUrl?: string; slideUrl?: string; title?: string; workLog?: string };
           workLog?: string;
           error?: string;
         };
@@ -649,8 +650,9 @@ specialist 選擇：
                   aspectRatio: toolInput.aspect_ratio ? String(toolInput.aspect_ratio) : '1:1',
                 }
               : { prompt: brief };
-            // strategy 走 internal dispatch（worker 不認 jobType=strategy），用 'processing' 讓 worker 跳過
-            const initialStatus = sp.jobType === 'strategy' ? 'processing' : 'pending';
+            // strategy → Cloud Run worker (strategy-worker, 兩段 LLM + docx + enqueue strategy-html)
+            // image → bridge VM worker（輪詢 30s）
+            const routedTo = sp.jobType === 'strategy' ? 'cloud-run' : 'bridge-vm';
             const jobRef = await db.collection('platform_jobs').add({
               requesterId: characterId,
               requesterConvId: convId,
@@ -658,28 +660,26 @@ specialist 選擇：
               assigneeId: sp.id,
               jobType: sp.jobType,
               brief: briefData,
-              status: initialStatus,
+              status: 'pending',
+              routedTo,
               createdAt: now,
               retryCount: 0,
               source: 'voice-stream',
             });
 
-            // strategy → 立刻 fire-and-forget 派出去（不等回應，endpoint 完成時自己寫回 jobs）
+            // strategy 走 Cloud Tasks，繞開 Vercel 300s lambda 上限
+            // cloud-tasks.ts 已改為純 fetch + RS256 JWT，無 SDK 依賴
             if (sp.jobType === 'strategy') {
-              const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'https://ailive-platform.vercel.app';
-              const workerSecret = (process.env.WORKER_SECRET || '').replace(/^"|"$/g, '').trim();
-              void fetch(`${baseUrl}/api/specialist/strategy`, {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  'x-worker-secret': workerSecret,
-                },
-                body: JSON.stringify({
-                  jobId: jobRef.id,
-                  assigneeId: sp.id,
-                  brief: briefData,
-                }),
-              }).catch(e => console.warn('[voice-stream] strategy dispatch failed:', e));
+              try {
+                await enqueueStrategy(jobRef.id);
+              } catch (e) {
+                const msg = e instanceof Error ? e.message : String(e);
+                console.warn('[voice-stream] enqueueStrategy failed:', msg);
+                await db.collection('platform_jobs').doc(jobRef.id).update({
+                  strategyEnqueueError: msg,
+                  strategyEnqueueErrorAt: new Date().toISOString(),
+                }).catch(() => {});
+              }
             }
 
             // 寫一筆 promise 進 character-actions（兌現由 specialist endpoint 完成後 markFulfilled）
@@ -779,10 +779,12 @@ specialist 選擇：
                   content: `[系統通知] ${who} 回報：委託失敗（${m.error || '未知原因'}）。你可以告知 user 並討論是否重試。`,
                 };
               }
-              const parts: string[] = [`[系統通知] ${who} 交件了。`];
+              const isHtml = m.eventType === 'strategy_html_delivered';
+              const parts: string[] = [isHtml ? '[系統通知] 設計版 HTML 完成。' : `[系統通知] ${who} 交件了。`];
               if (m.output?.title) parts.push(`標題：${m.output.title}`);
               if (m.output?.imageUrl) parts.push(`圖片：${m.output.imageUrl}`);
               if (m.output?.docUrl) parts.push(`文件：${m.output.docUrl}`);
+              if (m.output?.htmlUrl) parts.push(`設計版 HTML：${m.output.htmlUrl}`);
               if (m.output?.slideUrl) parts.push(`投影片連結：${m.output.slideUrl}`);
               const wl = m.workLog || m.output?.workLog;
               if (wl) parts.push(`${who}的工作日誌：${wl}`);

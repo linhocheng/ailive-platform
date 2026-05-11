@@ -15,7 +15,7 @@ interface Message {
   specialistName?: string;
   specialistId?: string;
   jobId?: string;
-  output?: { type: string; imageUrl?: string; docUrl?: string; slideUrl?: string; title?: string; workLog?: string };
+  output?: { type: string; imageUrl?: string; docUrl?: string; htmlUrl?: string; slideUrl?: string; title?: string; workLog?: string };
   workLog?: string;
   error?: string;
 }
@@ -513,7 +513,11 @@ export default function ChatPage() {
 
             // ── system_event bubble（瞬交件）──
             if (msg.role === 'system_event') {
-              const delivered = msg.eventType === 'specialist_delivered';
+              const isHtml = msg.eventType === 'strategy_html_delivered';
+              const delivered = msg.eventType === 'specialist_delivered' || isHtml;
+              const headerText = isHtml
+                ? '🎨 設計版 HTML 完成'
+                : (delivered ? '🎨 ' + (msg.specialistName || '瞬') + ' 交件了' : '⚠️ ' + (msg.specialistName || '瞬') + ' 回報');
               return (
                 <div key={i} style={{ display: 'flex', justifyContent: 'center', margin: '16px 0' }}>
                   <div style={{
@@ -524,7 +528,7 @@ export default function ChatPage() {
                   }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px', borderBottom: '1px solid var(--border, #E4E2DC)', background: 'var(--bg-alt, #F5F3EF)' }}>
                       <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)' }}>
-                        {delivered ? ('🎨 ' + (msg.specialistName || '瞬') + ' 交件了') : ('⚠️ ' + (msg.specialistName || '瞬') + ' 回報')}
+                        {headerText}
                       </span>
                       <span style={{ fontSize: 10, color: 'var(--text-muted)', marginLeft: 'auto' }}>{time}</span>
                     </div>
@@ -545,6 +549,17 @@ export default function ChatPage() {
                           color: 'var(--text-primary)', fontSize: 13, textDecoration: 'none', fontWeight: 500,
                         }}>
                           {'📄 ' + (msg.output.title || '查看文件')}
+                        </a>
+                      </div>
+                    )}
+                    {msg.output?.htmlUrl && (
+                      <div style={{ padding: '10px 14px' }}>
+                        <a href={msg.output.htmlUrl} target="_blank" rel="noreferrer" style={{
+                          display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 12px',
+                          borderRadius: 8, border: '1px solid var(--border)', background: 'white',
+                          color: 'var(--text-primary)', fontSize: 13, textDecoration: 'none', fontWeight: 500,
+                        }}>
+                          {'🎨 ' + (msg.output.title || '設計版 HTML')}
                         </a>
                       </div>
                     )}

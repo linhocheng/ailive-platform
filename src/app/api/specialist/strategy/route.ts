@@ -387,6 +387,22 @@ export async function POST(req: NextRequest) {
           console.warn('[specialist/strategy] system_event push failed:', e);
         }
       }
+
+      // 10. fire-and-forget: enqueue Cloud Tasks → strategy-html-worker (Cloud Run)
+      // 走 Max OAuth bridge :3002，繞開 Vercel 300s 上限。失敗只 log 不擋主線。
+      try {
+        const { enqueueStrategyHtml } = await import('@/lib/cloud-tasks');
+        await enqueueStrategyHtml(jobId);
+      } catch (e) {
+        const errMsg = e instanceof Error ? e.message : String(e);
+        console.warn('[specialist/strategy] enqueue strategy-html failed:', errMsg);
+        try {
+          await db.collection('platform_jobs').doc(jobId).update({
+            htmlEnqueueError: errMsg,
+            htmlEnqueueErrorAt: new Date().toISOString(),
+          });
+        } catch {}
+      }
     }
 
     return NextResponse.json({

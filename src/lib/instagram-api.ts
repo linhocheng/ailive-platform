@@ -104,3 +104,68 @@ export async function publishPhoto(
 
   return { success: true, ig_post_id: igPostId };
 }
+
+/**
+ * 發佈 Reels 影片到 Instagram
+ * @param igUserId - IG 使用者 ID
+ * @param accessToken - 有效 access token（需 instagram_content_publish 權限）
+ * @param videoUrl - 影片公開 HTTPS URL（MP4, H.264, 9:16, 3-90秒）
+ * @param caption - 貼文 caption
+ */
+export async function publishReels(
+  igUserId: string,
+  accessToken: string,
+  videoUrl: string,
+  caption: string,
+): Promise<PublishResult> {
+  const tokenParam = `access_token=${encodeURIComponent(accessToken)}`;
+
+  // Step 1: 建立 Reels container
+  const createUrl = `${GRAPH_BASE}/${igUserId}/media?${tokenParam}`;
+  const createRes = await fetch(createUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      video_url: videoUrl,
+      caption: caption,
+      media_type: 'REELS',
+      share_to_feed: true,
+    }),
+  });
+
+  const createData = await createRes.json();
+  if (createData.error) {
+    return { success: false, error: createData.error.message || JSON.stringify(createData.error) };
+  }
+
+  const containerId = createData.id;
+  if (!containerId) {
+    return { success: false, error: 'IG API 未回傳 container id' };
+  }
+
+  // Reels 影片處理比圖片久，最多等 120 秒
+  const status = await waitForContainerReady(containerId, tokenParam, 120000, 3000);
+  if (status !== 'FINISHED') {
+    return { success: false, error: `Container 未就緒 (status: ${status})` };
+  }
+
+  // Step 2: 發佈
+  const publishUrl = `${GRAPH_BASE}/${igUserId}/media_publish?${tokenParam}`;
+  const publishRes = await fetch(publishUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ creation_id: containerId }),
+  });
+
+  const publishData = await publishRes.json();
+  if (publishData.error) {
+    return { success: false, error: publishData.error.message || JSON.stringify(publishData.error) };
+  }
+
+  const igPostId = publishData.id;
+  if (!igPostId) {
+    return { success: false, error: 'IG API 未回傳貼文 id' };
+  }
+
+  return { success: true, ig_post_id: igPostId };
+}

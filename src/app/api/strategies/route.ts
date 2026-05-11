@@ -17,6 +17,8 @@ interface StrategyRec {
   createdAt: string;
   completedAt?: string;
   error?: string;
+  htmlUrl?: string;
+  htmlGeneratedAt?: string;
 }
 
 export async function GET(req: NextRequest) {
@@ -46,6 +48,8 @@ export async function GET(req: NextRequest) {
         createdAt: String(d.createdAt || ''),
         completedAt: d.completedAt ? String(d.completedAt) : undefined,
         error: d.error ? String(d.error) : undefined,
+        htmlUrl: d.htmlUrl ? String(d.htmlUrl) : undefined,
+        htmlGeneratedAt: d.htmlGeneratedAt ? String(d.htmlGeneratedAt) : undefined,
       });
     }
 
