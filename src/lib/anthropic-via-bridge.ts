@@ -6,10 +6,32 @@
  *
  * Bridge 回應 shape 已經 mimic Anthropic Messages API。
  * Bridge 失敗時會 fallback 到原本的 SDK（同 request 內救回，user 無感）。
+ *
+ * Timeout 280s：留 20s 給 Vercel 300s lambda 收尾。
+ * 每次 fallback 寫入 Firestore bridge_fallbacks（fire-and-forget），追頻率決定哪些 route 該搬 Cloud Run。
  */
 import Anthropic from '@anthropic-ai/sdk';
 
-const BRIDGE_TIMEOUT_MS = 90_000;
+const BRIDGE_TIMEOUT_MS = 280_000;
+
+async function recordFallback(meta: {
+  model?: string;
+  maxTokens?: number;
+  error: string;
+  durationMs: number;
+}): Promise<void> {
+  try {
+    const { getFirestore, getFirebaseAdmin } = await import('@/lib/firebase-admin');
+    const admin = getFirebaseAdmin();
+    const db = getFirestore();
+    await db.collection('bridge_fallbacks').add({
+      ...meta,
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  } catch {
+    // best effort
+  }
+}
 
 export class AnthropicBridge {
   public messages: {
@@ -22,6 +44,7 @@ export class AnthropicBridge {
       create: async (args) => {
         const ctrl = new AbortController();
         const timer = setTimeout(() => ctrl.abort(), BRIDGE_TIMEOUT_MS);
+        const startedAt = Date.now();
         try {
           const r = await fetch(`${url}/v1/messages`, {
             method: 'POST',
@@ -44,7 +67,15 @@ export class AnthropicBridge {
           return (await r.json()) as Anthropic.Message;
         } catch (bridgeErr) {
           if (apiKey) {
-            console.warn('[anthropic-via-bridge] fallback to SDK:', bridgeErr instanceof Error ? bridgeErr.message : bridgeErr);
+            const errMsg = bridgeErr instanceof Error ? bridgeErr.message : String(bridgeErr);
+            const durationMs = Date.now() - startedAt;
+            console.warn('[anthropic-via-bridge] fallback to SDK:', errMsg, `(${durationMs}ms)`);
+            recordFallback({
+              model: args.model,
+              maxTokens: args.max_tokens,
+              error: errMsg,
+              durationMs,
+            }).catch(() => {});
             const sdk = new Anthropic({ apiKey });
             return sdk.messages.create(args);
           }

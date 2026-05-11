@@ -14,6 +14,7 @@
 import { getFirestore, getFirebaseAdmin } from '@/lib/firebase-admin';
 import { generateWithGemini } from '@/lib/gemini-imagen';
 import { trackCost } from '@/lib/cost-tracker';
+import { getAnthropicClient } from '@/lib/anthropic-via-bridge';
 
 export interface GenerateImageResult {
   imageUrl: string;
@@ -89,24 +90,17 @@ async function translateToEnglish(text: string, apiKey: string): Promise<{ text:
   if (!hasChinese) return { text, translated: false };
 
   try {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 200,
-        messages: [{
-          role: 'user',
-          content: `Translate this image generation prompt to English. Output ONLY the translated prompt, nothing else:\n\n${text}`,
-        }],
-      }),
+    const client = getAnthropicClient(apiKey);
+    const res = await client.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 200,
+      messages: [{
+        role: 'user',
+        content: `Translate this image generation prompt to English. Output ONLY the translated prompt, nothing else:\n\n${text}`,
+      }],
     });
-    const d = await res.json();
-    const translated = d?.content?.[0]?.text?.trim() || text;
+    const block = res.content?.[0];
+    const translated = (block && block.type === 'text' ? block.text : '').trim() || text;
     return { text: translated, translated: true };
   } catch {
     return { text, translated: false }; // 翻譯失敗不阻斷生圖
