@@ -40,6 +40,20 @@ export default function StrategiesPage() {
     fetch(`/api/characters/${id}`).then(r => r.json()).then(d => { setCharName(d.character?.name || ''); });
   }, [id]);
 
+  useEffect(() => {
+    const pending = items.some(x => (x.status === 'done' || x.status === 'completed') && !x.htmlUrl);
+    if (!pending) return;
+    const startedAt = Date.now();
+    const timer = setInterval(() => {
+      if (Date.now() - startedAt > 60_000) { clearInterval(timer); return; }
+      fetch(`/api/strategies?characterId=${id}`)
+        .then(r => r.ok ? r.json() : null)
+        .then(d => { if (d?.strategies) setItems(d.strategies); })
+        .catch(() => {});
+    }, 5000);
+    return () => clearInterval(timer);
+  }, [items, id]);
+
   const formatDate = (ts: string) => {
     if (!ts) return '';
     try {
