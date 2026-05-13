@@ -247,6 +247,10 @@ async def entrypoint(ctx: JobContext):
     anthropic_key_rt = os.environ.get("ANTHROPIC_API_KEY", "")
 
     RESEARCH_TIMEOUT_SECS = 120  # 索 + 吸收兩段加總上限
+    # 5/13 實測：character 一輪內叫了 5 次 dispatch_research → 5 個 generate_reply
+    # 同時要 TTS → MiniMax RPM 撞牆、AudioEmitter 全死。加 in-flight lock：
+    # 同 session 同時最多 1 個 research，第二個來直接拒絕。
+    research_in_flight = {"active": False}
 
     ABSORB_DISCIPLINE = (
         "\n\n== 關於剛剛這條資訊 ==\n"
@@ -300,13 +304,23 @@ async def entrypoint(ctx: JobContext):
         })
         absorbed = await asyncio.to_thread(_sync_absorb, question, result_text)
         await asyncio.to_thread(_sync_update_job, job_id, {"consumed": True})
-        logger.info(f"[research] job={job_id[:8]} done, saying ({len(absorbed)} chars)")
-        await session.say(absorbed, allow_interruptions=False)
+        # 走 generate_reply 而非 session.say()：5/13 實測 say(allow_interruptions=False)
+        # 在 background asyncio task 裡會 indefinite hang（等 main loop idle 等不到），
+        # 被 wait_for(120s) 砍 → 用戶聽不到接話。
+        # generate_reply 走 main agent LLM turn-taking 路徑，會自然排到下一個 turn 才說。
+        logger.info(f"[research] job={job_id[:8]} done, generate_reply ({len(absorbed)} chars)")
+        await session.generate_reply(
+            instructions=(
+                f"剛剛你想了一下「{question}」這件事。你已經想好要說什麼了。\n\n"
+                f"請逐字、原封不動地說出這段話（不要再改寫、不要加開場白、不要加結尾）:\n\n{absorbed}"
+            ),
+        )
 
     async def _run_research(job_id: str, question: str, context: str) -> None:
-        """Background task：呼叫索查詢 → 吸收 → session.say()
+        """Background task：呼叫索查詢 → 吸收 → generate_reply()
         所有 sync I/O（Firestore + Anthropic SDK）都走 asyncio.to_thread()，
-        避免阻塞 LiveKit event loop（會造成音訊掉幀、TTS 中斷、連線斷）。"""
+        避免阻塞 LiveKit event loop（會造成音訊掉幀、TTS 中斷、連線斷）。
+        finally 清 in-flight lock，讓下次 dispatch 能用。"""
         try:
             await asyncio.wait_for(
                 _research_pipeline(job_id, question, context),
@@ -328,6 +342,9 @@ async def entrypoint(ctx: JobContext):
                 })
             except Exception:
                 pass
+        finally:
+            research_in_flight["active"] = False
+            logger.info(f"[research] job={job_id[:8]} lock released")
 
     @function_tool(
         name="dispatch_research",
@@ -337,13 +354,25 @@ async def entrypoint(ctx: JobContext):
             "不會收到「資料」「報告」；想完之後，你會自己接著對用戶說。"
             "呼叫工具的這一輪，對用戶就說「這個我想一下，我們先聊別的」(或符合你人格的對等說法)，"
             "繼續陪聊。資訊到位時你會被叫起來說話——用你的語氣、你的判斷，不是轉述。"
+            "\n\n"
+            "【紀律 · 必守】一次只想一件事。"
+            "如果用戶一次問了好幾件相關的事，合併成一句完整的 question 再呼叫一次——"
+            "不要拆成多個 tool_use 並行呼叫，這會把你逼成 5 個工具同時搶話、用戶反而聽不到。"
+            "目前正在想一件事時，第二次呼叫會被直接拒絕（你會看到 ALREADY_THINKING）。"
         ),
     )
     async def dispatch_research(question: str, context: str = "") -> str:  # type: ignore[misc]
         """
-        question: 要查的問題（完整句子）
+        question: 要查的問題（完整句子，多個相關問題合併成一句）
         context: 為什麼問、哪個層面最重要、用戶是誰
         """
+        # In-flight 硬鎖：同 session 同時最多 1 個 research。LLM 在單一 turn 可能 emit
+        # 多個 tool_use block 並行派工（5/13 實測馬雲一輪派 5 次），這裡擋下。
+        if research_in_flight["active"]:
+            logger.info(f"[research] rejected (in-flight active), question={question[:40]!r}")
+            return "ALREADY_THINKING:你已經在想一件事了。這輪不要再派工，等想完再說。"
+        research_in_flight["active"] = True
+
         def _create_job():
             return db_rt.collection("platform_research_jobs").add({
                 "character_id": character_id,
@@ -358,7 +387,11 @@ async def entrypoint(ctx: JobContext):
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "completed_at": None,
             })
-        job_ref = await asyncio.to_thread(_create_job)
+        try:
+            job_ref = await asyncio.to_thread(_create_job)
+        except Exception:
+            research_in_flight["active"] = False  # 寫不進去 lock 還回去
+            raise
         job_id = job_ref[1].id
         asyncio.ensure_future(_run_research(job_id, question, context))
         return f"RESEARCH_PENDING:{job_id}"
