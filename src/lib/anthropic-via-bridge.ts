@@ -7,12 +7,14 @@
  * Bridge 回應 shape 已經 mimic Anthropic Messages API。
  * Bridge 失敗時會 fallback 到原本的 SDK（同 request 內救回，user 無感）。
  *
- * Timeout 280s：留 20s 給 Vercel 300s lambda 收尾。
+ * Timeout 預設 280s：對齊 300s lambda（留 20s 收尾）。
+ * Short-lambda caller（120/60s）必傳 bridgeTimeoutMs（= maxDuration - 10s），避免雙燒：
+ *   lambda 切斷後 bridge 端仍跑完，Max 計費繼續燒。
  * 每次 fallback 寫入 Firestore bridge_fallbacks（fire-and-forget），追頻率決定哪些 route 該搬 Cloud Run。
  */
 import Anthropic from '@anthropic-ai/sdk';
 
-const BRIDGE_TIMEOUT_MS = 280_000;
+const DEFAULT_BRIDGE_TIMEOUT_MS = 280_000;
 
 async function recordFallback(meta: {
   model?: string;
@@ -38,12 +40,13 @@ export class AnthropicBridge {
     create: (args: Anthropic.MessageCreateParamsNonStreaming) => Promise<Anthropic.Message>;
   };
 
-  constructor(bridgeUrl: string, secret: string, apiKey?: string) {
+  constructor(bridgeUrl: string, secret: string, apiKey?: string, bridgeTimeoutMs?: number) {
     const url = bridgeUrl.replace(/\/$/, '');
+    const timeoutMs = bridgeTimeoutMs ?? DEFAULT_BRIDGE_TIMEOUT_MS;
     this.messages = {
       create: async (args) => {
         const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), BRIDGE_TIMEOUT_MS);
+        const timer = setTimeout(() => ctrl.abort(), timeoutMs);
         const startedAt = Date.now();
         try {
           const r = await fetch(`${url}/v1/messages`, {
@@ -98,12 +101,15 @@ export class AnthropicBridge {
  *
  * 任何一項缺失 → 回退原本 SDK（不破壞既有部署）
  */
-export function getAnthropicClient(apiKey: string): Anthropic | AnthropicBridge {
+export function getAnthropicClient(
+  apiKey: string,
+  opts?: { bridgeTimeoutMs?: number },
+): Anthropic | AnthropicBridge {
   const enabled = process.env.BRIDGE_ENABLED === 'true';
   const url = process.env.BRIDGE_URL;
   const secret = process.env.BRIDGE_SECRET;
   if (enabled && url && secret) {
-    return new AnthropicBridge(url, secret, apiKey);
+    return new AnthropicBridge(url, secret, apiKey, opts?.bridgeTimeoutMs);
   }
   return new Anthropic({ apiKey });
 }

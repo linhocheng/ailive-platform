@@ -496,7 +496,8 @@ ${outputFormat}`;
     }
 
     // 呼叫 Claude（謀謀模式：直接輸出，不走 dialogue）
-    const client = getAnthropicClient(apiKey);
+    // bridge timeout 110s 對齊 maxDuration=120 lambda，避免 lambda 切斷後 bridge 繼續燒 Max
+    const client = getAnthropicClient(apiKey, { bridgeTimeoutMs: 110_000 });
     const response = await client.messages.create({
       model: 'claude-sonnet-4-6',
       max_tokens: taskType === 'post' ? 2000 : 1000,
@@ -628,14 +629,19 @@ ${soulRef}
       }
     }
 
-    // 執行成功才寫防重複 record
+    // 執行成功才寫防重複 record + 更新 task.last_run（UI 上次執行欄）
     if (taskId) {
+      const now = new Date().toISOString();
       const recordId = `${characterId}-${taskId}-${today}-taskrun`;
-      await db.collection('platform_proactive_records').doc(recordId).set({
-        characterId, taskId, taskType, date: today,
-        status: 'success',
-        executedAt: new Date().toISOString(),
-      });
+      await Promise.all([
+        db.collection('platform_proactive_records').doc(recordId).set({
+          characterId, taskId, taskType, date: today,
+          status: 'success',
+          executedAt: now,
+        }),
+        db.collection('platform_tasks').doc(taskId).update({ last_run: now })
+          .catch(() => { /* taskId 可能是手動測試的虛假 ID，update 失敗不擋成功回應 */ }),
+      ]);
     }
 
     return NextResponse.json({

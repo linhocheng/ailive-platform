@@ -59,10 +59,10 @@ export default function TasksPage() {
       });
       const data = await res.json();
       setTriggerResult({ id: task.id, success: data.success, message: data.success ? '完成' : (data.error || '失敗') });
-      setTimeout(() => setTriggerResult(null), 3000);
-    } catch (e) {
+      setTimeout(() => setTriggerResult(null), 8000);
+    } catch {
       setTriggerResult({ id: task.id, success: false, message: '連線錯誤' });
-      setTimeout(() => setTriggerResult(null), 3000);
+      setTimeout(() => setTriggerResult(null), 8000);
     }
     setTriggering(null);
     load();
@@ -70,7 +70,11 @@ export default function TasksPage() {
 
   const load = () => {
     setLoading(true);
-    fetch(`/api/tasks?characterId=${id}`).then(r => r.json()).then(d => { setTasks(d.tasks || []); setLoading(false); });
+    fetch(`/api/tasks?characterId=${id}`)
+      .then(r => r.json())
+      .then(d => { setTasks(d.tasks || []); })
+      .catch(() => { /* 不阻塞 UI，保留現有 tasks */ })
+      .finally(() => setLoading(false));
   };
 
   useEffect(() => {
