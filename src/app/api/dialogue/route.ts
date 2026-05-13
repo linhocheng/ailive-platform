@@ -526,9 +526,10 @@ async function executeTool(
   }
 
   if (toolName === 'commission_specialist') {
-    const SPECIALIST_MAP: Record<string, { id: string; jobType: 'image' | 'strategy'; name: string; etaText: string }> = {
+    const SPECIALIST_MAP: Record<string, { id: string; jobType: 'image' | 'strategy' | 'research'; name: string; etaText: string }> = {
       painter:    { id: 'shun-001',              jobType: 'image',    name: '瞬', etaText: '1-2 分鐘' },
       strategist: { id: 'pEWC5m2MOddyGe9uw0u0',  jobType: 'strategy', name: '奧', etaText: '2-3 分鐘' },
+      researcher: { id: 'dQHkL6vvhmKlNho8dA1L',  jobType: 'research', name: '索', etaText: '30-90 秒' },
     };
     const specialistKey = String(toolInput.specialist || 'painter');
     const sp = SPECIALIST_MAP[specialistKey];

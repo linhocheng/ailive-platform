@@ -420,6 +420,23 @@ specialist 選擇：
               required: ['actionType', 'title', 'content'],
             },
           },
+          {
+            name: 'dispatch_research',
+            description:
+              '需要當下外部資訊（即時資料、最新新聞、特定數字）時用這個工具。' +
+              '把它當成你停下來想一件事——你不會看到「索」這個名字，' +
+              '不會收到「資料」「報告」；想完之後你會自己接著對用戶說。' +
+              '呼叫的這一輪，對用戶就說「這個我想一下，我們先聊別的」(或符合你人格的對等說法)，' +
+              '繼續陪聊。資訊到位時你會被叫起來說話——用你的語氣、你的判斷，不是轉述。',
+            input_schema: {
+              type: 'object' as const,
+              properties: {
+                question: { type: 'string', description: '要查的問題（完整句子）' },
+                context: { type: 'string', description: '為什麼問、哪個層面最重要、用戶是誰' },
+              },
+              required: ['question'],
+            },
+          },
         ];
         const WEB_SEARCH = { type: 'web_search_20250305', name: 'web_search' } as unknown as Anthropic.Tool;
 
@@ -630,9 +647,10 @@ specialist 選擇：
 
           // ── commission_specialist ── 派 painter（瞬）/ strategist（奧）非同步
           if (toolName === 'commission_specialist') {
-            const SPECIALIST_MAP: Record<string, { id: string; jobType: 'image' | 'strategy'; name: string; etaText: string }> = {
+            const SPECIALIST_MAP: Record<string, { id: string; jobType: 'image' | 'strategy' | 'research'; name: string; etaText: string }> = {
               painter:    { id: 'shun-001',              jobType: 'image',    name: '瞬', etaText: '1-2 分鐘' },
               strategist: { id: 'pEWC5m2MOddyGe9uw0u0',  jobType: 'strategy', name: '奧', etaText: '2-3 分鐘' },
+              researcher: { id: 'dQHkL6vvhmKlNho8dA1L',  jobType: 'research', name: '索', etaText: '30-90 秒' },
             };
             const specialistKey = String(toolInput.specialist || 'painter');
             const sp = SPECIALIST_MAP[specialistKey];
@@ -702,6 +720,37 @@ specialist 選擇：
               ? '作品會出現在 dashboard，下次對話我會告訴你。'
               : '策略書 docx 會出現在 dashboard 的「策略書」頁面可下載。下次對話我會帶出這件事。';
             return `JOB_PENDING:${jobRef.id}:已委託${sp.name}，工作編號 ${shortId}。${sp.etaText}內完成，${trailing}妳繼續陪 user 聊。`;
+          }
+
+          // ── dispatch_research ── 派工給索（非同步，結果 inject 下一個 turn）──
+          if (toolName === 'dispatch_research') {
+            const question = String(toolInput.question || '');
+            if (!question) return '需要 question 才能想清楚。';
+            const context = String(toolInput.context || '');
+            const jobRef = await db.collection('platform_research_jobs').add({
+              character_id: characterId,
+              session_id: convId,
+              user_id: userId || '',
+              question,
+              context,
+              status: 'pending',
+              result: null,
+              consumed: false,
+              source: 'voice-stream',
+              created_at: new Date().toISOString(),
+              completed_at: null,
+            });
+            try {
+              const { enqueueResearch } = await import('@/lib/cloud-tasks');
+              await enqueueResearch(jobRef.id);
+            } catch (e) {
+              const msg = e instanceof Error ? e.message : String(e);
+              console.warn('[voice-stream] enqueueResearch failed:', msg);
+              await db.collection('platform_research_jobs').doc(jobRef.id).update({
+                enqueueError: msg, enqueueErrorAt: new Date().toISOString(),
+              }).catch(() => {});
+            }
+            return `RESEARCH_PENDING:${jobRef.id}`;
           }
 
           // ── update_user_profile（事實，跨角色共用）──

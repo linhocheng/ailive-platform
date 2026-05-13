@@ -32,13 +32,14 @@ from dotenv import load_dotenv
 load_dotenv(ROOT_DIR / ".env")
 load_dotenv(ROOT_DIR / ".env.local.fresh")  # 開發時用 ailive-platform 的 env
 
-from livekit.agents import Agent, AgentSession, JobContext
+from livekit.agents import Agent, AgentSession, JobContext, function_tool
 from livekit.plugins import silero, anthropic, deepgram
 
 # MiniMax 自訂 wrapper（江彬教訓 #6：官方 plugin 不相容 1.5.x）
 from agent.minimax_tts import MiniMaxCustomTTS
 
 # Phase 3：從 Firestore 讀角色 soul + 對話歷史
+from firebase_admin import firestore
 from agent.firestore_loader import (
     load_character,
     load_conversation,
@@ -239,7 +240,130 @@ async def entrypoint(ctx: JobContext):
         pitch=pitch,
     )
 
-    agent = Agent(instructions=system_prompt)
+    # ── dispatch_research：派工給索（非同步，不阻塞對話）────────────────
+    # 建 Firestore job doc → background asyncio task 自己跑索五層協議 + web_search
+    # 完成後 session.say() 主動說出吸收後的話（allow_interruptions=False）
+    db_rt = firestore.client()
+    anthropic_key_rt = os.environ.get("ANTHROPIC_API_KEY", "")
+
+    RESEARCH_TIMEOUT_SECS = 120  # 索 + 吸收兩段加總上限
+
+    ABSORB_DISCIPLINE = (
+        "\n\n== 關於剛剛這條資訊 ==\n"
+        "把它當成你的內務——你想了一下，現在要對用戶說。\n"
+        "查到的事先進入你的世界觀，再從你口中說出。語氣、節奏、判斷都是你的；\n"
+        "對方聽到的不是搜尋摘要、不是助理回報，是你的觀察、你的解讀、你的立場。\n"
+        "不要說「我查了」「我朋友幫我」「資料顯示」「根據最新」——這些痕跡都是漏氣。\n"
+        "用一句到三句話自然接話。"
+    )
+
+    def _sync_run_suo(question: str, context: str) -> str:
+        """呼叫索 → 回 raw 文字結果（sync，跑在 worker thread）"""
+        import anthropic as anthropic_sdk
+        suo_doc = db_rt.collection("platform_characters").document("dQHkL6vvhmKlNho8dA1L").get()
+        suo_soul = (suo_doc.to_dict() or {}).get("system_soul") or (suo_doc.to_dict() or {}).get("soul_core") or ""
+        client = anthropic_sdk.Anthropic(api_key=anthropic_key_rt)
+        resp = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=4096,
+            system=suo_soul,
+            tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 3}],  # type: ignore
+            messages=[{"role": "user", "content": f"查詢需求:{question}\n\n脈絡:{context}"}],
+        )
+        return "\n".join(b.text for b in resp.content if b.type == "text")
+
+    def _sync_absorb(question: str, result_text: str) -> str:
+        """角色靈魂 + 紀律段 + 索結果 → 角色語氣版（sync）"""
+        import anthropic as anthropic_sdk
+        client = anthropic_sdk.Anthropic(api_key=anthropic_key_rt)
+        resp = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=1024,
+            system=system_prompt + ABSORB_DISCIPLINE,
+            messages=[{
+                "role": "user",
+                "content": f"剛剛你想了一下「{question}」這件事。你內心整理到的資訊是:\n\n{result_text}\n\n現在自然接話告訴用戶。",
+            }],
+        )
+        return "\n".join(b.text for b in resp.content if b.type == "text")
+
+    def _sync_update_job(job_id: str, patch: dict) -> None:
+        db_rt.collection("platform_research_jobs").document(job_id).update(patch)
+
+    async def _research_pipeline(job_id: str, question: str, context: str) -> None:
+        await asyncio.to_thread(_sync_update_job, job_id, {"status": "running"})
+        result_text = await asyncio.to_thread(_sync_run_suo, question, context)
+        await asyncio.to_thread(_sync_update_job, job_id, {
+            "status": "done",
+            "result": {"raw": result_text},
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+        })
+        absorbed = await asyncio.to_thread(_sync_absorb, question, result_text)
+        await asyncio.to_thread(_sync_update_job, job_id, {"consumed": True})
+        logger.info(f"[research] job={job_id[:8]} done, saying ({len(absorbed)} chars)")
+        await session.say(absorbed, allow_interruptions=False)
+
+    async def _run_research(job_id: str, question: str, context: str) -> None:
+        """Background task：呼叫索查詢 → 吸收 → session.say()
+        所有 sync I/O（Firestore + Anthropic SDK）都走 asyncio.to_thread()，
+        避免阻塞 LiveKit event loop（會造成音訊掉幀、TTS 中斷、連線斷）。"""
+        try:
+            await asyncio.wait_for(
+                _research_pipeline(job_id, question, context),
+                timeout=RESEARCH_TIMEOUT_SECS,
+            )
+        except asyncio.TimeoutError:
+            logger.error(f"[research] job={job_id[:8]} timeout after {RESEARCH_TIMEOUT_SECS}s")
+            try:
+                await asyncio.to_thread(_sync_update_job, job_id, {
+                    "status": "failed", "error": f"timeout after {RESEARCH_TIMEOUT_SECS}s",
+                })
+            except Exception:
+                pass
+        except Exception as e:
+            logger.error(f"[research] job={job_id[:8]} failed: {e}")
+            try:
+                await asyncio.to_thread(_sync_update_job, job_id, {
+                    "status": "failed", "error": str(e),
+                })
+            except Exception:
+                pass
+
+    @function_tool(
+        name="dispatch_research",
+        description=(
+            "需要當下外部資訊（即時資料、最新新聞、特定數字）時用這個工具。"
+            "把它當成你停下來想一件事——你不會看到「索」這個名字，"
+            "不會收到「資料」「報告」；想完之後，你會自己接著對用戶說。"
+            "呼叫工具的這一輪，對用戶就說「這個我想一下，我們先聊別的」(或符合你人格的對等說法)，"
+            "繼續陪聊。資訊到位時你會被叫起來說話——用你的語氣、你的判斷，不是轉述。"
+        ),
+    )
+    async def dispatch_research(question: str, context: str = "") -> str:  # type: ignore[misc]
+        """
+        question: 要查的問題（完整句子）
+        context: 為什麼問、哪個層面最重要、用戶是誰
+        """
+        def _create_job():
+            return db_rt.collection("platform_research_jobs").add({
+                "character_id": character_id,
+                "session_id": f"realtime-{character_id}-{user_id or 'anon'}",
+                "user_id": user_id or "",
+                "question": question,
+                "context": context,
+                "status": "pending",
+                "result": None,
+                "consumed": False,
+                "source": "realtime",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "completed_at": None,
+            })
+        job_ref = await asyncio.to_thread(_create_job)
+        job_id = job_ref[1].id
+        asyncio.ensure_future(_run_research(job_id, question, context))
+        return f"RESEARCH_PENDING:{job_id}"
+
+    agent = Agent(instructions=system_prompt, tools=[dispatch_research])
     logger.info(f"Agent initialized with {char_name} soul, prompt={len(system_prompt)} chars")
 
     session = AgentSession(

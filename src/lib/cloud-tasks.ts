@@ -139,3 +139,15 @@ export async function enqueueStrategyHtml(jobId: string, philosophy: 'eastern-bl
   console.log(`[cloud-tasks] enqueued strategy-html job=${jobId.slice(0, 8)} task=${taskName.split('/').pop()}`);
   return taskName;
 }
+
+// research-worker（索 + web_search → 回 platform_research_jobs）
+// TODO STEP 3: 部署後更新這三個常數（queue 需在 GCP 建立，URL 從 Cloud Run deploy 取得）
+const RESEARCH_QUEUE = 'research-tasks';
+const RESEARCH_WORKER_URL = 'https://research-worker-754631848156.asia-east1.run.app/';
+const RESEARCH_WORKER_AUDIENCE = 'https://research-worker-754631848156.asia-east1.run.app';
+
+export async function enqueueResearch(jobId: string): Promise<string> {
+  const taskName = await createTask(RESEARCH_QUEUE, RESEARCH_WORKER_URL, RESEARCH_WORKER_AUDIENCE, { jobId });
+  console.log(`[cloud-tasks] enqueued research job=${jobId.slice(0, 8)} task=${taskName.split('/').pop()}`);
+  return taskName;
+}
