@@ -211,7 +211,7 @@ export async function POST(req: NextRequest) {
         }],
       });
       selfReflection = (res.content[0] as Anthropic.TextBlock).text.trim();
-      await trackCost(characterId, 'claude-haiku-4-5-20251001', res.usage?.input_tokens ?? 0, res.usage?.output_tokens ?? 0);
+      await trackCost(characterId, 'claude-haiku-4-5-20251001', res.usage?.input_tokens ?? 0, res.usage?.output_tokens ?? 0, 'sleep');
 
       if (!dryRun && selfReflection) {
         const embedding = await generateEmbedding(selfReflection);
@@ -270,7 +270,7 @@ ${insightSummary}
 }` }],
         });
 
-        await trackCost(characterId, 'claude-haiku-4-5-20251001', awarenessRes.usage?.input_tokens ?? 0, awarenessRes.usage?.output_tokens ?? 0);
+        await trackCost(characterId, 'claude-haiku-4-5-20251001', awarenessRes.usage?.input_tokens ?? 0, awarenessRes.usage?.output_tokens ?? 0, 'sleep-awareness');
         const raw = ((awarenessRes.content[0] as Anthropic.TextBlock).text || '')
           .replace(/^```[\w]*\n?/m,'').replace(/\n?```$/m,'').trim();
         const awareness = JSON.parse(raw);
@@ -322,7 +322,7 @@ ${insightSummary}
         }],
       });
 
-      await trackCost(characterId, 'claude-haiku-4-5-20251001', propRes.usage?.input_tokens ?? 0, propRes.usage?.output_tokens ?? 0);
+      await trackCost(characterId, 'claude-haiku-4-5-20251001', propRes.usage?.input_tokens ?? 0, propRes.usage?.output_tokens ?? 0, 'sleep-proposal');
       const propRaw = stripJson((propRes.content[0] as Anthropic.TextBlock).text.trim());
       const proposal = JSON.parse(propRaw);
 
@@ -435,7 +435,7 @@ ${skillList}
         });
 
         await trackCost(characterId, 'claude-haiku-4-5-20251001',
-          fixRes.usage?.input_tokens ?? 0, fixRes.usage?.output_tokens ?? 0);
+          fixRes.usage?.input_tokens ?? 0, fixRes.usage?.output_tokens ?? 0, 'sleep-fix');
 
         const raw = (fixRes.content[0] as Anthropic.TextBlock).text
           .replace(/^```[\w]*\n?/m, '').replace(/\n?```$/m, '').trim();

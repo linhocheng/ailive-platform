@@ -1824,9 +1824,9 @@ ${convData.userProfile ? `【我認識這個人】\n${convData.userProfile}\n\n`
             'growthMetrics.totalConversations': FieldValue.increment(1),
             updatedAt: new Date().toISOString(),
           });
-          await trackCost(characterId, selectedModel, totalInputTokens, totalOutputTokens);
+          await trackCost(characterId, selectedModel, totalInputTokens, totalOutputTokens, 'dialogue');
           if (haikuInputTokens + haikuOutputTokens > 0) {
-            await trackCost(characterId, 'claude-haiku-4-5-20251001', haikuInputTokens, haikuOutputTokens);
+            await trackCost(characterId, 'claude-haiku-4-5-20251001', haikuInputTokens, haikuOutputTokens, 'dialogue-haiku');
           }
 
           // summary 壓縮

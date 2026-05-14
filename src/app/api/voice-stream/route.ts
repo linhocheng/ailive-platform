@@ -26,7 +26,7 @@ import { detectGear, MODELS, getMaxTokens } from '@/lib/llm-router';
 import { callGemini } from '@/lib/gemini-client';
 import { getFirestore } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
-import { trackCost } from '@/lib/cost-tracker';
+import { trackCost, trackTTSCost } from '@/lib/cost-tracker';
 import { redis } from '@/lib/redis';
 import { generateEmbedding, cosineSimilarity } from '@/lib/embeddings';
 import { generateImageForCharacter } from '@/lib/generate-image';
@@ -931,6 +931,7 @@ specialist 選擇：
             });
             const base64 = audioStream ? await streamToBase64(audioStream) : '';
             audioBuffer.set(idx, base64);
+            void trackTTSCost(characterId, ttsProviderName, sentence.length);
           } catch (_e) {
             console.error('TTS error for sentence:', sentence, _e);
             audioBuffer.set(idx, ''); // 失敗也要佔位
@@ -1090,7 +1091,7 @@ ${recentMessages}` }],
         // 追蹤語音費用（Claude Sonnet streaming）
         try {
           const finalMsg = await claudeStream.finalMessage();
-          await trackCost(characterId, 'claude-sonnet-4-6', finalMsg.usage?.input_tokens ?? 0, finalMsg.usage?.output_tokens ?? 0);
+          await trackCost(characterId, 'claude-sonnet-4-6', finalMsg.usage?.input_tokens ?? 0, finalMsg.usage?.output_tokens ?? 0, 'voice-stream');
         } catch { /* 不阻斷 */ }
 
         // ── Session State 更新（async，語音結束後才跑）──

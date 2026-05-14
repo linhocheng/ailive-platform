@@ -142,9 +142,9 @@ export async function POST(req: NextRequest) {
 
     // 費用追蹤
     if (!skipForge) {
-      await trackCost(characterId, 'claude-sonnet-4-6', refineInputTokens, refineOutputTokens);
+      await trackCost(characterId, 'claude-sonnet-4-6', refineInputTokens, refineOutputTokens, 'soul-refine');
     }
-    await trackCost(characterId, 'claude-sonnet-4-6', coreResponse.usage?.input_tokens ?? 0, coreResponse.usage?.output_tokens ?? 0);
+    await trackCost(characterId, 'claude-sonnet-4-6', coreResponse.usage?.input_tokens ?? 0, coreResponse.usage?.output_tokens ?? 0, 'soul-core');
 
     return NextResponse.json({
       success: true,

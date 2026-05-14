@@ -508,7 +508,7 @@ ${outputFormat}`;
     const raw = (response.content[0] as Anthropic.TextBlock).text.trim()
       .replace(/^```[\w]*\n?/m, '').replace(/\n?```$/m, '').trim();
 
-    await trackCost(characterId, 'claude-sonnet-4-6', response.usage?.input_tokens ?? 0, response.usage?.output_tokens ?? 0);
+    await trackCost(characterId, 'claude-sonnet-4-6', response.usage?.input_tokens ?? 0, response.usage?.output_tokens ?? 0, 'task-run');
     let result: Record<string, string>;
     try {
       result = JSON.parse(raw);
@@ -550,7 +550,7 @@ ${soulRef}
         });
 
         const evalRaw = (selfEvalRes.content[0] as Anthropic.TextBlock).text.trim().replace(/^```[\w]*\n?/m, '').replace(/\n?```$/m, '').trim();
-        await trackCost(characterId, 'claude-haiku-4-5-20251001', selfEvalRes.usage?.input_tokens ?? 0, selfEvalRes.usage?.output_tokens ?? 0);
+        await trackCost(characterId, 'claude-haiku-4-5-20251001', selfEvalRes.usage?.input_tokens ?? 0, selfEvalRes.usage?.output_tokens ?? 0, 'task-self-eval');
         const evalResult = JSON.parse(evalRaw);
 
         const insightContent = `靈魂契合度 ${evalResult.score}/10。最像自己：${evalResult.aligned}。需要校正：${evalResult.drift}。下次記住：${evalResult.next_time}`;
@@ -616,7 +616,7 @@ ${soulRef}
               system: systemPrompt,
               messages: [{ role: 'user', content: postPrompt }],
             });
-            await trackCost(characterId, 'claude-haiku-4-5-20251001', postRes.usage?.input_tokens ?? 0, postRes.usage?.output_tokens ?? 0);
+            await trackCost(characterId, 'claude-haiku-4-5-20251001', postRes.usage?.input_tokens ?? 0, postRes.usage?.output_tokens ?? 0, 'task-post');
             const postRaw = (postRes.content[0] as Anthropic.TextBlock).text.trim()
               .replace(/^```[\w]*\n?/m, '').replace(/\n?```$/m, '').trim();
             const postResult = JSON.parse(postRaw);
