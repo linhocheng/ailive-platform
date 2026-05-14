@@ -98,9 +98,12 @@ export async function trackCost(
         worker_id:    `ailive-${purpose ?? 'unknown'}`,
         character_id: characterId,
         type:         'llm',
+        // bridge = Claude Max 月費吃到飽，不從 API key 扣費
+        route:        process.env.BRIDGE_ENABLED === 'true' ? 'bridge' : 'anthropic-sdk',
         model,
         input_tokens:  inputTokens,
         output_tokens: outputTokens,
+        // bridge 走 Max 月費，cost_usd_est 是參考用量，不是實際帳單
         cost_usd_est:  costUSD,
         purpose:       purpose ?? 'unknown',
         expires_at:    expiresAt(COST_TTL_DAYS),
