@@ -310,17 +310,22 @@ async def entrypoint(ctx: JobContext):
         })
         absorbed = await asyncio.to_thread(_sync_absorb, question, result_text)
         await asyncio.to_thread(_sync_update_job, job_id, {"consumed": True})
-        # session.say() 直接走 TTS，不再過 LLM（generate_reply 讓 LLM 自由發揮，角色不說目標內容）。
-        # 不 await、不帶 allow_interruptions=False，避免 background task deadlock。
-        # ensure_future 讓 say() 排進 event loop，pipeline finally 照常釋放 lock。
+        # 雙寫：
+        # 1. session.history 寫入 assistant message → LLM 下一輪「記得」自己說過這段
+        # 2. session.say() 播放同一段 → 用戶聽到
+        # 兩邊內容對齊，角色說了什麼 = LLM 知道什麼。
+        try:
+            session.history.add_message(role="assistant", content=absorbed)
+        except Exception as e:
+            logger.warning(f"[research] history write failed: {e}")
         try:
             await ctx.room.local_participant.publish_data(
                 json.dumps({"type": "research", "phase": "delivered"}).encode(), reliable=True,
             )
         except Exception:
             pass
-        logger.info(f"[research] job={job_id[:8]} done, say ({len(absorbed)} chars)")
-        asyncio.ensure_future(session.say(absorbed, allow_interruptions=True))
+        logger.info(f"[research] job={job_id[:8]} done, history+say ({len(absorbed)} chars)")
+        asyncio.ensure_future(session.say(absorbed, allow_interruptions=False))
 
     async def _run_research(job_id: str, question: str, context: str) -> None:
         """Background task：呼叫索查詢 → 吸收 → generate_reply()
