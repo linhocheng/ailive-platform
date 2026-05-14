@@ -310,9 +310,11 @@ async def entrypoint(ctx: JobContext):
         })
         absorbed = await asyncio.to_thread(_sync_absorb, question, result_text)
         await asyncio.to_thread(_sync_update_job, job_id, {"consumed": True})
-        # 把吸收後的話注入 chat_ctx（developer role = 系統層級，角色看得到但用戶沒說過）。
-        # instructions= 只是軟性提示，LLM 可以選擇忽略；chat_ctx 注入才讓角色真的「知道」。
-        session.history.add_message(
+        # session.history 的 copy 加入研究結果，顯式傳給 generate_reply(chat_ctx=)。
+        # 直接改 session.history 不可靠（generate_reply 可能用內部獨立 ctx），
+        # 傳 copy 才保證 LLM 這一次一定看到。
+        ctx_copy = session.history.copy()
+        ctx_copy.add_message(
             role="developer",
             content=(
                 f"[研究就緒] 你剛才在想「{question}」這件事，現在已經想好了。\n"
@@ -326,8 +328,8 @@ async def entrypoint(ctx: JobContext):
             )
         except Exception:
             pass
-        logger.info(f"[research] job={job_id[:8]} done, chat_ctx injected + generate_reply ({len(absorbed)} chars)")
-        await session.generate_reply()
+        logger.info(f"[research] job={job_id[:8]} done, generate_reply with ctx_copy ({len(absorbed)} chars)")
+        await session.generate_reply(chat_ctx=ctx_copy)
 
     async def _run_research(job_id: str, question: str, context: str) -> None:
         """Background task：呼叫索查詢 → 吸收 → generate_reply()
