@@ -251,9 +251,6 @@ async def entrypoint(ctx: JobContext):
     # 同時要 TTS → MiniMax RPM 撞牆、AudioEmitter 全死。加 in-flight lock：
     # 同 session 同時最多 1 個 research，第二個來直接拒絕。
     research_in_flight = {"active": False}
-    # 暫存記憶：research 完成後寫入，generate_reply 消化後清空。
-    # 讓角色「知道自己想到了什麼」，在合適時機自然說出，而非被迫逐字轉述。
-    staging_memory: dict[str, str] = {}
 
     ABSORB_DISCIPLINE = (
         "\n\n== 關於剛剛這條資訊 ==\n"
@@ -346,33 +343,17 @@ async def entrypoint(ctx: JobContext):
         })
         absorbed = await asyncio.to_thread(_sync_absorb, question, result_text)
         await asyncio.to_thread(_sync_update_job, job_id, {"consumed": True})
-        # 暫存記憶設計：
-        # 1. 寫進 staging_memory → 角色「知道」自己想到了什麼
-        # 2. pre-write history（assistant message）→ 後續 LLM turn 記得
-        # 3. generate_reply 用自然語氣指示（不強迫逐字）→ 角色自己決定怎麼接話
-        # 4. clear staging
-        staging_memory["question"] = question
-        staging_memory["absorbed"] = absorbed
-        try:
-            session.history.add_message(role="assistant", content=absorbed)
-        except Exception as e:
-            logger.warning(f"[research] history write failed: {e}")
         try:
             await ctx.room.local_participant.publish_data(
                 json.dumps({"type": "research", "phase": "delivered"}).encode(), reliable=True,
             )
         except Exception:
             pass
-        logger.info(f"[research] job={job_id[:8]} staging ready, generate_reply ({len(absorbed)} chars)")
-        session.generate_reply(
-            instructions=(
-                f"你剛才一直在腦子裡想「{question}」這件事，現在想清楚了。\n"
-                f"用你自己的語氣和節奏，自然地跟用戶說你想到的——\n"
-                f"可以是「啊，對了」「等等，我說一件事」「剛想到」這類自然接話。\n"
-                f"你想到的內容：{absorbed}"
-            ),
-        )
-        staging_memory.clear()
+        # absorbed 已由 _sync_absorb 轉成角色語氣，直接 say() 即可。
+        # 不先寫 history（避免 LLM 以為「已說過」→ generate_reply 生別的話）。
+        # say() 完成後 LiveKit 自動把它加進 conversation history → 下一 turn LLM 能讀到。
+        logger.info(f"[research] job={job_id[:8]} saying absorbed ({len(absorbed)} chars)")
+        asyncio.ensure_future(session.say(absorbed, allow_interruptions=True))
 
     async def _run_research(job_id: str, question: str, context: str) -> None:
         """Background task：呼叫索查詢 → 吸收 → generate_reply()
