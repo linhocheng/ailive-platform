@@ -304,17 +304,18 @@ async def entrypoint(ctx: JobContext):
         })
         absorbed = await asyncio.to_thread(_sync_absorb, question, result_text)
         await asyncio.to_thread(_sync_update_job, job_id, {"consumed": True})
-        # 走 generate_reply 而非 session.say()：5/13 實測 say(allow_interruptions=False)
-        # 在 background asyncio task 裡會 indefinite hang（等 main loop idle 等不到），
-        # 被 wait_for(120s) 砍 → 用戶聽不到接話。
-        # generate_reply 走 main agent LLM turn-taking 路徑，會自然排到下一個 turn 才說。
-        logger.info(f"[research] job={job_id[:8]} done, generate_reply ({len(absorbed)} chars)")
-        await session.generate_reply(
-            instructions=(
-                f"剛剛你想了一下「{question}」這件事。你已經想好要說什麼了。\n\n"
-                f"請逐字、原封不動地說出這段話（不要再改寫、不要加開場白、不要加結尾）:\n\n{absorbed}"
+        # 把吸收後的話注入 chat_ctx（developer role = 系統層級，角色看得到但用戶沒說過）。
+        # instructions= 只是軟性提示，LLM 可以選擇忽略；chat_ctx 注入才讓角色真的「知道」。
+        session.chat_ctx.add_message(
+            role="developer",
+            content=(
+                f"[研究就緒] 你剛才在想「{question}」這件事，現在已經想好了。\n"
+                f"你準備要說的話：{absorbed}\n\n"
+                f"請接著對用戶自然說出來（用你的語氣，不要說「根據資料」「以下是」等轉述語）。"
             ),
         )
+        logger.info(f"[research] job={job_id[:8]} done, chat_ctx injected + generate_reply ({len(absorbed)} chars)")
+        await session.generate_reply()
 
     async def _run_research(job_id: str, question: str, context: str) -> None:
         """Background task：呼叫索查詢 → 吸收 → generate_reply()
