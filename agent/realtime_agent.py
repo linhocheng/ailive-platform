@@ -297,6 +297,39 @@ async def entrypoint(ctx: JobContext):
     def _sync_update_job(job_id: str, patch: dict) -> None:
         db_rt.collection("platform_research_jobs").document(job_id).update(patch)
 
+    def _sync_enqueue_strategy(job_id: str) -> None:
+        """Cloud Tasks enqueue via REST API（無 SDK 依賴，走 service account JWT）"""
+        import base64
+        import httpx
+        from google.oauth2 import service_account
+        import google.auth.transport.requests as _greq
+        key_json = os.environ.get("STRATEGY_ENQUEUER_KEY_JSON", "")
+        if not key_json:
+            raise RuntimeError("STRATEGY_ENQUEUER_KEY_JSON not set")
+        key_data = json.loads(key_json)
+        creds = service_account.Credentials.from_service_account_info(
+            key_data, scopes=["https://www.googleapis.com/auth/cloud-platform"]
+        )
+        creds.refresh(_greq.Request())
+        parent = "projects/zhu-cloud-2026/locations/asia-east1/queues/strategy-tasks"
+        body_b64 = base64.b64encode(json.dumps({"jobId": job_id}).encode()).decode()
+        resp = httpx.post(
+            f"https://cloudtasks.googleapis.com/v2/{parent}/tasks",
+            headers={"Authorization": f"Bearer {creds.token}", "Content-Type": "application/json"},
+            json={"task": {"httpRequest": {
+                "httpMethod": "POST",
+                "url": "https://strategy-worker-754631848156.asia-east1.run.app/",
+                "headers": {"Content-Type": "application/json"},
+                "body": body_b64,
+                "oidcToken": {
+                    "serviceAccountEmail": "strategy-enqueuer@zhu-cloud-2026.iam.gserviceaccount.com",
+                    "audience": "https://strategy-worker-754631848156.asia-east1.run.app",
+                },
+            }, "dispatchDeadline": "1800s"}},
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+
     async def _research_pipeline(job_id: str, question: str, context: str) -> None:
         await asyncio.to_thread(_sync_update_job, job_id, {"status": "running"})
         result_text = await asyncio.to_thread(_sync_run_suo, question, context)
@@ -427,7 +460,71 @@ async def entrypoint(ctx: JobContext):
         asyncio.ensure_future(_run_research(job_id, question, context))
         return f"RESEARCH_PENDING:{job_id}"
 
-    agent = Agent(instructions=system_prompt, tools=[dispatch_research])
+    @function_tool(
+        name="commission_specialist",
+        description=(
+            "把長任務委託給奧（策略師），非同步執行，docx 完成後出現在 dashboard。\n\n"
+            "適用場景：用戶要 >2000 字正式長文檔——規劃書、提案、策略書、市場分析、"
+            "白皮書、企劃書、研究報告；產出可下載 docx。\n\n"
+            "呼叫紀律：\n"
+            "- 決定派就直接呼叫，不要預告。決定後直接呼叫，工具回來再跟用戶說明。\n"
+            "- 需要確認條件 → 一輪內問完，條件齊了那輪立刻呼叫，不要再文字整理一次。\n"
+            "- 短回應、口頭意見、一兩段就能交差 → 不走這個工具，自己回。"
+        ),
+    )
+    async def commission_specialist(brief: str, specialist: str = "strategist") -> str:  # type: ignore[misc]
+        """
+        brief: 給奧的工作簡報（用戶要規劃什麼、為何、給誰看、特殊要求）
+        specialist: 目前即時語音只支援 strategist（奧）
+        """
+        if not brief:
+            return "需要 brief 才能委託奧。"
+        if specialist != "strategist":
+            return f"⚠️ 即時語音目前只支援 strategist（奧），不支援 {specialist}。"
+
+        assignee_id = "pEWC5m2MOddyGe9uw0u0"  # 奧
+
+        def _create_strategy_job():
+            return db_rt.collection("platform_jobs").add({
+                "requesterId": character_id,
+                "requesterConvId": conv_id or "",
+                "requesterUserId": user_id or "",
+                "assigneeId": assignee_id,
+                "jobType": "strategy",
+                "brief": {"prompt": brief},
+                "status": "pending",
+                "routedTo": "cloud-run",
+                "createdAt": datetime.now(timezone.utc).isoformat(),
+                "retryCount": 0,
+                "source": "realtime",
+            })
+
+        job_ref = await asyncio.to_thread(_create_strategy_job)
+        job_id = job_ref[1].id
+        logger.info(f"[commission] strategy job={job_id[:8]} created, enqueuing...")
+
+        try:
+            await asyncio.to_thread(_sync_enqueue_strategy, job_id)
+            logger.info(f"[commission] job={job_id[:8]} enqueued to Cloud Tasks")
+        except Exception as e:
+            logger.warning(f"[commission] enqueueStrategy failed: {e}")
+            try:
+                await asyncio.to_thread(
+                    lambda: db_rt.collection("platform_jobs").document(job_id).update({
+                        "strategyEnqueueError": str(e),
+                        "strategyEnqueueErrorAt": datetime.now(timezone.utc).isoformat(),
+                    })
+                )
+            except Exception:
+                pass
+
+        short_id = job_id[:8]
+        return (
+            f"JOB_PENDING:{job_id}:已委託奧，工作編號 {short_id}。"
+            f"2-3 分鐘內完成，策略書 docx 出現在 dashboard「策略書」頁面可下載。繼續陪用戶聊。"
+        )
+
+    agent = Agent(instructions=system_prompt, tools=[dispatch_research, commission_specialist])
     logger.info(f"Agent initialized with {char_name} soul, prompt={len(system_prompt)} chars")
 
     session = AgentSession(
