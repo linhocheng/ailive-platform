@@ -82,7 +82,8 @@ export async function POST(req: NextRequest) {
       'claude-haiku-4-5-20251001',
       response.usage.input_tokens,
       response.usage.output_tokens,
-    ).catch(() => {});
+      'strategist-review',
+    );
 
     // 6. 解析結果
     const raw = response.content[0].type === 'text' ? response.content[0].text : '';
