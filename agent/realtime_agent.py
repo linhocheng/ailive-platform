@@ -312,7 +312,7 @@ async def entrypoint(ctx: JobContext):
         await asyncio.to_thread(_sync_update_job, job_id, {"consumed": True})
         # 把吸收後的話注入 chat_ctx（developer role = 系統層級，角色看得到但用戶沒說過）。
         # instructions= 只是軟性提示，LLM 可以選擇忽略；chat_ctx 注入才讓角色真的「知道」。
-        session.chat_ctx.add_message(
+        session.history.add_message(
             role="developer",
             content=(
                 f"[研究就緒] 你剛才在想「{question}」這件事，現在已經想好了。\n"
