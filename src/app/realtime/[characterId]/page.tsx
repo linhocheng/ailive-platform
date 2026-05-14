@@ -90,6 +90,8 @@ export default function RealtimeCallPage() {
   const [diagLogs, setDiagLogs] = useState<DiagLog[]>([]);
   const [diag, setDiag] = useState<Diag>({ livekitUrl: '', roomName: '', identity: '' });
   const [micMuted, setMicMuted] = useState(false);
+  const [researchPhase, setResearchPhase] = useState<'idle'|'searching'|'data_ready'|'delivered'>('idle');
+  const researchResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const roomRef = useRef<Room | null>(null);
   const audioElRef = useRef<HTMLAudioElement | null>(null);
@@ -308,6 +310,13 @@ export default function RealtimeCallPage() {
             const msg = JSON.parse(new TextDecoder().decode(payload));
             if (msg.type === 'caption' && msg.text) setCaptions(prev => [...prev, { who: msg.who||'agent', text: msg.text, ts: Date.now() }]);
             else if (msg.type === 'character' && msg.name) setCharacterName(msg.name);
+            else if (msg.type === 'research' && msg.phase) {
+              setResearchPhase(msg.phase);
+              if (researchResetRef.current) clearTimeout(researchResetRef.current);
+              if (msg.phase === 'delivered') {
+                researchResetRef.current = setTimeout(() => setResearchPhase('idle'), 4000);
+              }
+            }
           } catch { /* ignore */ }
         });
 
@@ -377,6 +386,14 @@ export default function RealtimeCallPage() {
         ] as { key:string; ok:boolean; fail:boolean }[]).map(l => (
           <div key={l.key} title={l.key} style={{ width:7, height:7, borderRadius:'50%', background: l.ok ? '#22c55e' : l.fail ? '#ef4444' : 'rgba(255,255,255,0.25)' }} />
         ))}
+        {/* 搜尋狀態燈：idle=隱藏, searching=藍, data_ready=黃, delivered=橘 */}
+        {researchPhase !== 'idle' && (
+          <div title={researchPhase} style={{
+            width:7, height:7, borderRadius:'50%',
+            background: researchPhase === 'searching' ? '#3b82f6' : researchPhase === 'data_ready' ? '#eab308' : '#f97316',
+            boxShadow: researchPhase === 'searching' ? '0 0 6px #3b82f6' : researchPhase === 'data_ready' ? '0 0 6px #eab308' : '0 0 6px #f97316',
+          }} />
+        )}
       </div>
 
       {/* 中심 */}

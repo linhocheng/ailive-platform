@@ -297,6 +297,12 @@ async def entrypoint(ctx: JobContext):
     async def _research_pipeline(job_id: str, question: str, context: str) -> None:
         await asyncio.to_thread(_sync_update_job, job_id, {"status": "running"})
         result_text = await asyncio.to_thread(_sync_run_suo, question, context)
+        try:
+            await ctx.room.local_participant.publish_data(
+                json.dumps({"type": "research", "phase": "data_ready"}).encode(), reliable=True,
+            )
+        except Exception:
+            pass
         await asyncio.to_thread(_sync_update_job, job_id, {
             "status": "done",
             "result": {"raw": result_text},
@@ -314,6 +320,12 @@ async def entrypoint(ctx: JobContext):
                 f"請接著對用戶自然說出來（用你的語氣，不要說「根據資料」「以下是」等轉述語）。"
             ),
         )
+        try:
+            await ctx.room.local_participant.publish_data(
+                json.dumps({"type": "research", "phase": "delivered"}).encode(), reliable=True,
+            )
+        except Exception:
+            pass
         logger.info(f"[research] job={job_id[:8]} done, chat_ctx injected + generate_reply ({len(absorbed)} chars)")
         await session.generate_reply()
 
@@ -394,6 +406,12 @@ async def entrypoint(ctx: JobContext):
             research_in_flight["active"] = False  # 寫不進去 lock 還回去
             raise
         job_id = job_ref[1].id
+        try:
+            await ctx.room.local_participant.publish_data(
+                json.dumps({"type": "research", "phase": "searching"}).encode(), reliable=True,
+            )
+        except Exception:
+            pass
         asyncio.ensure_future(_run_research(job_id, question, context))
         return f"RESEARCH_PENDING:{job_id}"
 
