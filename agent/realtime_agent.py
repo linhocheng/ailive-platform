@@ -517,6 +517,22 @@ async def entrypoint(ctx: JobContext):
 
     call_start = time.time()
 
+    # Cost tracking accumulators — written to zhu_vitals_cost on disconnect
+    _cost_llm = {"input": 0, "output": 0}
+    _cost_tts_chars = {"count": 0}
+
+    @session.on("metrics_collected")
+    def _on_metrics(event):
+        metrics = getattr(event, "metrics", None)
+        if metrics is None:
+            return
+        cls_name = type(metrics).__name__
+        if "LLM" in cls_name:
+            _cost_llm["input"] += getattr(metrics, "prompt_tokens", 0) or 0
+            _cost_llm["output"] += getattr(metrics, "completion_tokens", 0) or 0
+        elif "TTS" in cls_name:
+            _cost_tts_chars["count"] += getattr(metrics, "characters_count", 0) or 0
+
     # Phase 5：收集本次通話的 transcript（user + assistant）→ 通話結束寫回 Firestore
     transcript: list = []
 
@@ -625,6 +641,63 @@ async def entrypoint(ctx: JobContext):
                 logger.error(f"save_conversation failed: {e}")
         else:
             logger.info(f"Skip save: transcript={len(transcript)}, conv_id={conv_id}, char_id={character_id}")
+
+        # Write cost record to zhu_vitals_cost
+        if character_id:
+            try:
+                import uuid
+                from datetime import timezone as _tz
+                PRICING = {
+                    "claude-haiku-4-5-20251001": {"input": 0.80, "output": 4.00},
+                    "claude-sonnet-4-6":          {"input": 3.00, "output": 15.00},
+                }
+                TTS_PRICING = {"minimax": 0.014, "elevenlabs": 0.30}  # USD per 1000 chars
+                model_used = "claude-haiku-4-5-20251001"
+                p = PRICING.get(model_used, {"input": 0.80, "output": 4.00})
+                llm_cost = (
+                    _cost_llm["input"] / 1_000_000 * p["input"]
+                    + _cost_llm["output"] / 1_000_000 * p["output"]
+                )
+                tts_provider_name = "minimax"  # agent always uses MiniMaxCustomTTS
+                tts_cost = _cost_tts_chars["count"] / 1000 * TTS_PRICING.get(tts_provider_name, 0)
+                now_ts = datetime.now(_tz.utc)
+                expires_at = datetime.fromtimestamp(now_ts.timestamp() + 90 * 86400, tz=_tz.utc)
+
+                if _cost_llm["input"] > 0 or _cost_llm["output"] > 0:
+                    db_rt.collection("zhu_vitals_cost").add({
+                        "call_id": str(uuid.uuid4()),
+                        "timestamp": now_ts,
+                        "project": "ailive-platform",
+                        "worker_id": "ailive-voice-stream",
+                        "character_id": character_id,
+                        "type": "llm",
+                        "route": "anthropic-sdk",
+                        "model": model_used,
+                        "purpose": "voice-stream",
+                        "input_tokens": _cost_llm["input"],
+                        "output_tokens": _cost_llm["output"],
+                        "cost_usd_est": llm_cost,
+                        "expires_at": expires_at,
+                    })
+                    logger.info(f"[cost] LLM {_cost_llm['input']}in/{_cost_llm['output']}out ${llm_cost:.4f}")
+
+                if _cost_tts_chars["count"] > 0:
+                    db_rt.collection("zhu_vitals_cost").add({
+                        "call_id": str(uuid.uuid4()),
+                        "timestamp": now_ts,
+                        "project": "ailive-platform",
+                        "worker_id": "ailive-tts",
+                        "character_id": character_id,
+                        "type": "tts",
+                        "purpose": "voice-stream-tts",
+                        "tts_provider": tts_provider_name,
+                        "tts_characters": _cost_tts_chars["count"],
+                        "cost_usd_est": tts_cost,
+                        "expires_at": expires_at,
+                    })
+                    logger.info(f"[cost] TTS {_cost_tts_chars['count']} chars ${tts_cost:.4f}")
+            except Exception as e:
+                logger.error(f"[cost] write failed: {e}")
 
     await session.start(agent=agent, room=ctx.room)
     logger.info("Session started, agent active")

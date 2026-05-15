@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { CharNav } from '../page';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 export default function SoulPage() {
   const { id } = useParams<{ id: string }>();
@@ -55,6 +56,8 @@ export default function SoulPage() {
     setTimeout(() => setMsg(''), 5000);
   };
 
+  const isMobile = useIsMobile();
+
   if (!char) return <div style={{ padding: 40, textAlign: 'center', color: '#666' }}>載入中...</div>;
 
   const btn = (label: string, onClick: () => void, disabled: boolean, color = '#1a1a2e') => (
@@ -106,7 +109,7 @@ export default function SoulPage() {
       )}
 
       {/* 第一排：rawSoul + 鑄魂控制 */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: 16, marginBottom: 16 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 320px', gap: 16, marginBottom: 16 }}>
         {card(
           <>
             {rowHeader('原始人設', undefined,
@@ -153,7 +156,7 @@ export default function SoulPage() {
       </div>
 
       {/* 第二排：soul_core + system_soul */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 16 }}>
         {card(
           <>
             {rowHeader(

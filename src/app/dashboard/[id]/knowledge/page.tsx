@@ -2,6 +2,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { useParams } from 'next/navigation';
 import { CharNav } from '../page';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 interface KnowledgeItem {
   id: string;
@@ -15,6 +16,7 @@ interface KnowledgeItem {
 
 export default function KnowledgePage() {
   const { id } = useParams<{ id: string }>();
+  const isMobile = useIsMobile();
   const [items, setItems] = useState<KnowledgeItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [title, setTitle] = useState('');
@@ -170,7 +172,7 @@ export default function KnowledgePage() {
       </div>
       <CharNav id={id} active="/knowledge" />
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 20 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 2fr', gap: 20 }}>
 
         {/* 左側 */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>

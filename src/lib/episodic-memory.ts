@@ -9,6 +9,7 @@
  * （見 agent/firestore_loader.py 的 load_episodic_block）。
  */
 import type { Firestore } from 'firebase-admin/firestore';
+import { generateEmbedding, cosineSimilarity } from '@/lib/embeddings';
 
 const IDENTITY_SOURCES = new Set([
   'sleep_time', 'self_awareness', 'sleep_self_awareness',
@@ -26,6 +27,7 @@ export async function loadEpisodicBlock(
   db: Firestore,
   characterId: string,
   userId: string | undefined,
+  query?: string,
 ): Promise<string> {
   try {
     const recentSnap = await db.collection('platform_insights')
@@ -34,7 +36,7 @@ export async function loadEpisodicBlock(
       .get();
 
     const allFiltered = recentSnap.docs
-      .map(d => ({ ...d.data(), id: d.id }))
+      .map(d => ({ ...d.data(), id: d.id } as Record<string, unknown>))
       .filter((d: Record<string, unknown>) => {
         // Cross-user leak 防護：帶 userId 的只給該用戶看
         if (d.userId && d.userId !== userId) return false;
@@ -54,20 +56,48 @@ export async function loadEpisodicBlock(
       : '';
 
     // 一般記憶：排除資源認知
-    // 排序：core 優先 → hitCount 加權 → 最近日期
-    const recentInsights = allFiltered
-      .filter((d: Record<string, unknown>) => d.source !== 'resource_awareness')
-      .sort((a: Record<string, unknown>, b: Record<string, unknown>) => {
-        const tierScore = (t: string) => t === 'core' ? 2 : t === 'fresh' ? 1 : 0;
-        const aTier = tierScore(String(a.tier || ''));
-        const bTier = tierScore(String(b.tier || ''));
-        if (bTier !== aTier) return bTier - aTier;
-        const aHit = Number(a.hitCount || 0);
-        const bHit = Number(b.hitCount || 0);
-        if (bHit !== aHit) return bHit - aHit;
-        return String(b.eventDate || '').localeCompare(String(a.eventDate || ''));
-      })
-      .slice(0, 3);
+    const candidates = allFiltered.filter(
+      (d: Record<string, unknown>) => d.source !== 'resource_awareness',
+    );
+
+    // 有 query → semantic search（embedding 相似度排序）；無 query → hitCount 排序
+    let recentInsights: Record<string, unknown>[];
+    if (query && query.trim()) {
+      const withEmb = candidates.filter(
+        (d: Record<string, unknown>) => d.embedding && Array.isArray(d.embedding),
+      );
+      if (withEmb.length > 0) {
+        try {
+          const queryEmb = await generateEmbedding(query);
+          recentInsights = withEmb
+            .map(d => ({ ...d, _score: cosineSimilarity(queryEmb, d.embedding as number[]) }))
+            .filter(d => (d._score as number) >= 0.25)
+            .sort((a, b) => (b._score as number) - (a._score as number))
+            .slice(0, 3);
+        } catch {
+          recentInsights = candidates
+            .sort((a, b) => Number(b.hitCount || 0) - Number(a.hitCount || 0))
+            .slice(0, 3);
+        }
+      } else {
+        recentInsights = candidates
+          .sort((a, b) => Number(b.hitCount || 0) - Number(a.hitCount || 0))
+          .slice(0, 3);
+      }
+    } else {
+      recentInsights = candidates
+        .sort((a: Record<string, unknown>, b: Record<string, unknown>) => {
+          const tierScore = (t: string) => t === 'core' ? 2 : t === 'fresh' ? 1 : 0;
+          const aTier = tierScore(String(a.tier || ''));
+          const bTier = tierScore(String(b.tier || ''));
+          if (bTier !== aTier) return bTier - aTier;
+          const aHit = Number(a.hitCount || 0);
+          const bHit = Number(b.hitCount || 0);
+          if (bHit !== aHit) return bHit - aHit;
+          return String(b.eventDate || '').localeCompare(String(a.eventDate || ''));
+        })
+        .slice(0, 3);
+    }
 
     if (recentInsights.length === 0 && !resourceBlock) return '';
 

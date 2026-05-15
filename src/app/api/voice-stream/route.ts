@@ -178,6 +178,7 @@ export async function POST(req: NextRequest) {
         type HistoryMsg = {
           role: string;
           content?: string;
+          createdAt?: string;
           imageUrl?: string;
           eventType?: string;
           specialistName?: string;
@@ -220,7 +221,7 @@ export async function POST(req: NextRequest) {
 
         // ── Episodic memory 注入（與 dialogue 對齊，破真相分裂）──
         // 從 platform_insights 撈最近 3 條 + 資源認知；user 隔離；不阻斷
-        const episodicBlock = await loadEpisodicBlock(db, characterId, userId);
+        const episodicBlock = await loadEpisodicBlock(db, characterId, userId, message);
 
         // ── Character actions 注入（unfulfilled promises/questions/events，filter relevant）──
         // 之前 voice-stream 只寫不讀，現在三邊統一注入
@@ -276,7 +277,30 @@ export async function POST(req: NextRequest) {
 
 承諾是承諾，兌現是兌現。預告而不執行是最壞的——用戶以為你做了，其實沒有。`;
 
-        const voiceDynamicBlock = `${profileBlock}${observationsBlock}${summaryBlock}${gapInjection}${lastSessionBlock}${sessionStateBlock}${actionsBlock}${episodicBlock}
+        // ── 對話歷史時間感知 ──
+        // 讓角色知道 history 裡每條訊息的相對時間，避免把「3天前說的」當「剛才說的」
+        let historyTimeBlock = '';
+        if (history.length > 0) {
+          const taipeiNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Taipei' }));
+          const todayStr = taipeiNow.toLocaleDateString('en-CA', { timeZone: 'Asia/Taipei' });
+          const timeLines = history
+            .filter((m): m is typeof m & { createdAt: string } => !!m.createdAt)
+            .slice(-4)
+            .map(m => {
+              const d = new Date(m.createdAt as string);
+              const dStr = d.toLocaleDateString('en-CA', { timeZone: 'Asia/Taipei' });
+              const hm = d.toLocaleTimeString('zh-TW', { timeZone: 'Asia/Taipei', hour: '2-digit', minute: '2-digit', hour12: false });
+              const diffDays = Math.floor((new Date(todayStr).getTime() - new Date(dStr).getTime()) / 86400000);
+              const label = diffDays === 0 ? `今天 ${hm}` : diffDays === 1 ? `昨天 ${hm}` : `${diffDays}天前`;
+              const role = m.role === 'user' ? '你' : '我';
+              return `  [${label}] ${role}：${String(m.content || '').slice(0, 40)}${String(m.content || '').length > 40 ? '…' : ''}`;
+            });
+          if (timeLines.length > 0) {
+            historyTimeBlock = `\n\n【最近對話時間戳】\n${timeLines.join('\n')}\n（用這個判斷對話距今多遠，不要把幾天前的事說成「剛才」）`;
+          }
+        }
+
+        const voiceDynamicBlock = `${profileBlock}${observationsBlock}${summaryBlock}${gapInjection}${lastSessionBlock}${sessionStateBlock}${actionsBlock}${episodicBlock}${historyTimeBlock}
 
 ---
 ${timeRulesBlock}`;
@@ -991,10 +1015,11 @@ specialist 選擇：
         // 8. 非同步存 Firestore + summary 壓縮 + insight 提煉
         void (async () => {
           try {
+            const now = new Date().toISOString();
             const newMessages = [
               ...history,
-              { role: 'user', content: message },
-              { role: 'assistant', content: fullText },
+              { role: 'user', content: message, createdAt: now },
+              { role: 'assistant', content: fullText, createdAt: now },
             ];
             const newCount = ((convData.messageCount as number) || 0) + 2;
 

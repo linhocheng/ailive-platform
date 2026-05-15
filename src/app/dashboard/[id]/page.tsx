@@ -2,6 +2,7 @@
 import React from 'react';
 import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 const CHARACTER_NAV = [
   { href: '', label: '概覽' },
@@ -69,7 +70,9 @@ export function CharNav({ id, active, tier: tierProp }: { id: string; active: st
       display: 'flex', gap: 2, marginBottom: 28,
       borderBottom: '1px solid var(--border)',
       overflowX: 'auto', paddingBottom: 0,
-    }}>
+      WebkitOverflowScrolling: 'touch',
+      scrollbarWidth: 'none',
+    } as React.CSSProperties}>
       {navItems.map(item => {
         const href = `/dashboard/${id}${item.href}`;
         const isActive = active === item.href;
@@ -98,6 +101,7 @@ export default function CharacterPage() {
   const [char, setChar] = useState<Character | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [loading, setLoading] = useState(true);
+  const isMobile = useIsMobile();
 
   useEffect(() => {
     if (!id) return;
@@ -141,13 +145,13 @@ export default function CharacterPage() {
       </div>
 
       {/* 角色 header */}
-      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-lg)', padding: 24, marginBottom: 24 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-lg)', padding: isMobile ? 16 : 24, marginBottom: 24 }}>
+        <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', justifyContent: 'space-between', alignItems: isMobile ? 'flex-start' : 'center', gap: isMobile ? 12 : 0 }}>
           <div>
-            <h1 style={{ margin: 0, fontSize: 26, color: 'var(--text-primary)', fontFamily: 'var(--font-display)', fontWeight: 700, letterSpacing: '-0.02em' }}>{char.name}</h1>
+            <h1 style={{ margin: 0, fontSize: isMobile ? 22 : 26, color: 'var(--text-primary)', fontFamily: 'var(--font-display)', fontWeight: 700, letterSpacing: '-0.02em' }}>{char.name}</h1>
             <div style={{ color: 'var(--text-secondary)', marginTop: 4, fontSize: 13 }}>{char.mission || '（使命未設定）'}</div>
           </div>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
             <span style={{ background: 'var(--green-bg)', color: 'var(--green)', padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 500 }}>
               {char.status === 'active' ? '活躍' : char.status}
             </span>
@@ -160,7 +164,7 @@ export default function CharacterPage() {
             </a>
           </div>
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginTop: 20 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'repeat(3, 1fr)', gap: isMobile ? 8 : 16, marginTop: 20 }}>
           {[
             { label: '總對話', value: metrics.totalConversations, icon: 'Chat' },
             { label: '記憶條數', value: metrics.totalInsights, icon: 'Brain' },
@@ -207,12 +211,12 @@ export default function CharacterPage() {
       {/* 危險區 */}
       <div style={{ marginTop: 40, padding: 20, border: '1px solid var(--red-bg)', borderRadius: 'var(--r-md)', background: '#FFFCFC' }}>
         <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--red)', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}></div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', justifyContent: 'space-between', alignItems: isMobile ? 'flex-start' : 'center', gap: 12 }}>
           <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>永久刪除此角色及所有關聯資料（記憶、對話、任務、草稿）。此操作無法復原。</div>
           <button
             onClick={handleDelete}
             disabled={deleting}
-            style={{ background: deleting ? 'var(--text-muted)' : 'var(--red)', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 20px', fontSize: 13, fontWeight: 600, cursor: deleting ? 'default' : 'pointer', flexShrink: 0, marginLeft: 16 }}>
+            style={{ background: deleting ? 'var(--text-muted)' : 'var(--red)', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 20px', fontSize: 13, fontWeight: 600, cursor: deleting ? 'default' : 'pointer', flexShrink: 0, alignSelf: isMobile ? 'flex-end' : 'auto' }}>
             {deleting ? '刪除中...' : '刪除角色'}
           </button>
         </div>

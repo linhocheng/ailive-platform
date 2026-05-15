@@ -134,7 +134,7 @@ export async function enqueueStrategy(jobId: string): Promise<string> {
   return taskName;
 }
 
-export async function enqueueStrategyHtml(jobId: string, philosophy: 'eastern-blank' = 'eastern-blank'): Promise<string> {
+export async function enqueueStrategyHtml(jobId: string, philosophy: 'eastern-blank' | 'swiss-grid' | 'dark-premium' = 'swiss-grid'): Promise<string> {
   const taskName = await createTask(HTML_QUEUE, HTML_WORKER_URL, HTML_WORKER_AUDIENCE, { jobId, philosophy });
   console.log(`[cloud-tasks] enqueued strategy-html job=${jobId.slice(0, 8)} task=${taskName.split('/').pop()}`);
   return taskName;

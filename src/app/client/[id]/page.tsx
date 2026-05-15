@@ -73,6 +73,7 @@ function Icon({ name, size=16 }: { name:string; size?: number }) {
     case 'new-chat':return <svg style={s} viewBox="0 0 24 24" {...p}><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><line x1="12" y1="8" x2="12" y2="14"/><line x1="9" y1="11" x2="15" y2="11"/></svg>;
     case 'chevron-down': return <svg style={s} viewBox="0 0 24 24" {...p}><polyline points="6 9 12 15 18 9"/></svg>;
     case 'globe':   return <svg style={s} viewBox="0 0 24 24" {...p}><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>;
+    case 'menu':    return <svg style={s} viewBox="0 0 24 24" {...p}><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg>;
     default:        return <svg style={s} viewBox="0 0 24 24" {...p}><circle cx="12" cy="12" r="10"/></svg>;
   }
 }
@@ -941,6 +942,7 @@ export default function ClientPage() {
   const [unlocked, setUnlocked] = useState(false);
   const [tab, setTab] = useState<Tab>('posts');
   const [postCount, setPostCount] = useState(0);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   useEffect(() => {
     fetch(`/api/characters/${charId}`).then(r => r.json()).then(d => setChar(d.character || null));
@@ -969,12 +971,22 @@ export default function ClientPage() {
 
   return (
     <div className="client-v2">
+      <button className="mobile-menu-fab" onClick={() => setSidebarOpen(true)} aria-label="開啟選單">
+        <Icon name="menu" size={18} />
+      </button>
+
       <div className="app">
         {/* Sidebar */}
-        <aside className="sidebar">
+        {sidebarOpen && (
+          <div className="sidebar-backdrop" onClick={() => setSidebarOpen(false)} />
+        )}
+        <aside className={`sidebar${sidebarOpen ? ' mobile-open' : ''}`}>
           <div className="sidebar-brand">
             <div className="brand-mark">AI</div>
             <span className="brand-name">AILIVE <small>客戶端</small></span>
+            <button className="sidebar-close icon-btn" onClick={() => setSidebarOpen(false)} aria-label="關閉選單">
+              <Icon name="x" size={16} />
+            </button>
           </div>
 
           <div className="character">
@@ -1017,7 +1029,7 @@ export default function ClientPage() {
           <nav className="nav">
             <div className="nav-label">管理功能</div>
             {NAV.map(n => (
-              <button key={n.key} className={`nav-item${tab === n.key ? ' active' : ''}`} onClick={() => setTab(n.key)}>
+              <button key={n.key} className={`nav-item${tab === n.key ? ' active' : ''}`} onClick={() => { setTab(n.key); setSidebarOpen(false); }}>
                 <Icon name={n.icon} size={16} />
                 <span className="nav-text">{n.label}</span>
                 {n.count ? <span className="nav-count">{n.count}</span> : null}

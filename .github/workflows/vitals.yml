@@ -1,0 +1,35 @@
+name: Vitals + Lint
+# BUILDING_PROTOCOL v0.2 強制機制第一道：CI lint
+# 三項檢查（隨 T3.1 補齊）：
+#   [x] lint (eslint)
+#   [ ] manifest.ts schema valid (T3.1 補)
+#   [ ] entry handler 用 withVitals() wrapper (T3.1 補)
+#   [ ] LLM call 走 bridgeCall / anthropicSdkCall wrapper (T3.1 補)
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  vitals:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install
+        run: npm ci
+      - name: Lint
+        run: npm run lint
+      - name: Manifest scan (placeholder)
+        run: |
+          echo "Looking for manifest.ts / manifest.json files..."
+          found=$(find . \( -name "manifest.ts" -o -name "manifest.json" \) -not -path "./node_modules/*" -not -path "./.next/*" 2>/dev/null)
+          if [ -z "$found" ]; then
+            echo "(none yet — pre-T3.1 grandfathered)"
+          else
+            echo "$found"
+            echo "TODO T3.1: validate schema"
+          fi

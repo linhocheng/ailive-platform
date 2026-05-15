@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { CharNav } from '../page';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 interface RefImage {
   url: string;
@@ -50,43 +51,43 @@ function parseRefMeta(filename: string): { angle: string; framing: string; expre
   return { angle, framing, expression };
 }
 
-// ── 通用 Slider（帶 reset）──
+// ── Style tokens ──
+const CARD: React.CSSProperties = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-lg)', padding: '20px 24px' };
+const SECTION_LABEL: React.CSSProperties = { fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', letterSpacing: '0.1em', textTransform: 'uppercase', display: 'block', marginBottom: 8 };
+const FIELD_LABEL: React.CSSProperties = { fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)', display: 'block', marginBottom: 5 };
+const INPUT: React.CSSProperties = { width: '100%', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '9px 12px', fontSize: 13, boxSizing: 'border-box', background: 'var(--surface)', color: 'var(--text-primary)', outline: 'none' };
+const BTN_PRIMARY: React.CSSProperties = { background: 'var(--text-primary)', color: '#fff', border: 'none', borderRadius: 'var(--r-sm)', padding: '9px 20px', fontSize: 13, fontWeight: 500, cursor: 'pointer' };
+const BTN_COPY: React.CSSProperties = { background: 'var(--bg-alt)', color: 'var(--text-secondary)', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '9px 14px', fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' };
+
+// ── Slider ──
 function Slider({ label, hint, value, min, max, step, onChange, onReset }: {
-  label: string;
-  hint?: string;
-  value: number;
-  min: number;
-  max: number;
-  step: number;
-  onChange: (v: number) => void;
-  onReset: () => void;
+  label: string; hint?: string; value: number; min: number; max: number; step: number;
+  onChange: (v: number) => void; onReset: () => void;
 }) {
   return (
-    <div style={{ marginBottom: 10 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4 }}>
-        <label style={{ fontSize: 11, color: '#555' }}>
+    <div style={{ marginBottom: 14 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 5 }}>
+        <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>
           {label}
-          {hint && <span style={{ color: '#a8a29e', fontSize: 10, marginLeft: 8 }}>{hint}</span>}
+          {hint && <span style={{ color: 'var(--text-muted)', fontSize: 11, fontWeight: 400, marginLeft: 8 }}>{hint}</span>}
         </label>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
-          <span style={{ fontSize: 12, fontFamily: 'monospace', color: '#292524', minWidth: 36, textAlign: 'right' }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <span style={{ fontSize: 12, fontFamily: 'monospace', color: 'var(--text-primary)', fontWeight: 600, background: 'var(--bg-alt)', padding: '2px 8px', borderRadius: 'var(--r-sm)' }}>
             {value.toFixed(step < 1 ? 2 : 0)}
           </span>
-          <button onClick={onReset} title="用預設值（不寫入 Firestore）"
-            style={{ background: 'transparent', border: 'none', color: '#a8a29e', fontSize: 10, cursor: 'pointer', padding: '2px 4px' }}>
-            reset
-          </button>
+          <button onClick={onReset} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: 11, cursor: 'pointer', padding: '0 2px' }}>reset</button>
         </div>
       </div>
       <input type="range" value={value} min={min} max={max} step={step}
         onChange={e => onChange(parseFloat(e.target.value))}
-        style={{ width: '100%', accentColor: '#292524' }} />
+        style={{ width: '100%', accentColor: 'var(--text-primary)', cursor: 'pointer' }} />
     </div>
   );
 }
 
 export default function IdentityPage() {
   const { id } = useParams<{ id: string }>();
+  const isMobile = useIsMobile();
   const fileRef = useRef<HTMLInputElement>(null);
   const [char, setChar] = useState<Record<string, unknown> | null>(null);
   const [vi, setVi] = useState<VisualIdentity>({
@@ -291,425 +292,300 @@ export default function IdentityPage() {
 
   return (
     <div>
-      <div style={{ marginBottom: 16, fontSize: 13, color: '#999' }}>
-        <a href="/dashboard" style={{ color: '#999', textDecoration: 'none' }}>所有角色</a> ›{' '}
-        <a href={`/dashboard/${id}`} style={{ color: '#999', textDecoration: 'none' }}>{charName}</a> › 身份設定
+      {/* Breadcrumb */}
+      <div style={{ marginBottom: 20, display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--text-muted)' }}>
+        <a href="/dashboard" style={{ color: 'var(--text-muted)' }}>所有角色</a>
+        <span>›</span>
+        <a href={`/dashboard/${id}`} style={{ color: 'var(--text-muted)' }}>{charName}</a>
+        <span>›</span>
+        <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>身份設定</span>
       </div>
       <CharNav id={id} active="/identity" />
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+      {/* ── Section 1: 視覺 & 身份 ── */}
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 20, alignItems: 'start' }}>
 
-        {/* 左欄：REFERENCE PHOTOS */}
-        <div style={{ background: '#fff', border: '1px solid #e7e5e4', padding: 28 }}>
-          <p style={{ fontSize: 10, letterSpacing: '0.2em', color: '#a8a29e', fontWeight: 700, margin: '0 0 6px' }}>REFERENCE PHOTOS</p>
-          <p style={{ fontSize: 11, color: '#a8a29e', margin: '0 0 20px', lineHeight: 1.7 }}>
-            上傳各角度的照片，生圖時會以此維持臉孔一致性。點擊任一張設為主要參考。
+        {/* 左：參考照片 */}
+        <div style={{ ...CARD }}>
+          <span style={SECTION_LABEL}>參考照片</span>
+          <p style={{ fontSize: 13, color: 'var(--text-muted)', margin: '0 0 16px', lineHeight: 1.6 }}>
+            上傳各角度照片，生圖時維持臉孔一致性。點擊圖片設為主要參考。
           </p>
-
-          {/* 圖片 grid */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 14 }}>
             {vi.referenceImages.map((url, i) => {
               const isPrimary = url === vi.characterSheet;
               const structuredRef = vi.refs.find(r => r.url === url);
               const angle = structuredRef?.angle || null;
               return (
-                <div key={i} style={{ position: 'relative', cursor: 'pointer' }}
+                <div key={i} style={{ position: 'relative', cursor: 'pointer', borderRadius: 'var(--r-sm)', overflow: 'hidden' }}
                   onMouseEnter={e => { const b = e.currentTarget.querySelector<HTMLElement>('.del-btn'); if (b) b.style.opacity = '1'; }}
                   onMouseLeave={e => { const b = e.currentTarget.querySelector<HTMLElement>('.del-btn'); if (b) b.style.opacity = '0'; }}
                 >
                   <div onClick={() => setPrimary(url)}>
-                    <img src={url} alt="" style={{
-                      width: '100%', aspectRatio: '1/1', objectFit: 'cover', display: 'block',
-                      border: isPrimary ? '3px solid #292524' : '3px solid transparent',
-                    }} />
-                    {/* PRIMARY badge */}
+                    <img src={url} alt="" style={{ width: '100%', aspectRatio: '1/1', objectFit: 'cover', display: 'block', border: isPrimary ? '2px solid var(--text-primary)' : '2px solid transparent' }} />
                     {isPrimary && (
-                      <div style={{ position: 'absolute', bottom: 4, left: 4, background: '#292524', color: '#fff', fontSize: 9, fontWeight: 700, letterSpacing: '0.1em', padding: '2px 6px' }}>
-                        PRIMARY
-                      </div>
+                      <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, background: 'var(--text-primary)', color: '#fff', fontSize: 9, fontWeight: 700, letterSpacing: '0.1em', padding: '3px 6px', textAlign: 'center' }}>PRIMARY</div>
                     )}
-                    {/* 角度 label */}
                     {angle && !isPrimary && (
-                      <div style={{ position: 'absolute', bottom: 4, left: 4, background: 'rgba(0,0,0,0.55)', color: '#fff', fontSize: 9, fontWeight: 700, letterSpacing: '0.1em', padding: '2px 6px', textTransform: 'uppercase' }}>
-                        {angle}
-                      </div>
+                      <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, background: 'rgba(0,0,0,0.5)', color: '#fff', fontSize: 9, fontWeight: 600, padding: '3px 6px', textAlign: 'center', textTransform: 'uppercase' }}>{angle}</div>
                     )}
                   </div>
-                  {/* 刪除按鈕 */}
                   <button className="del-btn" onClick={e => { e.stopPropagation(); deleteRef(url); }}
-                    style={{ opacity: 0, transition: 'opacity 0.15s', position: 'absolute', top: 4, right: 4, width: 22, height: 22, background: 'rgba(0,0,0,0.65)', color: '#fff', border: 'none', cursor: 'pointer', fontSize: 14, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    ×
-                  </button>
+                    style={{ opacity: 0, transition: 'opacity 0.15s', position: 'absolute', top: 4, right: 4, width: 22, height: 22, background: 'rgba(0,0,0,0.65)', color: '#fff', border: 'none', cursor: 'pointer', fontSize: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 4 }}>×</button>
                 </div>
               );
             })}
-
-            {/* 上傳按鈕格 */}
             <div onClick={() => !uploading && fileRef.current?.click()}
-              style={{ aspectRatio: '1/1', border: '2px dashed #e7e5e4', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: uploading ? 'wait' : 'pointer', gap: 4, background: uploading ? '#f9f9f7' : 'transparent' }}>
-              <span style={{ fontSize: 22, color: '#a8a29e' }}>{uploading ? '⋯' : '+'}</span>
-              <span style={{ fontSize: 9, color: '#a8a29e', letterSpacing: '0.1em' }}>{uploading ? 'UPLOADING' : 'UPLOAD'}</span>
+              style={{ aspectRatio: '1/1', border: '1.5px dashed var(--border)', borderRadius: 'var(--r-sm)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: uploading ? 'wait' : 'pointer', gap: 4, background: uploading ? 'var(--bg-alt)' : 'transparent' }}>
+              <span style={{ fontSize: 20, color: 'var(--text-muted)' }}>{uploading ? '⋯' : '+'}</span>
+              <span style={{ fontSize: 9, color: 'var(--text-muted)', letterSpacing: '0.12em', fontWeight: 600 }}>{uploading ? 'UPLOADING' : 'UPLOAD'}</span>
             </div>
           </div>
-
           <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={handleUpload} />
-
-          {vi.characterSheet ? (
-            <p style={{ fontSize: 11, color: '#10b981', letterSpacing: '0.05em', margin: 0 }}>✓ 主要參考圖已設定，生圖時會維持臉孔一致性</p>
-          ) : (
-            <p style={{ fontSize: 11, color: '#a8a29e', margin: 0 }}>尚未上傳。上傳第一張後自動設為 PRIMARY。</p>
-          )}
+          {vi.characterSheet
+            ? <p style={{ fontSize: 12, color: 'var(--green)', margin: 0 }}>✓ 主要參考圖已設定</p>
+            : <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: 0 }}>尚未上傳。上傳第一張後自動設為主要參考。</p>
+          }
         </div>
 
-        {/* 右欄：FIXED ELEMENTS + 其他設定 */}
+        {/* 右：文字設定 */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
 
           {/* 使命 */}
-          <div style={{ background: '#fff', border: '1px solid #e7e5e4', padding: 20 }}>
-            <p style={{ fontSize: 10, letterSpacing: '0.2em', color: '#a8a29e', fontWeight: 700, margin: '0 0 10px' }}>MISSION</p>
-            <input value={mission} onChange={e => setMission(e.target.value)}
-              style={{ width: '100%', border: '1px solid #e0e0e0', borderRadius: 6, padding: '9px 11px', fontSize: 14, boxSizing: 'border-box' }}
-              placeholder="這個角色存在是為了什麼" />
+          <div style={{ ...CARD }}>
+            <span style={SECTION_LABEL}>使命</span>
+            <input value={mission} onChange={e => setMission(e.target.value)} style={{ ...INPUT }} placeholder="這個角色存在是為了什麼" />
           </div>
 
-          {/* VOICE (TTS PROVIDER + VOICE IDS) */}
-          <div style={{ background: '#fff', border: '1px solid #e7e5e4', padding: 20 }}>
-            <p style={{ fontSize: 10, letterSpacing: '0.2em', color: '#a8a29e', fontWeight: 700, margin: '0 0 6px' }}>VOICE</p>
-            <p style={{ fontSize: 11, color: '#a8a29e', margin: '0 0 14px', lineHeight: 1.6 }}>選 TTS 家，填對應的 voice ID。未選則跟隨系統預設（env）。</p>
-
-            <label style={{ display: 'block', fontSize: 11, color: '#555', marginBottom: 6 }}>TTS Provider</label>
-            <select value={ttsProvider} onChange={e => setTtsProvider(e.target.value as '' | 'elevenlabs' | 'minimax')}
-              style={{ width: '100%', border: '1px solid #e0e0e0', borderRadius: 6, padding: '9px 11px', fontSize: 13, boxSizing: 'border-box', marginBottom: 14 }}>
-              <option value="">跟隨系統預設</option>
-              <option value="elevenlabs">ElevenLabs</option>
-              <option value="minimax">MiniMax</option>
-            </select>
-
-            <label style={{ display: 'block', fontSize: 11, color: '#555', marginBottom: 6 }}>ElevenLabs Voice ID</label>
-            <input value={voiceId} onChange={e => setVoiceId(e.target.value)}
-              style={{ width: '100%', border: '1px solid #e0e0e0', borderRadius: 6, padding: '9px 11px', fontSize: 13, boxSizing: 'border-box', fontFamily: 'monospace', marginBottom: 14 }}
-              placeholder="56hCnQE2rYMllQDw3m1o（預設女聲）" />
-
-            <label style={{ display: 'block', fontSize: 11, color: '#555', marginBottom: 6 }}>MiniMax Voice ID</label>
-            <input value={voiceIdMinimax} onChange={e => setVoiceIdMinimax(e.target.value)}
-              style={{ width: '100%', border: '1px solid #e0e0e0', borderRadius: 6, padding: '9px 11px', fontSize: 13, boxSizing: 'border-box', fontFamily: 'monospace' }}
-              placeholder="moss_audio_xxx" />
-
-            {/* ── 聲音微調 slider（分 provider 顯示）── */}
-            {(ttsProvider === 'elevenlabs' || ttsProvider === 'minimax') && (
-              <div style={{ marginTop: 18, paddingTop: 18, borderTop: '1px solid #f0f0f0' }}>
-                <p style={{ fontSize: 10, letterSpacing: '0.2em', color: '#a8a29e', fontWeight: 700, margin: '0 0 10px' }}>
-                  聲音微調（{ttsProvider === 'elevenlabs' ? 'ElevenLabs' : 'MiniMax'}）
-                </p>
-
-                {ttsProvider === 'elevenlabs' && (
-                  <>
-                    <Slider label="Stability 穩定度" hint="值越高越穩、越低越有情緒 (預設 0.85)"
-                      value={elSettings.stability ?? 0.85} min={0} max={1} step={0.01}
-                      onChange={v => setElSettings({ ...elSettings, stability: v })}
-                      onReset={() => { const { stability: _, ...rest } = elSettings; void _; setElSettings(rest); }} />
-                    <Slider label="Similarity Boost 相似度" hint="越高越貼近原聲 (預設 0.75)"
-                      value={elSettings.similarity_boost ?? 0.75} min={0} max={1} step={0.01}
-                      onChange={v => setElSettings({ ...elSettings, similarity_boost: v })}
-                      onReset={() => { const { similarity_boost: _, ...rest } = elSettings; void _; setElSettings(rest); }} />
-                    <Slider label="Style 風格" hint="0=中性朗讀 / 1=戲劇化 (預設 0.0)"
-                      value={elSettings.style ?? 0.0} min={0} max={1} step={0.01}
-                      onChange={v => setElSettings({ ...elSettings, style: v })}
-                      onReset={() => { const { style: _, ...rest } = elSettings; void _; setElSettings(rest); }} />
-                    <Slider label="Speed 語速" hint="ElevenLabs 支援 0.7~1.2 (預設 1.0)"
-                      value={elSettings.speed ?? 1.0} min={0.7} max={1.2} step={0.05}
-                      onChange={v => setElSettings({ ...elSettings, speed: v })}
-                      onReset={() => { const { speed: _, ...rest } = elSettings; void _; setElSettings(rest); }} />
-                  </>
-                )}
-
-                {ttsProvider === 'minimax' && (
-                  <>
-                    <Slider label="Speed 語速" hint="1.0=正常 (0.5~2.0)"
-                      value={mmSettings.speed ?? 1.0} min={0.5} max={2.0} step={0.05}
-                      onChange={v => setMmSettings({ ...mmSettings, speed: v })}
-                      onReset={() => { const { speed: _, ...rest } = mmSettings; void _; setMmSettings(rest); }} />
-                    <Slider label="Pitch 音高" hint="0=正常 / 正值高 / 負值低 (-12 ~ +12)"
-                      value={mmSettings.pitch ?? 0} min={-12} max={12} step={1}
-                      onChange={v => setMmSettings({ ...mmSettings, pitch: v })}
-                      onReset={() => { const { pitch: _, ...rest } = mmSettings; void _; setMmSettings(rest); }} />
-                    <Slider label="Volume 音量" hint="1.0=正常 (0.1~10)"
-                      value={mmSettings.vol ?? 1.0} min={0.1} max={3.0} step={0.1}
-                      onChange={v => setMmSettings({ ...mmSettings, vol: v })}
-                      onReset={() => { const { vol: _, ...rest } = mmSettings; void _; setMmSettings(rest); }} />
-                    <label style={{ display: 'block', fontSize: 11, color: '#555', marginTop: 12, marginBottom: 6 }}>
-                      Emotion 情緒
-                      <span style={{ color: '#a8a29e', fontSize: 10, marginLeft: 8 }}>(預設 neutral)</span>
-                    </label>
-                    <select value={mmSettings.emotion ?? 'neutral'}
-                      onChange={e => {
-                        const v = e.target.value;
-                        if (v === 'neutral') { const { emotion: _, ...rest } = mmSettings; void _; setMmSettings(rest); }
-                        else setMmSettings({ ...mmSettings, emotion: v });
-                      }}
-                      style={{ width: '100%', border: '1px solid #e0e0e0', borderRadius: 6, padding: '8px 10px', fontSize: 13, boxSizing: 'border-box' }}>
-                      <option value="neutral">neutral（中性）</option>
-                      <option value="happy">happy（開心）</option>
-                      <option value="sad">sad（哀傷）</option>
-                      <option value="angry">angry（憤怒）</option>
-                      <option value="fearful">fearful（恐懼）</option>
-                      <option value="surprised">surprised（驚訝）</option>
-                      <option value="disgusted">disgusted（厭惡）</option>
-                    </select>
-                  </>
-                )}
-
-                {/* 試聽區 */}
-                <div style={{ marginTop: 16, paddingTop: 14, borderTop: '1px dashed #e7e5e4' }}>
-                  <label style={{ display: 'block', fontSize: 11, color: '#555', marginBottom: 6 }}>試聽句子</label>
-                  <input value={auditionText} onChange={e => setAuditionText(e.target.value)}
-                    style={{ width: '100%', border: '1px solid #e0e0e0', borderRadius: 6, padding: '9px 11px', fontSize: 13, boxSizing: 'border-box', marginBottom: 10 }}
-                    placeholder="嗨我是..." />
-                  <button disabled={auditioning || !auditionText.trim()}
-                    onClick={async () => {
-                      const currentVoiceId = ttsProvider === 'elevenlabs' ? voiceId.trim() : voiceIdMinimax.trim();
-                      if (!currentVoiceId) { alert(`請先填 ${ttsProvider} 的 voice ID`); return; }
-                      setAuditioning(true);
-                      try {
-                        const res = await fetch('/api/tts', {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({
-                            text: auditionText,
-                            voiceId: currentVoiceId,
-                            ttsProvider,
-                            settings: ttsProvider === 'elevenlabs' ? elSettings : mmSettings,
-                          }),
-                        });
-                        if (!res.ok) {
-                          const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
-                          alert('試聽失敗：' + (err.error || 'unknown'));
-                          return;
-                        }
-                        const blob = await res.blob();
-                        const url = URL.createObjectURL(blob);
-                        const audio = new Audio(url);
-                        audio.onended = () => URL.revokeObjectURL(url);
-                        await audio.play();
-                      } catch (e) {
-                        alert('試聽錯誤：' + (e instanceof Error ? e.message : String(e)));
-                      } finally {
-                        setAuditioning(false);
-                      }
-                    }}
-                    style={{
-                      background: auditioning ? '#d6d3d1' : '#292524',
-                      color: '#fff', border: 'none', borderRadius: 6,
-                      padding: '9px 18px', fontSize: 13, fontWeight: 600,
-                      cursor: auditioning ? 'wait' : 'pointer',
-                    }}>
-                    {auditioning ? '合成中…' : '▶ 試聽（未儲存也可試）'}
-                  </button>
-                </div>
+          {/* 固定特徵 */}
+          <div style={{ ...CARD }}>
+            <span style={SECTION_LABEL}>固定特徵</span>
+            <p style={{ fontSize: 13, color: 'var(--text-muted)', margin: '0 0 12px', lineHeight: 1.5 }}>每次生圖自動注入 prompt 的外觀描述。</p>
+            {vi.fixedElements.length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
+                {vi.fixedElements.map((el, i) => (
+                  <div key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, background: 'var(--bg-alt)', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '4px 10px' }}>
+                    <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{el}</span>
+                    <button onClick={() => removeElement(i)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: 0, display: 'flex' }}>×</button>
+                  </div>
+                ))}
               </div>
             )}
-          </div>
-
-          {/* FIXED ELEMENTS */}
-          <div style={{ background: '#fff', border: '1px solid #e7e5e4', padding: 20 }}>
-            <p style={{ fontSize: 10, letterSpacing: '0.2em', color: '#a8a29e', fontWeight: 700, margin: '0 0 6px' }}>FIXED ELEMENTS</p>
-            <p style={{ fontSize: 11, color: '#a8a29e', margin: '0 0 14px', lineHeight: 1.6 }}>每次生圖都會保留的外觀特徵，自動注入 prompt。</p>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
-              {vi.fixedElements.map((el, i) => (
-                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 5, background: '#f5f5f4', padding: '5px 10px' }}>
-                  <span style={{ fontSize: 12, color: '#444' }}>{el}</span>
-                  <button onClick={() => removeElement(i)} style={{ background: 'none', border: 'none', color: '#a8a29e', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: 0 }}>×</button>
-                </div>
-              ))}
-            </div>
-            <div style={{ display: 'flex', gap: 6 }}>
-              <input value={newElement} onChange={e => setNewElement(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && addElement()}
-                style={{ flex: 1, border: '1px solid #e0e0e0', borderRadius: 6, padding: '7px 10px', fontSize: 13, boxSizing: 'border-box' }}
-                placeholder="新增特徵（如：short brown hair）" />
-              <button onClick={addElement} style={{ background: '#1a1a2e', color: '#fff', border: 'none', borderRadius: 6, padding: '7px 14px', cursor: 'pointer', fontSize: 13 }}>+</button>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input value={newElement} onChange={e => setNewElement(e.target.value)} onKeyDown={e => e.key === 'Enter' && addElement()}
+                style={{ ...INPUT, flex: 1 }} placeholder="新增特徵（如：short brown hair）" />
+              <button onClick={addElement} style={{ ...BTN_PRIMARY, padding: '9px 16px' }}>+</button>
             </div>
           </div>
 
-          {/* imagePromptPrefix */}
-          <div style={{ background: '#fff', border: '1px solid #e7e5e4', padding: 20 }}>
-            <p style={{ fontSize: 10, letterSpacing: '0.2em', color: '#a8a29e', fontWeight: 700, margin: '0 0 6px' }}>IMAGE PROMPT PREFIX <span style={{ color: '#c00' }}>（必須英文）</span></p>
+          {/* Image Prompt */}
+          <div style={{ ...CARD }}>
+            <span style={SECTION_LABEL}>Image Prompt</span>
+            <p style={{ fontSize: 13, color: 'var(--text-muted)', margin: '0 0 10px' }}>生圖時的基底描述，必須用英文。</p>
             <input value={vi.imagePromptPrefix} onChange={e => setVi({ ...vi, imagePromptPrefix: e.target.value })}
-              style={{ width: '100%', border: `1px solid ${hasChinese ? '#c00' : '#e0e0e0'}`, borderRadius: 6, padding: '9px 11px', fontSize: 13, boxSizing: 'border-box' }}
+              style={{ ...INPUT, borderColor: hasChinese ? 'var(--red)' : 'var(--border)', marginBottom: hasChinese ? 4 : 12 }}
               placeholder="e.g. A young woman with short brown hair, warm eyes," />
-            {hasChinese && <p style={{ color: '#c00', fontSize: 11, margin: '4px 0 0' }}>⚠️ 含中文會導致生圖跑臉，請改成英文描述</p>}
-            <div style={{ display: 'flex', gap: 10, marginTop: 10 }}>
-              <div style={{ flex: 1 }}>
-                <label style={{ display: 'block', fontSize: 11, color: '#a8a29e', marginBottom: 4 }}>風格</label>
-                <select value={vi.styleGuide} onChange={e => setVi({ ...vi, styleGuide: e.target.value })}
-                  style={{ width: '100%', border: '1px solid #e0e0e0', borderRadius: 6, padding: '7px 10px', fontSize: 13 }}>
+            {hasChinese && <p style={{ color: 'var(--red)', fontSize: 12, margin: '0 0 12px' }}>含中文會導致生圖跑臉，請改為英文描述</p>}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <div>
+                <label style={FIELD_LABEL}>風格</label>
+                <select value={vi.styleGuide} onChange={e => setVi({ ...vi, styleGuide: e.target.value })} style={{ ...INPUT }}>
                   <option value="realistic">Realistic</option>
                   <option value="anime">Anime</option>
                   <option value="illustration">Illustration</option>
                 </select>
               </div>
-              <div style={{ flex: 1 }}>
-                <label style={{ display: 'block', fontSize: 11, color: '#a8a29e', marginBottom: 4 }}>Negative Prompt</label>
-                <input value={vi.negativePrompt} onChange={e => setVi({ ...vi, negativePrompt: e.target.value })}
-                  style={{ width: '100%', border: '1px solid #e0e0e0', borderRadius: 6, padding: '7px 10px', fontSize: 13, boxSizing: 'border-box' }} />
+              <div>
+                <label style={FIELD_LABEL}>Negative Prompt</label>
+                <input value={vi.negativePrompt} onChange={e => setVi({ ...vi, negativePrompt: e.target.value })} style={{ ...INPUT }} />
               </div>
             </div>
           </div>
 
-          {/* 儲存 */}
-          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-            <button onClick={save} disabled={saving}
-              style={{ background: saving ? '#ccc' : '#1a1a2e', color: '#fff', border: 'none', borderRadius: 6, padding: '10px 28px', cursor: saving ? 'default' : 'pointer', fontSize: 14, fontWeight: 600 }}>
-              {saving ? '儲存中...' : '儲存'}
+          {/* 聲音設定 */}
+          <div style={{ ...CARD }}>
+            <span style={SECTION_LABEL}>聲音設定</span>
+            <p style={{ fontSize: 13, color: 'var(--text-muted)', margin: '0 0 16px', lineHeight: 1.5 }}>選擇 TTS 供應商並填入對應的 Voice ID。</p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <div>
+                <label style={FIELD_LABEL}>TTS Provider</label>
+                <select value={ttsProvider} onChange={e => setTtsProvider(e.target.value as '' | 'elevenlabs' | 'minimax')} style={{ ...INPUT }}>
+                  <option value="">跟隨系統預設</option>
+                  <option value="elevenlabs">ElevenLabs</option>
+                  <option value="minimax">MiniMax</option>
+                </select>
+              </div>
+              <div>
+                <label style={FIELD_LABEL}>ElevenLabs Voice ID</label>
+                <input value={voiceId} onChange={e => setVoiceId(e.target.value)} style={{ ...INPUT, fontFamily: 'monospace' }} placeholder="56hCnQE2rYMllQDw3m1o" />
+              </div>
+              <div>
+                <label style={FIELD_LABEL}>MiniMax Voice ID</label>
+                <input value={voiceIdMinimax} onChange={e => setVoiceIdMinimax(e.target.value)} style={{ ...INPUT, fontFamily: 'monospace' }} placeholder="moss_audio_xxx" />
+              </div>
+            </div>
+
+            {(ttsProvider === 'elevenlabs' || ttsProvider === 'minimax') && (
+              <div style={{ marginTop: 20, paddingTop: 20, borderTop: '1px solid var(--border-soft)' }}>
+                <span style={{ ...SECTION_LABEL, marginBottom: 14 }}>聲音微調 — {ttsProvider === 'elevenlabs' ? 'ElevenLabs' : 'MiniMax'}</span>
+                {ttsProvider === 'elevenlabs' && (
+                  <>
+                    <Slider label="Stability 穩定度" hint="值越高越穩 (預設 0.85)" value={elSettings.stability ?? 0.85} min={0} max={1} step={0.01} onChange={v => setElSettings({ ...elSettings, stability: v })} onReset={() => { const { stability: _, ...rest } = elSettings; void _; setElSettings(rest); }} />
+                    <Slider label="Similarity Boost" hint="越高越貼近原聲 (預設 0.75)" value={elSettings.similarity_boost ?? 0.75} min={0} max={1} step={0.01} onChange={v => setElSettings({ ...elSettings, similarity_boost: v })} onReset={() => { const { similarity_boost: _, ...rest } = elSettings; void _; setElSettings(rest); }} />
+                    <Slider label="Style 風格" hint="0=中性 / 1=戲劇化 (預設 0.0)" value={elSettings.style ?? 0.0} min={0} max={1} step={0.01} onChange={v => setElSettings({ ...elSettings, style: v })} onReset={() => { const { style: _, ...rest } = elSettings; void _; setElSettings(rest); }} />
+                    <Slider label="Speed 語速" hint="0.7~1.2 (預設 1.0)" value={elSettings.speed ?? 1.0} min={0.7} max={1.2} step={0.05} onChange={v => setElSettings({ ...elSettings, speed: v })} onReset={() => { const { speed: _, ...rest } = elSettings; void _; setElSettings(rest); }} />
+                  </>
+                )}
+                {ttsProvider === 'minimax' && (
+                  <>
+                    <Slider label="Speed 語速" hint="1.0=正常 (0.5~2.0)" value={mmSettings.speed ?? 1.0} min={0.5} max={2.0} step={0.05} onChange={v => setMmSettings({ ...mmSettings, speed: v })} onReset={() => { const { speed: _, ...rest } = mmSettings; void _; setMmSettings(rest); }} />
+                    <Slider label="Pitch 音高" hint="0=正常 (-12 ~ +12)" value={mmSettings.pitch ?? 0} min={-12} max={12} step={1} onChange={v => setMmSettings({ ...mmSettings, pitch: v })} onReset={() => { const { pitch: _, ...rest } = mmSettings; void _; setMmSettings(rest); }} />
+                    <Slider label="Volume 音量" hint="1.0=正常 (0.1~3.0)" value={mmSettings.vol ?? 1.0} min={0.1} max={3.0} step={0.1} onChange={v => setMmSettings({ ...mmSettings, vol: v })} onReset={() => { const { vol: _, ...rest } = mmSettings; void _; setMmSettings(rest); }} />
+                    <div>
+                      <label style={FIELD_LABEL}>Emotion 情緒 <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>(預設 neutral)</span></label>
+                      <select value={mmSettings.emotion ?? 'neutral'} onChange={e => { const v = e.target.value; if (v === 'neutral') { const { emotion: _, ...rest } = mmSettings; void _; setMmSettings(rest); } else setMmSettings({ ...mmSettings, emotion: v }); }} style={{ ...INPUT }}>
+                        <option value="neutral">neutral（中性）</option>
+                        <option value="happy">happy（開心）</option>
+                        <option value="sad">sad（哀傷）</option>
+                        <option value="angry">angry（憤怒）</option>
+                        <option value="fearful">fearful（恐懼）</option>
+                        <option value="surprised">surprised（驚訝）</option>
+                        <option value="disgusted">disgusted（厭惡）</option>
+                      </select>
+                    </div>
+                  </>
+                )}
+                <div style={{ marginTop: 16, paddingTop: 14, borderTop: '1px dashed var(--border-soft)' }}>
+                  <label style={FIELD_LABEL}>試聽句子</label>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <input value={auditionText} onChange={e => setAuditionText(e.target.value)} style={{ ...INPUT, flex: 1 }} placeholder="嗨我是..." />
+                    <button disabled={auditioning || !auditionText.trim()}
+                      onClick={async () => {
+                        const currentVoiceId = ttsProvider === 'elevenlabs' ? voiceId.trim() : voiceIdMinimax.trim();
+                        if (!currentVoiceId) { alert(`請先填 ${ttsProvider} 的 voice ID`); return; }
+                        setAuditioning(true);
+                        try {
+                          const res = await fetch('/api/tts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: auditionText, voiceId: currentVoiceId, ttsProvider, settings: ttsProvider === 'elevenlabs' ? elSettings : mmSettings }) });
+                          if (!res.ok) { const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` })); alert('試聽失敗：' + (err.error || 'unknown')); return; }
+                          const blob = await res.blob();
+                          const url = URL.createObjectURL(blob);
+                          const audio = new Audio(url);
+                          audio.onended = () => URL.revokeObjectURL(url);
+                          await audio.play();
+                        } catch (e) { alert('試聽錯誤：' + (e instanceof Error ? e.message : String(e))); }
+                        finally { setAuditioning(false); }
+                      }}
+                      style={{ ...BTN_PRIMARY, opacity: (auditioning || !auditionText.trim()) ? 0.5 : 1, cursor: auditioning ? 'wait' : 'pointer', whiteSpace: 'nowrap' }}>
+                      {auditioning ? '合成中…' : '▶ 試聽'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Save */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <button onClick={save} disabled={saving} style={{ ...BTN_PRIMARY, opacity: saving ? 0.6 : 1, cursor: saving ? 'default' : 'pointer' }}>
+              {saving ? '儲存中...' : '儲存設定'}
             </button>
-            {msg && <span style={{ fontSize: 13, color: msg.includes('❌') ? '#c00' : '#2e7d32' }}>{msg}</span>}
+            {msg && <span style={{ fontSize: 13, color: msg.includes('❌') ? 'var(--red)' : 'var(--green)' }}>{msg}</span>}
           </div>
         </div>
+      </div>
 
-        {/* ===== 通路設定 ===== */}
-        <div style={{ marginTop: 24, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+      {/* ── Section 2: 通路設定 ── */}
+      <div style={{ marginTop: 40, paddingTop: 32, borderTop: '1px solid var(--border)' }}>
+        <div style={{ marginBottom: 20 }}>
+          <h2 style={{ margin: 0, fontSize: 15, fontWeight: 600, color: 'var(--text-primary)', letterSpacing: '-0.01em' }}>通路設定</h2>
+          <p style={{ margin: '4px 0 0', fontSize: 13, color: 'var(--text-muted)' }}>設定 LINE 和 Instagram 的 API 串接。</p>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 20 }}>
 
           {/* LINE */}
-          <div style={{ background: '#fff', border: '1px solid #e0e0e0', borderRadius: 12, padding: 20 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
-              <span style={{ fontSize: 20 }}>💬</span>
-              <h3 style={{ margin: 0, fontSize: 15 }}>LINE 通路</h3>
-              <span style={{
-                marginLeft: 'auto', fontSize: 11, padding: '2px 8px', borderRadius: 10,
-                background: channels.lineChannelToken && channels.lineChannelSecret ? '#e8f5e9' : '#f5f5f5',
-                color: channels.lineChannelToken && channels.lineChannelSecret ? '#2e7d32' : '#999',
-              }}>
-                {channels.lineChannelToken && channels.lineChannelSecret ? '● 已啟用' : '○ 未設定'}
-              </span>
-            </div>
-
-            <div style={{ marginBottom: 10 }}>
-              <div style={{ fontSize: 12, color: '#666', marginBottom: 4 }}>Channel Access Token</div>
-              <input
-                value={channels.lineChannelToken}
-                onChange={e => setChannels(p => ({ ...p, lineChannelToken: e.target.value }))}
-                placeholder="貼上 LINE Channel Access Token"
-                style={{ width: '100%', border: '1px solid #e0e0e0', borderRadius: 6, padding: '8px 10px', fontSize: 13, boxSizing: 'border-box' as const }}
-              />
-            </div>
-
-            <div style={{ marginBottom: 14 }}>
-              <div style={{ fontSize: 12, color: '#666', marginBottom: 4 }}>Channel Secret</div>
-              <input
-                value={channels.lineChannelSecret}
-                onChange={e => setChannels(p => ({ ...p, lineChannelSecret: e.target.value }))}
-                placeholder="貼上 LINE Channel Secret"
-                style={{ width: '100%', border: '1px solid #e0e0e0', borderRadius: 6, padding: '8px 10px', fontSize: 13, boxSizing: 'border-box' as const }}
-              />
-            </div>
-
-            <div style={{ background: '#f8f9ff', borderRadius: 8, padding: '10px 12px', marginBottom: 14 }}>
-              <div style={{ fontSize: 11, color: '#666', marginBottom: 4 }}>Webhook URL（貼進 LINE Developer Console）</div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <code style={{ fontSize: 11, color: '#444', wordBreak: 'break-all' as const, flex: 1 }}>
-                  {`https://ailive-platform.vercel.app/api/line-webhook/${id}`}
-                </code>
-                <button
-                  onClick={() => { navigator.clipboard.writeText(`https://ailive-platform.vercel.app/api/line-webhook/${id}`); }}
-                  style={{ background: '#eee', border: 'none', borderRadius: 4, padding: '4px 8px', cursor: 'pointer', fontSize: 11, whiteSpace: 'nowrap' as const }}
-                >複製</button>
-              </div>
-            </div>
-
-            {/* LINE 共用對話連結 */}
-            <div style={{ background: '#f0f7ff', borderRadius: 8, padding: '10px 12px', marginBottom: 14 }}>
-              <div style={{ fontSize: 11, color: '#666', marginBottom: 6 }}>共用對話連結（網頁 + LINE 同一段記憶）</div>
-              <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-                <input
-                  type="text"
-                  value={lineUserId}
-                  onChange={e => setLineUserId(e.target.value)}
-                  placeholder="填入 LINE 用戶 ID（Uxxxxxxxx）"
-                  style={{ flex: 1, border: '1px solid #c5d8f0', borderRadius: 6, padding: '6px 10px', fontSize: 12, boxSizing: 'border-box' as const }}
-                />
-              </div>
-              {lineUserId.trim() && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <code style={{ fontSize: 10, color: '#1a6fb5', wordBreak: 'break-all' as const, flex: 1, background: '#e3f0ff', borderRadius: 4, padding: '4px 6px' }}>
-                    {`https://ailive-platform.vercel.app/chat/${id}?cid=line_${id}_${lineUserId.trim()}`}
-                  </code>
-                  <button
-                    onClick={() => navigator.clipboard.writeText(`https://ailive-platform.vercel.app/chat/${id}?cid=line_${id}_${lineUserId.trim()}`)}
-                    style={{ background: '#1a6fb5', color: '#fff', border: 'none', borderRadius: 4, padding: '4px 8px', cursor: 'pointer', fontSize: 11, whiteSpace: 'nowrap' as const }}
-                  >複製</button>
+          <div style={{ ...CARD }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20 }}>
+              <div style={{ width: 32, height: 32, borderRadius: 'var(--r-sm)', background: '#06C755', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, flexShrink: 0 }}>💬</div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>LINE</div>
+                <div style={{ fontSize: 11, color: channels.lineChannelToken && channels.lineChannelSecret ? 'var(--green)' : 'var(--text-muted)', marginTop: 1 }}>
+                  {channels.lineChannelToken && channels.lineChannelSecret ? '● 已啟用' : '○ 未設定'}
                 </div>
-              )}
-              {!lineUserId.trim() && (
-                <div style={{ fontSize: 11, color: '#999' }}>填入 LINE 用戶 ID 後自動產生連結</div>
-              )}
+              </div>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <div>
+                <label style={FIELD_LABEL}>Channel Access Token</label>
+                <input value={channels.lineChannelToken} onChange={e => setChannels(p => ({ ...p, lineChannelToken: e.target.value }))} placeholder="貼上 LINE Channel Access Token" style={{ ...INPUT }} />
+              </div>
+              <div>
+                <label style={FIELD_LABEL}>Channel Secret</label>
+                <input value={channels.lineChannelSecret} onChange={e => setChannels(p => ({ ...p, lineChannelSecret: e.target.value }))} placeholder="貼上 LINE Channel Secret" style={{ ...INPUT }} />
+              </div>
+              <div style={{ background: 'var(--bg-alt)', borderRadius: 'var(--r-sm)', padding: '12px 14px' }}>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 8, fontWeight: 500 }}>Webhook URL</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <code style={{ fontSize: 11, color: 'var(--text-secondary)', wordBreak: 'break-all', flex: 1, lineHeight: 1.5 }}>{`https://ailive-platform.vercel.app/api/line-webhook/${id}`}</code>
+                  <button onClick={() => navigator.clipboard.writeText(`https://ailive-platform.vercel.app/api/line-webhook/${id}`)} style={{ ...BTN_COPY }}>複製</button>
+                </div>
+              </div>
+              <div style={{ background: 'var(--bg-alt)', borderRadius: 'var(--r-sm)', padding: '12px 14px' }}>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 8, fontWeight: 500 }}>共用對話連結</div>
+                <input type="text" value={lineUserId} onChange={e => setLineUserId(e.target.value)} placeholder="填入 LINE 用戶 ID（Uxxxxxxxx）" style={{ ...INPUT, fontSize: 12, marginBottom: lineUserId.trim() ? 8 : 0 }} />
+                {lineUserId.trim() && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
+                    <code style={{ fontSize: 10, color: 'var(--accent)', wordBreak: 'break-all', flex: 1, lineHeight: 1.5 }}>{`https://ailive-platform.vercel.app/chat/${id}?cid=line_${id}_${lineUserId.trim()}`}</code>
+                    <button onClick={() => navigator.clipboard.writeText(`https://ailive-platform.vercel.app/chat/${id}?cid=line_${id}_${lineUserId.trim()}`)} style={{ background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: 'var(--r-sm)', padding: '4px 10px', cursor: 'pointer', fontSize: 11, whiteSpace: 'nowrap' }}>複製</button>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 
           {/* IG */}
-          <div style={{ background: '#fff', border: '1px solid #e0e0e0', borderRadius: 12, padding: 20 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
-              <span style={{ fontSize: 20 }}>📸</span>
-              <h3 style={{ margin: 0, fontSize: 15 }}>Instagram 通路</h3>
-              <span style={{
-                marginLeft: 'auto', fontSize: 11, padding: '2px 8px', borderRadius: 10,
-                background: channels.igAccessToken && channels.igUserId ? '#fce8ff' : '#f5f5f5',
-                color: channels.igAccessToken && channels.igUserId ? '#7b1fa2' : '#999',
-              }}>
-                {channels.igAccessToken && channels.igUserId ? '● 已啟用' : '○ 未設定'}
-              </span>
+          <div style={{ ...CARD }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20 }}>
+              <div style={{ width: 32, height: 32, borderRadius: 'var(--r-sm)', background: 'linear-gradient(135deg, #833ab4, #fd1d1d, #fcb045)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, flexShrink: 0 }}>📸</div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>Instagram</div>
+                <div style={{ fontSize: 11, color: channels.igAccessToken && channels.igUserId ? 'var(--green)' : 'var(--text-muted)', marginTop: 1 }}>
+                  {channels.igAccessToken && channels.igUserId ? '● 已啟用' : '○ 未設定'}
+                </div>
+              </div>
             </div>
-
-            <div style={{ marginBottom: 10 }}>
-              <div style={{ fontSize: 12, color: '#666', marginBottom: 4 }}>Access Token</div>
-              <input
-                value={channels.igAccessToken}
-                onChange={e => setChannels(p => ({ ...p, igAccessToken: e.target.value }))}
-                placeholder="貼上 Instagram Access Token"
-                style={{ width: '100%', border: '1px solid #e0e0e0', borderRadius: 6, padding: '8px 10px', fontSize: 13, boxSizing: 'border-box' as const }}
-              />
-            </div>
-
-            <div style={{ marginBottom: 14 }}>
-              <div style={{ fontSize: 12, color: '#666', marginBottom: 4 }}>Instagram User ID</div>
-              <input
-                value={channels.igUserId}
-                onChange={e => setChannels(p => ({ ...p, igUserId: e.target.value }))}
-                placeholder="貼上 IG Business User ID"
-                style={{ width: '100%', border: '1px solid #e0e0e0', borderRadius: 6, padding: '8px 10px', fontSize: 13, boxSizing: 'border-box' as const }}
-              />
-            </div>
-
-            <div style={{ background: '#f8f9ff', borderRadius: 8, padding: '10px 12px', marginBottom: 14 }}>
-              <div style={{ fontSize: 11, color: '#666' }}>需要 Instagram Graph API 的 Business 帳號 Access Token 與 User ID。Token 過期需重新產生。</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <div>
+                <label style={FIELD_LABEL}>Access Token</label>
+                <input value={channels.igAccessToken} onChange={e => setChannels(p => ({ ...p, igAccessToken: e.target.value }))} placeholder="貼上 Instagram Access Token" style={{ ...INPUT }} />
+              </div>
+              <div>
+                <label style={FIELD_LABEL}>Instagram User ID</label>
+                <input value={channels.igUserId} onChange={e => setChannels(p => ({ ...p, igUserId: e.target.value }))} placeholder="貼上 IG Business User ID" style={{ ...INPUT }} />
+              </div>
+              <div style={{ background: 'var(--bg-alt)', borderRadius: 'var(--r-sm)', padding: '12px 14px' }}>
+                <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: 0, lineHeight: 1.6 }}>需要 Instagram Graph API 的 Business 帳號 Access Token 與 User ID。Token 過期需重新產生。</p>
+              </div>
             </div>
           </div>
-
         </div>
 
-        {/* 通路儲存 */}
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 16 }}>
-          <button onClick={saveChannels} disabled={channelSaving}
-            style={{ background: channelSaving ? '#ccc' : '#1a1a2e', color: '#fff', border: 'none', borderRadius: 6, padding: '10px 28px', cursor: channelSaving ? 'default' : 'pointer', fontSize: 14, fontWeight: 600 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 16 }}>
+          <button onClick={saveChannels} disabled={channelSaving} style={{ ...BTN_PRIMARY, opacity: channelSaving ? 0.6 : 1, cursor: channelSaving ? 'default' : 'pointer' }}>
             {channelSaving ? '儲存中...' : '儲存通路設定'}
           </button>
-          {channelMsg && <span style={{ fontSize: 13, color: '#2e7d32' }}>{channelMsg}</span>}
+          {channelMsg && <span style={{ fontSize: 13, color: 'var(--green)' }}>{channelMsg}</span>}
         </div>
-
       </div>
 
-      {/* ── 客戶端入口 ── */}
-      <div style={{ background: '#fff', border: '1px solid #e0e0e0', borderRadius: 12, padding: 20, marginTop: 24 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
-          <span style={{ fontSize: 20 }}>🔗</span>
-          <h3 style={{ margin: 0, fontSize: 15 }}>客戶端入口</h3>
+      {/* ── Section 3: 客戶端入口 ── */}
+      <div style={{ marginTop: 40, paddingTop: 32, borderTop: '1px solid var(--border)' }}>
+        <div style={{ marginBottom: 20 }}>
+          <h2 style={{ margin: 0, fontSize: 15, fontWeight: 600, color: 'var(--text-primary)', letterSpacing: '-0.01em' }}>客戶端入口</h2>
+          <p style={{ margin: '4px 0 0', fontSize: 13, color: 'var(--text-muted)' }}>將連結傳給客戶，可存取貼文審核、排程設定與角色對話。</p>
         </div>
-        <div style={{ fontSize: 13, color: '#666', marginBottom: 12, lineHeight: 1.6 }}>
-          將以下連結傳給客戶，客戶可以存取：貼文審核、排程設定、與角色聊天。<br />
-          不會顯示後台其他功能。
+        <div style={{ ...CARD, maxWidth: 560 }}>
+          <ClientPasswordSection charId={id} />
         </div>
-
-        {/* 客戶端密碼 */}
-        <ClientPasswordSection charId={id} />
       </div>
 
     </div>

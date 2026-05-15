@@ -83,7 +83,7 @@ export async function POST(req: NextRequest) {
     console.log(`[strategy-html] generated ${html.length}B in ${elapsed}s | stop=${stopReason} | tok in=${usage.input} out=${usage.output}`);
 
     // 3. 七題自查
-    const qa = qaHtml(html);
+    const qa = qaHtml(html, philosophy);
     if (!qa.ok) {
       const tail = html.slice(-300).replace(/\s+/g, ' ');
       console.warn(`[strategy-html] QA FAILED: ${qa.reasons.join(', ')} | bytes=${html.length} stop=${stopReason} out=${usage.output} | tail="${tail}"`);

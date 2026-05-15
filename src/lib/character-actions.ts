@@ -140,10 +140,18 @@ export const markFulfilled = (id: string) => markActionFulfilled(id, 'manual');
 
 export function formatActionsBlock(actions: CharacterAction[]): string {
   if (actions.length === 0) return '';
+  const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Taipei' });
   const lines = actions.map(a => {
     const label = ACTION_TYPE_LABEL[a.actionType] || '';
     const body = a.title || a.content;
-    return label ? `- （${label}）${body}` : `- ${body}`;
+    let datePrefix = '';
+    if (a.createdAt) {
+      const dStr = new Date(a.createdAt).toLocaleDateString('en-CA', { timeZone: 'Asia/Taipei' });
+      const diffDays = Math.floor((new Date(todayStr).getTime() - new Date(dStr).getTime()) / 86400000);
+      datePrefix = diffDays === 0 ? '今天' : diffDays === 1 ? '昨天' : diffDays <= 7 ? `${diffDays}天前` : dStr;
+    }
+    const datePart = datePrefix ? `${datePrefix}、` : '';
+    return label ? `- ${datePart}（${label}）${body}` : `- ${datePart}${body}`;
   });
   return `\n\n【我對這位朋友說過 / 還沒兌現的事】\n${lines.join('\n')}`;
 }

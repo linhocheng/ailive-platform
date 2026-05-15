@@ -389,10 +389,18 @@ export async function POST(req: NextRequest) {
       }
 
       // 10. fire-and-forget: enqueue Cloud Tasks → strategy-html-worker (Cloud Run)
-      // 走 Max OAuth bridge :3002，繞開 Vercel 300s 上限。失敗只 log 不擋主線。
+      // philosophy 由文件內容自動分類（selectPhilosophy），不綁定角色。
       try {
         const { enqueueStrategyHtml } = await import('@/lib/cloud-tasks');
-        await enqueueStrategyHtml(jobId);
+        const { selectPhilosophy } = await import('@/lib/strategy-html/select-philosophy');
+        const philosophy = await selectPhilosophy(
+          body.brief?.prompt || '',
+          docTitle,
+          md,
+          anthropic,
+        );
+        console.log(`[specialist/strategy] philosophy selected: ${philosophy}`);
+        await enqueueStrategyHtml(jobId, philosophy);
       } catch (e) {
         const errMsg = e instanceof Error ? e.message : String(e);
         console.warn('[specialist/strategy] enqueue strategy-html failed:', errMsg);

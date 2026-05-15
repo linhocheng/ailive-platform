@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { CharNav } from '../page';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 interface Task {
   id: string; type: string; run_hour: number; run_minute: number;
@@ -33,6 +34,7 @@ const DAY_KEYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 
 export default function TasksPage() {
   const { id } = useParams<{ id: string }>();
+  const isMobile = useIsMobile();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [charName, setCharName] = useState('');
   const [loading, setLoading] = useState(true);
@@ -181,7 +183,7 @@ export default function TasksPage() {
           {editing?.id === task.id ? (
             <div>
               {/* 時間設定 */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 10 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 8, marginBottom: 10 }}>
                 <div>
                   <label style={{ fontSize: 11, color: '#999', display: 'block', marginBottom: 3 }}>小時（台北）</label>
                   <input type="number" min={0} max={23} value={editing.run_hour} onChange={e => setEditing({ ...editing, run_hour: +e.target.value })} style={inputStyle} />

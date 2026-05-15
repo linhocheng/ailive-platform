@@ -2,11 +2,13 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { CharNav } from '../page';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 interface Insight { source: string; tier: string; hitCount: number; eventDate: string; createdAt: string; }
 
 export default function GrowthPage() {
   const { id } = useParams<{ id: string }>();
+  const isMobile = useIsMobile();
   const [char, setChar] = useState<Record<string, unknown> | null>(null);
   const [insights, setInsights] = useState<Insight[]>([]);
   const [loading, setLoading] = useState(true);
@@ -41,7 +43,7 @@ export default function GrowthPage() {
       <CharNav id={id} active="/growth" />
 
       {/* 核心指標 */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 24 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : 'repeat(4, 1fr)', gap: 12, marginBottom: 24 }}>
         {[
           { label: '靈魂版本', value: `v${char.soulVersion}`, icon: '⚡', color: '#e8eaf6' },
           { label: '總對話', value: metrics.totalConversations ?? 0, icon: '💬', color: '#e3f2fd' },
@@ -56,7 +58,7 @@ export default function GrowthPage() {
         ))}
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 20 }}>
         {/* 記憶來源分布 */}
         <div style={{ background: '#fff', border: '1px solid #e0e0e0', borderRadius: 12, padding: 20 }}>
           <h3 style={{ margin: '0 0 16px' }}>記憶來源</h3>
