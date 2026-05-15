@@ -1,24 +1,9 @@
 'use client';
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
 import CommissionStatusBar from '@/components/CommissionStatusBar';
-import type { ActiveJob } from '@/lib/commission-stages';
 import { deriveMiniLight } from '@/lib/commission-stages';
-
-interface Message {
-  role: 'user' | 'assistant' | 'system_event';
-  content: string;
-  timestamp: string;
-  imageUrl?: string;
-  // system_event 專屬
-  eventType?: string;
-  specialistName?: string;
-  specialistId?: string;
-  jobId?: string;
-  output?: { type: string; imageUrl?: string; docUrl?: string; htmlUrl?: string; slideUrl?: string; title?: string; workLog?: string };
-  workLog?: string;
-  error?: string;
-}
+import { useChat, type ChatMessage as Message } from '@/hooks/useChat';
 
 interface Character {
   id: string;
@@ -78,275 +63,34 @@ const IconBack = () => (
 
 export default function ChatPage() {
   const { id: characterId } = useParams<{ id: string }>();
-  const [char, setChar] = useState<Character | null>(null);
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [activeJobs, setActiveJobs] = useState<ActiveJob[]>([]);
-  const [input, setInput] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [loadingHistory, setLoadingHistory] = useState(false);
+  const [char, setChar] = React.useState<Character | null>(null);
   const searchParams = useSearchParams();
   const cidFromUrl = searchParams.get('cid');
-  const [conversationId, setConversationId] = useState<string | null>(cidFromUrl);
-  // 穩定 userId：與 voice/realtime 共用同一 localStorage key，記憶跨模式打通
-  const [userId] = useState(() => {
-    if (typeof window === 'undefined') return '';
-    let id = localStorage.getItem('ailive_realtime_anon_uid');
-    if (!id) {
-      id = `anon-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      localStorage.setItem('ailive_realtime_anon_uid', id);
+
+  const {
+    messages, activeJobs,
+    input, setInput,
+    loading, loadingHistory,
+    conversationId,
+    pendingImage, setPendingImage,
+    send, newConversation, loadHistory,
+    handleImageSelect,
+    imageInputRef, bottomRef, textareaRef,
+  } = useChat(characterId);
+
+  // cidFromUrl 支援：從 URL 帶入 conversationId
+  React.useEffect(() => {
+    if (cidFromUrl) {
+      localStorage.setItem(`conv-${characterId}`, cidFromUrl);
+      loadHistory(cidFromUrl);
     }
-    return id;
-  });
-  // ref 讓 event handler 能讀到最新 conversationId（閉包不更新）
-  const conversationIdRef = useRef<string | null>(cidFromUrl);
+  }, [cidFromUrl, characterId, loadHistory]);
 
-  const bottomRef = useRef<HTMLDivElement>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const imageInputRef = useRef<HTMLInputElement>(null);
-  const [pendingImage, setPendingImage] = useState<{ base64: string; preview: string; mimeType?: string } | null>(null);
-  const [isNewVisit, setIsNewVisit] = useState(true);
-
-  useEffect(() => {
+  React.useEffect(() => {
     fetch(`/api/characters/${characterId}`)
       .then(r => r.json())
       .then(d => setChar(d.character));
   }, [characterId]);
-
-  useEffect(() => {
-    if (cidFromUrl) {
-      localStorage.setItem(`conv-${characterId}`, cidFromUrl);
-      loadHistory(cidFromUrl);
-    } else {
-      const saved = localStorage.getItem(`conv-${characterId}`);
-      if (saved) {
-        setConversationId(saved);
-        conversationIdRef.current = saved;
-        loadHistory(saved);
-      }
-    }
-  }, [characterId]);
-
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, loading]);
-
-  // ── dialogue-end 觸發器：visibilitychange / beforeunload / 10 分鐘閒置 ──
-  useEffect(() => {
-    const IDLE_MS = 10 * 60 * 1000;
-    let idleTimer: ReturnType<typeof setTimeout> | null = null;
-
-    const fire = () => {
-      const cid = conversationIdRef.current;
-      if (!cid || !characterId || !userId) return;
-      const payload = JSON.stringify({ characterId, conversationId: cid, userId });
-      navigator.sendBeacon('/api/dialogue-end', new Blob([payload], { type: 'application/json' }));
-    };
-
-    const resetIdle = () => {
-      if (idleTimer) clearTimeout(idleTimer);
-      idleTimer = setTimeout(fire, IDLE_MS);
-    };
-
-    const onVisibility = () => { if (document.hidden) fire(); };
-    const onUnload = () => fire();
-
-    document.addEventListener('visibilitychange', onVisibility);
-    window.addEventListener('beforeunload', onUnload);
-    window.addEventListener('mousemove', resetIdle);
-    window.addEventListener('keydown', resetIdle);
-    resetIdle();
-
-    return () => {
-      document.removeEventListener('visibilitychange', onVisibility);
-      window.removeEventListener('beforeunload', onUnload);
-      window.removeEventListener('mousemove', resetIdle);
-      window.removeEventListener('keydown', resetIdle);
-      if (idleTimer) clearTimeout(idleTimer);
-    };
-  }, [characterId, userId]);
-
-  // ── Polling：每 5s 更新 messages + activeJobs（捕捉 system_event 交件 + 委託狀態）──
-  useEffect(() => {
-    if (!conversationId) return;
-    const timer = setInterval(async () => {
-      try {
-        const r = await fetch(`/api/dialogue?conversationId=${conversationId}`);
-        const d = await r.json();
-        if (d.messages?.length > 0) {
-          setMessages(prev => {
-            // 只有訊息數量增加時才更新（避免覆蓋 streaming）
-            if (d.messages.length <= prev.length) return prev;
-            return d.messages.map((m: Message) => ({
-              role: m.role,
-              content: m.content || '',
-              timestamp: m.timestamp || new Date().toISOString(),
-              imageUrl: m.imageUrl || m.output?.imageUrl,
-              eventType: m.eventType,
-              specialistName: m.specialistName,
-              specialistId: m.specialistId,
-              jobId: m.jobId,
-              output: m.output,
-              workLog: m.workLog,
-              error: m.error,
-            }));
-          });
-        }
-        // activeJobs 每次都覆寫（後端已過濾 active + 60s 內）
-        if (Array.isArray(d.activeJobs)) setActiveJobs(d.activeJobs as ActiveJob[]);
-      } catch { /* ignore polling errors */ }
-    }, 5000);
-    return () => clearInterval(timer);
-  }, [conversationId]);
-
-  const loadHistory = async (convId: string) => {
-    setLoadingHistory(true);
-    try {
-      const r = await fetch(`/api/dialogue?conversationId=${convId}`);
-      const d = await r.json();
-      if (d.messages?.length > 0) {
-        setMessages(d.messages.map((m: Message) => ({
-          role: m.role,
-          content: m.content || '',
-          timestamp: m.timestamp || new Date().toISOString(),
-          imageUrl: m.imageUrl || m.output?.imageUrl,
-          // system_event fields
-          eventType: m.eventType,
-          specialistName: m.specialistName,
-          specialistId: m.specialistId,
-          jobId: m.jobId,
-          output: m.output,
-          workLog: m.workLog,
-          error: m.error,
-        })));
-      }
-      if (Array.isArray(d.activeJobs)) setActiveJobs(d.activeJobs as ActiveJob[]);
-    } catch { /* ignore */ }
-    finally { setLoadingHistory(false); }
-  };
-
-  const newConversation = () => {
-    localStorage.removeItem(`conv-${characterId}`);
-    setConversationId(null);
-    setMessages([]);
-  };
-
-  const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      const dataUrl = reader.result as string;
-      // Canvas 壓縮：最長邊 1280px，quality 0.85，防止大圖炸 Vercel 4.5MB 上限
-      const img = new window.Image();
-      img.onload = () => {
-        const MAX = 1280;
-        let { width, height } = img;
-        if (width > MAX || height > MAX) {
-          if (width > height) { height = Math.round(height * MAX / width); width = MAX; }
-          else { width = Math.round(width * MAX / height); height = MAX; }
-        }
-        const canvas = document.createElement('canvas');
-        canvas.width = width; canvas.height = height;
-        const ctx = canvas.getContext('2d')!;
-        ctx.drawImage(img, 0, 0, width, height);
-        const compressed = canvas.toDataURL('image/jpeg', 0.85);
-        const base64 = compressed.split(',')[1];
-        setPendingImage({ base64, preview: compressed, mimeType: 'image/jpeg' });
-      };
-      img.src = dataUrl;
-    };
-    reader.readAsDataURL(file);
-    e.target.value = '';
-  };
-
-  const send = useCallback(async () => {
-    if ((!input.trim() && !pendingImage) || loading) return;
-    const userContent = input.trim() || '（傳了一張圖）';
-    const currentImage = pendingImage;
-    const userMsg: Message = { role: 'user', content: userContent, timestamp: new Date().toISOString(), imageUrl: currentImage?.preview };
-    setMessages(prev => [...prev, userMsg]);
-    setInput('');
-    setPendingImage(null);
-    setLoading(true);
-    if (textareaRef.current) textareaRef.current.style.height = 'auto';
-
-    // 加一個 streaming 用的佔位訊息
-    const streamingIdx = React.createRef<number>();
-    let streamingContent = '';
-    setMessages(prev => { (streamingIdx as React.MutableRefObject<number>).current = prev.length; return [...prev, { role: 'assistant', content: '', timestamp: new Date().toISOString() }]; });
-
-    try {
-      const body: Record<string, unknown> = {
-        characterId, userId, message: userContent,
-        conversationId: conversationId || undefined, isNewVisit,
-      };
-      setIsNewVisit(false);
-      if (currentImage) {
-        body.image = { type: 'base64', media_type: currentImage.mimeType || 'image/jpeg', data: currentImage.base64 };
-      }
-      const r = await fetch('/api/dialogue', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      if (!r.ok || !r.body) throw new Error('連線失敗');
-
-      const reader = r.body.getReader();
-      const dec = new TextDecoder();
-      let sseBuf = '';
-      let extractedImageUrl: string | undefined;
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        sseBuf += dec.decode(value, { stream: true });
-        const lines = sseBuf.split('\n');
-        sseBuf = lines.pop() || '';
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          try {
-            const ev = JSON.parse(line.slice(6)) as { type: string; content?: string; conversationId?: string; imageUrl?: string; message?: string };
-            if (ev.type === 'text' && ev.content) {
-              streamingContent += ev.content;
-              // 即時更新 streaming 訊息
-              const idx = (streamingIdx as React.MutableRefObject<number>).current;
-              const liveImgMatch = streamingContent.match(/!\[.*?\]\((https?:\/\/[^)]+)\)/);
-              const liveImg = liveImgMatch ? liveImgMatch[1] : undefined;
-              setMessages(prev => prev.map((m, i) => i === idx
-                ? { ...m,
-                    content: streamingContent.replace(/!\[.*?\]\(https?:\/\/[^)]+\)/g, '').replace(/IMAGE_URL:https?:\/\/[^\s]+/g, '').trim(),
-                    ...(liveImg ? { imageUrl: liveImg } : {})
-                  }
-                : m));
-            }
-            if (ev.type === 'done') {
-              if (ev.conversationId && !conversationId) {
-                setConversationId(ev.conversationId);
-                conversationIdRef.current = ev.conversationId;
-                localStorage.setItem(`conv-${characterId}`, ev.conversationId);
-              }
-              if (ev.imageUrl) extractedImageUrl = ev.imageUrl;
-              // 清理 markdown 圖片語法，最終更新
-              const urlMatch1 = streamingContent.match(/IMAGE_URL:(https?:\/\/[^\s]+)/);
-              const urlMatch2 = streamingContent.match(/!\[.*?\]\((https?:\/\/[^)]+)\)/);
-              extractedImageUrl = extractedImageUrl || (urlMatch1 ? urlMatch1[1] : urlMatch2 ? urlMatch2[1] : undefined);
-              const cleanReply = streamingContent
-                .replace(/IMAGE_URL:https?:\/\/[^\s]+/g, '')
-                .replace(/!\[.*?\]\(https?:\/\/[^)]+\)/g, '')
-                .trim();
-              const idx = (streamingIdx as React.MutableRefObject<number>).current;
-              setMessages(prev => prev.map((m, i) => i === idx
-                ? { ...m, content: cleanReply || '（圖片已生成）', imageUrl: extractedImageUrl }
-                : m));
-            }
-            if (ev.type === 'error') throw new Error(ev.message);
-          } catch (e) { if (e instanceof SyntaxError) continue; throw e; }
-        }
-      }
-    } catch (err) {
-      const idx = (streamingIdx as React.MutableRefObject<number>).current;
-      setMessages(prev => prev.map((m, i) => i === idx ? { ...m, content: String(err) } : m));
-    } finally { setLoading(false); }
-  }, [input, pendingImage, loading, characterId, userId, conversationId, isNewVisit]);
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
