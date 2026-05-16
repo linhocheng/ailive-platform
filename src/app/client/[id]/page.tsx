@@ -1,6 +1,5 @@
 'use client';
 import './client-v2.css';
-import './client-v3.css';
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useParams } from 'next/navigation';
 import { useChat } from '@/hooks/useChat';
@@ -963,88 +962,109 @@ export default function ClientPage() {
   if (!unlocked) return <PasswordGate char={char} onUnlock={() => setUnlocked(true)} />;
 
   const NAV = [
-    { key: 'posts' as Tab,     icon: 'post',     label: '文章',  count: postCount || undefined },
-    { key: 'chat' as Tab,      icon: 'chat',     label: '對話' },
-    { key: 'schedule' as Tab,  icon: 'calendar', label: '任務' },
-    { key: 'knowledge' as Tab, icon: 'book',     label: '知識' },
-    { key: 'gallery' as Tab,   icon: 'image',    label: '圖庫' },
+    { key: 'posts' as Tab,     icon: 'post',     label: '貼文',  count: postCount || undefined },
+    { key: 'schedule' as Tab,  icon: 'calendar', label: '排程' },
+    { key: 'knowledge' as Tab, icon: 'book',     label: '知識庫' },
+    { key: 'gallery' as Tab,   icon: 'image',    label: '生圖' },
+    { key: 'chat' as Tab,      icon: 'chat',     label: '聊天' },
   ];
 
-  const avatarSrc = char.visualIdentity?.characterSheet;
-
   return (
-    <div className="client-v2 client-v3">
+    <div className="client-v2">
+      <button className="mobile-menu-fab" onClick={() => setSidebarOpen(true)} aria-label="開啟選單">
+        <Icon name="menu" size={18} />
+      </button>
+
       <div className="app">
-
-        {/* Top bar */}
-        <div className="v3-topbar">
-          <div className="v3-topbar-inner">
-            <span className="v3-topbar-brand">AILIVE</span>
-            <span className="v3-topbar-sep" />
-            <span className="v3-topbar-char">{char.name}</span>
+        {/* Sidebar */}
+        {sidebarOpen && (
+          <div className="sidebar-backdrop" onClick={() => setSidebarOpen(false)} />
+        )}
+        <aside className={`sidebar${sidebarOpen ? ' mobile-open' : ''}`}>
+          <div className="sidebar-brand">
+            <div className="brand-mark">AI</div>
+            <span className="brand-name">AILIVE <small>客戶端</small></span>
+            <button className="sidebar-close icon-btn" onClick={() => setSidebarOpen(false)} aria-label="關閉選單">
+              <Icon name="x" size={16} />
+            </button>
           </div>
-        </div>
 
-        {/* Hero */}
-        <div className="v3-hero">
-          <div className="v3-hero-inner">
-            {avatarSrc
-              ? <img className="v3-hero-avatar" src={avatarSrc} alt={char.name} />
-              : <div className="v3-hero-avatar-letter">{char.name[0]}</div>
-            }
-            <div className="v3-hero-info">
-              <div className="v3-hero-name">
-                {char.name}
-                <span className="v3-hero-dot" />
+          <div className="character">
+            <div className="character-row">
+              <div className="avatar">
+                {char.visualIdentity?.characterSheet
+                  ? <img src={char.visualIdentity.characterSheet} alt="" />
+                  : char.name[0]
+                }
               </div>
-              {char.mission && (
-                <div className="v3-hero-mission">{char.mission}</div>
-              )}
-              <div className="v3-hero-actions">
-                <a href={`/voice/${charId}`} target="_blank" rel="noopener noreferrer" className="v3-btn-primary">
-                  <Icon name="mic" size={14} />
-                  語音對話
-                </a>
-                <a href={`/realtime/${charId}`} target="_blank" rel="noopener noreferrer" className="v3-btn-primary" style={{ background: 'var(--accent)' }}>
-                  <Icon name="phone" size={14} />
-                  即時通話
-                </a>
-                <a href={`/feed/${charId}`} target="_blank" rel="noopener noreferrer" className="v3-btn-secondary">
-                  <Icon name="eye" size={14} />
-                  公開網誌
-                </a>
+              <div className="character-meta">
+                <div className="character-name">
+                  {char.name}
+                  <span className="live-dot" />
+                </div>
+                <div className="character-role">{char.type || 'AI 角色'}</div>
               </div>
             </div>
+            {char.mission && (
+              <div className="character-tag">
+                <div className="character-tag-body">{char.mission.slice(0, 60)}{char.mission.length > 60 ? '…' : ''}</div>
+              </div>
+            )}
           </div>
-        </div>
 
-        {/* Tab bar */}
-        <div className="v3-tabs">
-          <div className="v3-tabs-inner">
+          <a
+            href={`/voice/${charId}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="voice-btn"
+            style={{ textDecoration: 'none' }}
+          >
+            <div className="voice-icon"><Icon name="mic" size={14} /></div>
+            <div className="voice-meta">
+              語音對話
+              <small>即時語音互動</small>
+            </div>
+          </a>
+
+          <a
+            href={`/feed/${charId}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="feed-link-btn"
+            style={{ textDecoration: 'none' }}
+          >
+            <div className="feed-link-icon"><Icon name="eye" size={14} /></div>
+            <div className="feed-link-meta">
+              公開網誌
+              <small>圖文閱讀頁</small>
+            </div>
+          </a>
+
+          <nav className="nav">
+            <div className="nav-label">管理功能</div>
             {NAV.map(n => (
-              <button
-                key={n.key}
-                className={`v3-tab-btn${tab === n.key ? ' active' : ''}`}
-                onClick={() => setTab(n.key)}
-              >
-                {n.label}
-                {n.count ? <span className="v3-tab-badge">{n.count}</span> : null}
+              <button key={n.key} className={`nav-item${tab === n.key ? ' active' : ''}`} onClick={() => { setTab(n.key); setSidebarOpen(false); }}>
+                <Icon name={n.icon} size={16} />
+                <span className="nav-text">{n.label}</span>
+                {n.count ? <span className="nav-count">{n.count}</span> : null}
               </button>
             ))}
-          </div>
-        </div>
+          </nav>
 
-        {/* Content */}
+          <div className="sidebar-foot">
+            <span>AILIVE Platform</span>
+            <span style={{ opacity: 0.6, fontSize: 10 }}>v2.0</span>
+          </div>
+        </aside>
+
+        {/* Main content */}
         <main className="main">
-          <div className="v3-content">
-            {tab === 'posts'     && <PostsScreen     charId={charId} />}
-            {tab === 'schedule'  && <ScheduleScreen  charId={charId} />}
-            {tab === 'knowledge' && <KnowledgeScreen charId={charId} />}
-            {tab === 'gallery'   && <GalleryScreen   charId={charId} />}
-            {tab === 'chat'      && <ChatScreen      charId={charId} char={char} />}
-          </div>
+          {tab === 'posts'     && <PostsScreen     charId={charId} />}
+          {tab === 'schedule'  && <ScheduleScreen  charId={charId} />}
+          {tab === 'knowledge' && <KnowledgeScreen charId={charId} />}
+          {tab === 'gallery'   && <GalleryScreen   charId={charId} />}
+          {tab === 'chat'      && <ChatScreen      charId={charId} char={char} />}
         </main>
-
       </div>
     </div>
   );
