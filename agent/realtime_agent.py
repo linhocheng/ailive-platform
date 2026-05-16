@@ -220,15 +220,17 @@ async def entrypoint(ctx: JobContext):
         logger.critical("MINIMAX_API_KEY / MINIMAX_GROUP_ID / MINIMAX_DEFAULT_VOICE_ID missing")
         return
 
-    # 角色設定優先：voice_id 從 character.voiceIdMinimax；speed/pitch 從 ttsSettings.minimax
+    # 角色設定優先：voice_id 從 character.voiceIdMinimax；所有 ttsSettings.minimax 欄位全讀
     char_voice_id = char_ctx.voice_id_minimax if char_ctx else ""
     voice_id = char_voice_id or default_voice_id
     settings = (char_ctx.tts_settings_minimax if char_ctx else {}) or {}
-    speed = settings.get("speed", 1.0)
-    pitch = settings.get("pitch", 0)
+    speed   = settings.get("speed", 1.0)
+    pitch   = settings.get("pitch", 0)
+    vol     = settings.get("vol", 1.0)
+    emotion = settings.get("emotion", "")   # 空字串 = API 自動推斷，不強制
     logger.info(
         f"TTS: MiniMax voice={voice_id} (from {'character' if char_voice_id else 'default'}) "
-        f"speed={speed} pitch={pitch}"
+        f"speed={speed} pitch={pitch} vol={vol} emotion={emotion or '(auto)'}"
     )
 
     tts = MiniMaxCustomTTS(
@@ -238,6 +240,8 @@ async def entrypoint(ctx: JobContext):
         model="speech-02-turbo",
         speed=speed,
         pitch=pitch,
+        vol=vol,
+        emotion=emotion,
     )
 
     # ── dispatch_research：派工給索（非同步，不阻塞對話）────────────────
@@ -505,8 +509,21 @@ async def entrypoint(ctx: JobContext):
             f"2-3 分鐘內完成，策略書 docx 出現在 dashboard「策略書」頁面可下載。繼續陪用戶聊。"
         )
 
-    agent = Agent(instructions=system_prompt, tools=[dispatch_research, commission_specialist])
-    logger.info(f"Agent initialized with {char_name} soul, prompt={len(system_prompt)} chars")
+    # 語音專用補丁：interjection tags 指引
+    # 這段只附加在語音 session，不影響文字 dialogue。
+    # speech-02-turbo 支援的 8 種：laughs / sighs / coughs / clears throat / gasps / sniffs / groans / yawns
+    VOICE_INTERJECTION_NOTE = (
+        "\n\n== 語音表達補充 ==\n"
+        "你現在在進行即時語音通話。以下感嘆詞標籤會讓你的聲音更自然，適時使用：\n"
+        "(laughs) 笑出來  (sighs) 嘆氣  (groans) 低鳴/無奈  (gasps) 驚訝吸氣\n"
+        "(sniffs) 輕嗅  (coughs) 咳嗽  (yawns) 打哈欠  (clears throat) 清喉嚨\n"
+        "直接寫在回應文字裡，例如：「真的嗎(gasps)，那你後來怎麼了？」\n"
+        "不要刻意，只有真的符合情境才用。"
+    )
+    voice_prompt = system_prompt + VOICE_INTERJECTION_NOTE
+
+    agent = Agent(instructions=voice_prompt, tools=[dispatch_research, commission_specialist])
+    logger.info(f"Agent initialized with {char_name} soul, prompt={len(voice_prompt)} chars")
 
     session = AgentSession(
         stt=stt,

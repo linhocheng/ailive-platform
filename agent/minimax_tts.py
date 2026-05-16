@@ -31,6 +31,7 @@ class MiniMaxTTSOptions:
     speed: float = 1.0
     vol: float = 1.0
     pitch: float = 0.0
+    emotion: str = ""   # happy/sad/angry/fearful/disgusted/surprised/neutral；空字串 = API 自動推斷
     sample_rate: int = 24000
 
 
@@ -47,6 +48,7 @@ class MiniMaxCustomTTS(tts.TTS):
         speed: float = 1.0,
         vol: float = 1.0,
         pitch: float = 0.0,
+        emotion: str = "",
         sample_rate: int = 24000,
     ):
         super().__init__(
@@ -62,6 +64,7 @@ class MiniMaxCustomTTS(tts.TTS):
             speed=speed,
             vol=vol,
             pitch=pitch,
+            emotion=emotion,
             sample_rate=sample_rate,
         )
         self._session: aiohttp.ClientSession | None = None
@@ -125,6 +128,7 @@ class MiniMaxChunkedStream(tts.ChunkedStream):
                 "speed": float(self._opts.speed),
                 "vol": float(self._opts.vol),
                 "pitch": int(self._opts.pitch),  # pitch 是 int (-12 ~ 12) 不變
+                **( {"emotion": self._opts.emotion} if self._opts.emotion else {} ),
             },
             "audio_setting": {
                 "sample_rate": int(self._opts.sample_rate),
