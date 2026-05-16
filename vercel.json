@@ -10,6 +10,9 @@
     }
   ],
   "functions": {
+    "src/app/api/design-x/generate/route.ts": {
+      "maxDuration": 300
+    },
     "src/app/api/knowledge-upload/route.ts": {
       "maxDuration": 120
     },

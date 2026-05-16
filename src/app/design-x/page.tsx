@@ -1,15 +1,31 @@
 'use client';
-
+import './page.css';
 import { useState, useRef, useCallback } from 'react';
+
+type Stage = 'idle' | 'reading' | 'keywords' | 'designing' | 'done';
+
+const STAGES: { id: Stage; label: string; sub: string }[] = [
+  { id: 'reading',   label: '解析內容結構', sub: '讀取文件，辨識層次與主題' },
+  { id: 'keywords',  label: '規劃投影片架構', sub: '決定張數與版型組合' },
+  { id: 'designing', label: 'Claude 設計中', sub: '生成排版、字型對比與視覺節奏' },
+];
+
+function stageState(id: Stage, current: Stage): 'pending' | 'active' | 'done' {
+  const order: Stage[] = ['reading', 'keywords', 'designing', 'done'];
+  const ci = order.indexOf(current);
+  const si = order.indexOf(id);
+  if (ci > si) return 'done';
+  if (ci === si) return 'active';
+  return 'pending';
+}
 
 export default function DesignXPage() {
   const [dragging, setDragging] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [text, setText] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [stage, setStage] = useState<Stage>('idle');
   const [html, setHtml] = useState('');
   const [error, setError] = useState('');
-  const [step, setStep] = useState<'idle' | 'keywords' | 'images' | 'generating' | 'done'>('idle');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
@@ -21,28 +37,49 @@ export default function DesignXPage() {
 
   const handleGenerate = async () => {
     if (!file && !text.trim()) return;
-    setLoading(true);
     setError('');
     setHtml('');
-    setStep('keywords');
+    setStage('reading');
 
     try {
       const formData = new FormData();
       if (file) formData.append('file', file);
       else formData.append('text', text);
 
-      setStep('images');
       const res = await fetch('/api/design-x/generate', { method: 'POST', body: formData });
-      setStep('generating');
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || '生成失敗');
-      setHtml(data.html);
-      setStep('done');
+      if (!res.body) throw new Error('No response body');
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let eventType = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+
+        for (const line of lines) {
+          if (line.startsWith('event: ')) {
+            eventType = line.slice(7).trim();
+          } else if (line.startsWith('data: ')) {
+            const data = JSON.parse(line.slice(6));
+            if (eventType === 'progress') {
+              setStage(data.stage as Stage);
+            } else if (eventType === 'done') {
+              setHtml(data.html);
+              setStage('done');
+            } else if (eventType === 'error') {
+              throw new Error(data.message);
+            }
+          }
+        }
+      }
     } catch (e) {
       setError(String(e));
-      setStep('idle');
-    } finally {
-      setLoading(false);
+      setStage('idle');
     }
   };
 
@@ -56,133 +93,126 @@ export default function DesignXPage() {
     URL.revokeObjectURL(url);
   };
 
-  const stepLabel: Record<string, string> = {
-    keywords: '分析內容關鍵字...',
-    images: '搜尋高質感圖片...',
-    generating: 'Claude 設計中，請稍候...',
-  };
+  const isLoading = stage !== 'idle' && stage !== 'done';
+
+  if (html) {
+    return (
+      <div className="root">
+        <div className="container">
+          <div className="resultHeader">
+            <span className="resultLabel">簡報已生成</span>
+            <div className="resultActions">
+              <button
+                className="btnSecondary"
+                onClick={() => { setHtml(''); setStage('idle'); setFile(null); setText(''); }}
+              >
+                重新設計
+              </button>
+              <button className="btnPrimary" onClick={handleDownload}>
+                下載 HTML
+              </button>
+            </div>
+          </div>
+          <iframe
+            className="previewFrame"
+            srcDoc={html}
+            title="Preview"
+            sandbox="allow-scripts allow-same-origin"
+          />
+        </div>
+      </div>
+    );
+  }
+
+  if (isLoading) {
+    return (
+      <div className="root">
+        <div className="container">
+          <div className="progressWrap">
+            <div className="progressTitle">生成中</div>
+            <div className="stages">
+              {STAGES.map((s) => {
+                const state = stageState(s.id, stage);
+                return (
+                  <div key={s.id} className="stage">
+                    <div className={`stageDot ${state}`} />
+                    <div className="stageContent">
+                      <div className={`stageLabel ${state}`}>{s.label}</div>
+                      {state === 'active' && (
+                        <div className="stageSub">{s.sub}</div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="min-h-screen bg-[#0a0a0a] text-white font-sans">
-      <div className="max-w-4xl mx-auto px-6 py-16">
-        {/* Header */}
-        <div className="mb-12">
-          <h1 className="text-4xl font-bold tracking-tight mb-2">
-            Design<span className="text-amber-400">X</span>
-          </h1>
-          <p className="text-zinc-400 text-lg">上傳文件，Claude 自動設計高質感簡報</p>
+    <div className="root">
+      <div className="container">
+        <div className="header">
+          <div className="wordmark">Design<span>X</span></div>
+          <div className="tagline">貼上文字，生成高質感 HTML 簡報</div>
         </div>
 
-        {html ? (
-          /* Result view */
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <span className="text-zinc-400 text-sm">簡報已生成</span>
-              <div className="flex gap-3">
-                <button
-                  onClick={() => { setHtml(''); setStep('idle'); setFile(null); setText(''); }}
-                  className="px-4 py-2 text-sm border border-zinc-700 rounded-lg hover:border-zinc-500 transition-colors"
-                >
-                  重新設計
-                </button>
-                <button
-                  onClick={handleDownload}
-                  className="px-4 py-2 text-sm bg-amber-400 text-black font-semibold rounded-lg hover:bg-amber-300 transition-colors"
-                >
-                  下載 HTML
-                </button>
-              </div>
-            </div>
-            <div className="rounded-xl overflow-hidden border border-zinc-800" style={{ height: '70vh' }}>
-              <iframe
-                srcDoc={html}
-                className="w-full h-full"
-                title="Preview"
-                sandbox="allow-scripts allow-same-origin"
-              />
-            </div>
+        {file ? (
+          <div className="fileInfo">
+            <span className="fileName">{file.name}</span>
+            <span className="fileSize">{(file.size / 1024).toFixed(1)} KB</span>
+            <button className="fileRemove" onClick={() => setFile(null)}>×</button>
           </div>
         ) : (
-          /* Upload view */
-          <div className="space-y-6">
-            {/* Drop zone */}
-            <div
-              className={`relative border-2 border-dashed rounded-2xl p-12 text-center transition-all cursor-pointer
-                ${dragging ? 'border-amber-400 bg-amber-400/5' : 'border-zinc-700 hover:border-zinc-500'}`}
-              onDragOver={e => { e.preventDefault(); setDragging(true); }}
-              onDragLeave={() => setDragging(false)}
-              onDrop={handleDrop}
-              onClick={() => fileInputRef.current?.click()}
-            >
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".docx,.txt,.md"
-                className="hidden"
-                onChange={e => { if (e.target.files?.[0]) setFile(e.target.files[0]); }}
-              />
-              {file ? (
-                <div className="space-y-2">
-                  <div className="text-3xl">📄</div>
-                  <p className="text-white font-medium">{file.name}</p>
-                  <p className="text-zinc-500 text-sm">{(file.size / 1024).toFixed(1)} KB</p>
-                  <button
-                    onClick={e => { e.stopPropagation(); setFile(null); }}
-                    className="text-zinc-500 text-xs hover:text-zinc-300 underline"
-                  >
-                    移除
-                  </button>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  <div className="text-4xl opacity-40">↑</div>
-                  <p className="text-zinc-300">拖曳或點擊上傳</p>
-                  <p className="text-zinc-600 text-sm">.docx · .txt · .md</p>
-                </div>
-              )}
-            </div>
-
-            {/* Divider */}
-            {!file && (
-              <>
-                <div className="flex items-center gap-4">
-                  <div className="flex-1 border-t border-zinc-800" />
-                  <span className="text-zinc-600 text-sm">或直接貼文字</span>
-                  <div className="flex-1 border-t border-zinc-800" />
-                </div>
-                <textarea
-                  value={text}
-                  onChange={e => setText(e.target.value)}
-                  placeholder="貼上你的內容..."
-                  className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-5 py-4 text-sm text-zinc-200 placeholder-zinc-600 resize-none focus:outline-none focus:border-zinc-600 transition-colors"
-                  rows={6}
-                />
-              </>
-            )}
-
-            {/* Error */}
-            {error && (
-              <div className="text-red-400 text-sm bg-red-400/10 border border-red-400/20 rounded-lg px-4 py-3">
-                {error}
-              </div>
-            )}
-
-            {/* Generate button */}
-            <button
-              onClick={handleGenerate}
-              disabled={loading || (!file && !text.trim())}
-              className="w-full py-4 bg-amber-400 text-black font-bold text-lg rounded-xl
-                hover:bg-amber-300 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
-            >
-              {loading ? (
-                <span className="flex items-center justify-center gap-3">
-                  <span className="inline-block w-4 h-4 border-2 border-black/30 border-t-black rounded-full animate-spin" />
-                  {stepLabel[step] || '處理中...'}
-                </span>
-              ) : '生成簡報'}
-            </button>
+          <div
+            className={`dropzone${dragging ? ' dragging' : ''}`}
+            onDragOver={e => { e.preventDefault(); setDragging(true); }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={handleDrop}
+            onClick={() => fileInputRef.current?.click()}
+          >
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".docx,.txt,.md"
+              style={{ display: 'none' }}
+              onChange={e => { if (e.target.files?.[0]) setFile(e.target.files[0]); }}
+            />
+            <div className="dropzoneArrow">↑</div>
+            <div className="dropzoneLabel">拖曳或點擊上傳</div>
+            <div className="dropzoneHint">.docx · .txt · .md</div>
           </div>
         )}
+
+        {!file && (
+          <>
+            <div className="divider">
+              <div className="dividerLine" />
+              <span className="dividerText">或直接貼文字</span>
+              <div className="dividerLine" />
+            </div>
+            <textarea
+              className="textarea"
+              value={text}
+              onChange={e => setText(e.target.value)}
+              placeholder="把你的內容貼在這裡..."
+              rows={8}
+            />
+          </>
+        )}
+
+        {error && <div className="error">{error}</div>}
+
+        <button
+          className="btnGenerate"
+          onClick={handleGenerate}
+          disabled={!file && !text.trim()}
+        >
+          生成簡報
+        </button>
       </div>
     </div>
   );
