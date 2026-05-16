@@ -112,6 +112,7 @@ class MiniMaxChunkedStream(tts.ChunkedStream):
         """執行 TTS 合成，取得 PCM 音訊並發送 AudioFrame"""
         import uuid
 
+        logger.info(f"MiniMax TTS text: {self._input_text[:200]!r}")
         url = f"{MINIMAX_API_URL}?GroupId={self._opts.group_id}"
         headers = {
             "Authorization": f"Bearer {self._opts.api_key}",
