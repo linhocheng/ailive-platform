@@ -9,34 +9,12 @@ interface Character {
   status: string;
   soulVersion: number;
   mission?: string;
-  growthMetrics?: {
-    totalConversations: number;
-    totalInsights: number;
-    totalPosts: number;
-  };
-  costMetrics?: {
-    totalCostUSD: number;
-  };
+  growthMetrics?: { totalConversations: number; totalInsights: number; totalPosts: number };
+  costMetrics?: { totalCostUSD: number };
   updatedAt?: string;
 }
 
-function StatPill({ label, value }: { label: string; value: number }) {
-  return (
-    <div style={{
-      display: 'flex', flexDirection: 'column', alignItems: 'center',
-      gap: 2, padding: '10px 8px',
-      background: 'var(--bg)',
-      borderRadius: 'var(--r-sm)',
-      minWidth: 60,
-    }}>
-      <span style={{ fontFamily: 'var(--font-display)', fontSize: 18, fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1 }}>{value}</span>
-      <span style={{ fontSize: 11, color: 'var(--text-muted)', letterSpacing: '0.04em' }}>{label}</span>
-    </div>
-  );
-}
-
 function TierBadge({ tier }: { tier?: string }) {
-  // 三層 + 未分類：視覺對齊 zhu-core/docs/architecture/character-tiers.md
   const cfg = (() => {
     switch (tier) {
       case 'character':  return { label: '🎭 CHARACTER',  fg: '#2D6A4F', bg: '#D8F3DC', border: '#95D5B2' };
@@ -48,61 +26,34 @@ function TierBadge({ tier }: { tier?: string }) {
   return (
     <span style={{
       fontSize: 10, fontWeight: 600, letterSpacing: '0.06em',
-      color: cfg.fg,
-      background: cfg.bg,
-      padding: '2px 8px',
-      borderRadius: 20,
-      border: `1px solid ${cfg.border}`,
-      whiteSpace: 'nowrap',
+      color: cfg.fg, background: cfg.bg,
+      padding: '2px 8px', borderRadius: 20,
+      border: `1px solid ${cfg.border}`, whiteSpace: 'nowrap',
     }}>{cfg.label}</span>
   );
 }
 
-function TypeBadge({ type }: { type: string }) {
-  const label = type === 'vtuber' ? '虛擬網紅' : '品牌小編';
+function AvatarLetter({ name, tier }: { name: string; tier?: string }) {
+  const bg = tier === 'character' ? '#D8F3DC' : tier === 'strategist' ? '#EDE4F5' : tier === 'specialist' ? '#D6E9F5' : '#F0EEE8';
+  const fg = tier === 'character' ? '#2D6A4F' : tier === 'strategist' ? '#5A3E7A' : tier === 'specialist' ? '#1E4A6B' : '#8A887F';
   return (
-    <span style={{
-      fontSize: 11, fontWeight: 500, letterSpacing: '0.05em',
-      color: 'var(--text-muted)',
-      background: 'var(--bg-alt)',
-      padding: '2px 8px',
-      borderRadius: 20,
-      border: '1px solid var(--border-soft)',
-    }}>{label}</span>
-  );
-}
-
-function StatusDot({ status }: { status: string }) {
-  const active = status === 'active';
-  return (
-    <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-      <span style={{
-        width: 6, height: 6, borderRadius: '50%',
-        background: active ? 'var(--green)' : 'var(--amber)',
-        boxShadow: active ? '0 0 0 2px var(--green-bg)' : '0 0 0 2px var(--amber-bg)',
-      }} />
-      <span style={{ fontSize: 12, color: active ? 'var(--green)' : 'var(--amber)', fontWeight: 500 }}>
-        {active ? '活躍' : '待設定'}
-      </span>
-    </span>
+    <div style={{
+      width: 48, height: 48, borderRadius: 14,
+      background: bg, color: fg,
+      fontSize: 20, fontWeight: 700,
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      flexShrink: 0, fontFamily: 'var(--font-display)',
+      letterSpacing: '-0.02em',
+    }}>{name[0]}</div>
   );
 }
 
 const IconMic = () => (
-  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
     <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
     <path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/>
     <line x1="8" y1="23" x2="16" y2="23"/>
   </svg>
-);
-
-const IconLive = () => (
-  <span style={{
-    display: 'inline-block',
-    width: 6, height: 6, borderRadius: '50%',
-    background: '#fff',
-    boxShadow: '0 0 0 2px rgba(255,255,255,0.35)',
-  }} />
 );
 
 export default function DashboardPage() {
@@ -124,18 +75,13 @@ export default function DashboardPage() {
 
   return (
     <div>
-      {/* ── Page Header ── */}
+      {/* Header */}
       <div style={{ marginBottom: 32 }}>
         <h1 style={{
-          fontFamily: 'var(--font-display)',
-          fontSize: 26,
-          fontWeight: 700,
-          color: 'var(--text-primary)',
-          letterSpacing: '-0.03em',
-          lineHeight: 1.2,
-          margin: 0,
+          fontFamily: 'var(--font-display)', fontSize: 26, fontWeight: 700,
+          color: 'var(--text-primary)', letterSpacing: '-0.03em', lineHeight: 1.2, margin: 0,
         }}>角色</h1>
-        <p style={{ color: 'var(--text-muted)', fontSize: 13, marginTop: 6 }}>
+        <p style={{ color: 'var(--text-muted)', fontSize: 13, marginTop: 6, margin: '6px 0 0' }}>
           {characters.length} 個角色活躍中
         </p>
       </div>
@@ -143,8 +89,7 @@ export default function DashboardPage() {
       {characters.length === 0 ? (
         <div style={{
           textAlign: 'center', padding: '80px 40px',
-          border: '1.5px dashed var(--border)',
-          borderRadius: 'var(--r-lg)',
+          border: '1.5px dashed var(--border)', borderRadius: 'var(--r-lg)',
           color: 'var(--text-muted)',
         }}>
           <div style={{ fontSize: 32, marginBottom: 12 }}>＋</div>
@@ -152,99 +97,80 @@ export default function DashboardPage() {
           <a href="/dashboard/create" style={{
             color: '#fff', background: 'var(--text-primary)',
             padding: '8px 20px', borderRadius: 'var(--r-sm)', fontSize: 13, fontWeight: 500,
+            textDecoration: 'none',
           }}>建立第一個</a>
         </div>
       ) : (
         <div style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
-          gap: 16,
+          gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))',
+          gap: 14,
         }}>
           {characters.map(c => (
             <a key={c.id} href={`/dashboard/${c.id}`} style={{ textDecoration: 'none', display: 'block' }}>
               <div
                 style={{
-                  background: 'var(--surface)',
-                  border: '1px solid var(--border)',
-                  borderRadius: 'var(--r-lg)',
-                  padding: '20px',
+                  background: 'var(--surface)', border: '1px solid var(--border)',
+                  borderRadius: 'var(--r-lg)', padding: '20px 20px 16px',
                   transition: 'box-shadow 0.18s var(--ease), transform 0.18s var(--ease)',
-                  cursor: 'pointer',
+                  cursor: 'pointer', height: '100%', boxSizing: 'border-box',
                 }}
-                onMouseEnter={e => {
-                  e.currentTarget.style.boxShadow = 'var(--shadow-md)';
-                  e.currentTarget.style.transform = 'translateY(-2px)';
-                }}
-                onMouseLeave={e => {
-                  e.currentTarget.style.boxShadow = 'none';
-                  e.currentTarget.style.transform = 'translateY(0)';
-                }}
+                onMouseEnter={e => { e.currentTarget.style.boxShadow = 'var(--shadow-md)'; e.currentTarget.style.transform = 'translateY(-2px)'; }}
+                onMouseLeave={e => { e.currentTarget.style.boxShadow = 'none'; e.currentTarget.style.transform = 'translateY(0)'; }}
               >
-                {/* ── Card Top ── */}
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 }}>
-                  <div>
+                {/* Top: avatar + info */}
+                <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start', marginBottom: 14 }}>
+                  <AvatarLetter name={c.name} tier={c.tier} />
+                  <div style={{ flex: 1, minWidth: 0, paddingTop: 2 }}>
                     <div style={{
-                      fontFamily: 'var(--font-display)',
-                      fontSize: 17, fontWeight: 700,
-                      color: 'var(--text-primary)',
-                      letterSpacing: '-0.02em',
-                      marginBottom: 5,
+                      fontFamily: 'var(--font-display)', fontSize: 17, fontWeight: 700,
+                      color: 'var(--text-primary)', letterSpacing: '-0.02em',
+                      marginBottom: 4, lineHeight: 1.2,
                     }}>{c.name}</div>
-                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-                      <TypeBadge type={c.type} />
-                      <TierBadge tier={c.tier} />
-                    </div>
+                    {c.mission && (
+                      <div style={{
+                        fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5,
+                        display: '-webkit-box', WebkitLineClamp: 2,
+                        WebkitBoxOrient: 'vertical', overflow: 'hidden',
+                      }}>{c.mission}</div>
+                    )}
                   </div>
-                  <StatusDot status={c.status} />
+                  {/* status dot */}
+                  <span style={{
+                    width: 7, height: 7, borderRadius: '50%', flexShrink: 0, marginTop: 6,
+                    background: c.status === 'active' ? 'var(--green)' : 'var(--amber)',
+                    boxShadow: c.status === 'active' ? '0 0 0 2px var(--green-bg)' : '0 0 0 2px var(--amber-bg)',
+                  }} />
                 </div>
 
-                {/* ── Mission ── */}
-                {c.mission && (
-                  <p style={{
-                    fontSize: 12, color: 'var(--text-secondary)',
-                    lineHeight: 1.5, marginBottom: 16,
-                    display: '-webkit-box',
-                    WebkitLineClamp: 2,
-                    WebkitBoxOrient: 'vertical',
-                    overflow: 'hidden',
-                  }}>{c.mission}</p>
-                )}
-
-                {/* ── Stats ── */}
-                <div style={{ display: 'flex', gap: 6, marginBottom: 16 }}>
-                  <StatPill label="對話" value={c.growthMetrics?.totalConversations ?? 0} />
-                  <StatPill label="記憶" value={c.growthMetrics?.totalInsights ?? 0} />
-                  <StatPill label="發文" value={c.growthMetrics?.totalPosts ?? 0} />
+                {/* Badges + stats row */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 14, flexWrap: 'wrap' }}>
+                  <TierBadge tier={c.tier} />
+                  <span style={{ fontSize: 10, color: 'var(--text-muted)', marginLeft: 'auto', letterSpacing: '0.02em' }}>
+                    {[
+                      `${c.growthMetrics?.totalConversations ?? 0} 對話`,
+                      `${c.growthMetrics?.totalInsights ?? 0} 記憶`,
+                      `${c.growthMetrics?.totalPosts ?? 0} 發文`,
+                    ].join(' · ')}
+                  </span>
                 </div>
 
-                {/* ── 花費 ── */}
-                {(c.costMetrics?.totalCostUSD ?? 0) > 0 && (
-                  <div style={{ fontSize:11, color:'var(--text-muted)', marginBottom:12, display:'flex', alignItems:'center', gap:4 }}>
-                    <span style={{ color:'var(--text-secondary)' }}>NT${((c.costMetrics?.totalCostUSD ?? 0) * 32).toFixed(2)}</span>
-                    <span style={{ color:'var(--text-muted)' }}>累計花費</span>
-                  </div>
-                )}
-
-                {/* ── Footer ── */}
+                {/* Footer */}
                 <div style={{
                   display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                  paddingTop: 14,
-                  borderTop: '1px solid var(--border-soft)',
+                  paddingTop: 12, borderTop: '1px solid var(--border-soft)',
                 }}>
                   <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                    v{c.soulVersion} · {c.updatedAt ? new Date(c.updatedAt).toLocaleDateString('zh-TW') : '—'}
+                    v{c.soulVersion}{(c.costMetrics?.totalCostUSD ?? 0) > 0 ? ` · NT$${((c.costMetrics!.totalCostUSD) * 32).toFixed(0)}` : ''}
                   </span>
-                  <div style={{ display: 'flex', gap: 6 }}>
+                  <div style={{ display: 'flex', gap: 6 }} onClick={e => e.preventDefault()}>
                     <a href={`/chat/${c.id}`}
                       onClick={e => e.stopPropagation()}
                       style={{
-                        fontSize: 12, fontWeight: 500,
-                        color: 'var(--text-secondary)',
-                        border: '1px solid var(--border)',
-                        borderRadius: 20,
-                        padding: '4px 12px',
-                        background: 'var(--surface)',
-                        transition: 'border-color 0.15s, color 0.15s',
+                        fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)',
+                        border: '1px solid var(--border)', borderRadius: 20,
+                        padding: '4px 12px', background: 'var(--surface)',
+                        textDecoration: 'none', transition: 'border-color 0.15s, color 0.15s',
                       }}
                       onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--text-primary)'; e.currentTarget.style.color = 'var(--text-primary)'; }}
                       onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.color = 'var(--text-secondary)'; }}
@@ -252,11 +178,10 @@ export default function DashboardPage() {
                     <a href={`/voice/${c.id}`} target="_blank" rel="noopener noreferrer"
                       onClick={e => e.stopPropagation()}
                       style={{
-                        fontSize: 12, fontWeight: 500,
-                        color: '#fff',
-                        background: 'var(--text-primary)',
-                        borderRadius: 20,
-                        padding: '4px 12px',
+                        fontSize: 12, fontWeight: 500, color: '#fff',
+                        background: 'var(--text-primary)', borderRadius: 20,
+                        padding: '4px 12px', textDecoration: 'none',
+                        display: 'inline-flex', alignItems: 'center', gap: 4,
                         transition: 'opacity 0.15s',
                       }}
                       onMouseEnter={e => (e.currentTarget.style.opacity = '0.8')}
@@ -265,17 +190,18 @@ export default function DashboardPage() {
                     <a href={`/realtime/${c.id}`} target="_blank" rel="noopener noreferrer"
                       onClick={e => e.stopPropagation()}
                       style={{
-                        fontSize: 12, fontWeight: 500,
-                        color: '#fff',
-                        background: '#C2410C',
-                        borderRadius: 20,
-                        padding: '4px 12px',
-                        display: 'inline-flex', alignItems: 'center', gap: 5,
+                        fontSize: 12, fontWeight: 500, color: '#fff',
+                        background: '#C2410C', borderRadius: 20,
+                        padding: '4px 12px', textDecoration: 'none',
+                        display: 'inline-flex', alignItems: 'center', gap: 4,
                         transition: 'opacity 0.15s',
                       }}
                       onMouseEnter={e => (e.currentTarget.style.opacity = '0.85')}
                       onMouseLeave={e => (e.currentTarget.style.opacity = '1')}
-                    ><IconLive /> 即時</a>
+                    >
+                      <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#fff', display: 'inline-block' }} />
+                      即時
+                    </a>
                   </div>
                 </div>
               </div>
