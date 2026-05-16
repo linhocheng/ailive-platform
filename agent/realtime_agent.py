@@ -509,21 +509,8 @@ async def entrypoint(ctx: JobContext):
             f"2-3 分鐘內完成，策略書 docx 出現在 dashboard「策略書」頁面可下載。繼續陪用戶聊。"
         )
 
-    # 語音專用補丁：interjection tags 指引
-    # 這段只附加在語音 session，不影響文字 dialogue。
-    # speech-02-turbo 支援的 8 種：laughs / sighs / coughs / clears throat / gasps / sniffs / groans / yawns
-    VOICE_INTERJECTION_NOTE = (
-        "\n\n== 語音表達補充 ==\n"
-        "你現在在進行即時語音通話。以下感嘆詞標籤會讓你的聲音更自然，適時使用：\n"
-        "(laughs) 笑出來  (sighs) 嘆氣  (groans) 低鳴/無奈  (gasps) 驚訝吸氣\n"
-        "(sniffs) 輕嗅  (coughs) 咳嗽  (yawns) 打哈欠  (clears throat) 清喉嚨\n"
-        "直接寫在回應文字裡，例如：「真的嗎(gasps)，那你後來怎麼了？」\n"
-        "不要刻意，只有真的符合情境才用。"
-    )
-    voice_prompt = system_prompt + VOICE_INTERJECTION_NOTE
-
-    agent = Agent(instructions=voice_prompt, tools=[dispatch_research, commission_specialist])
-    logger.info(f"Agent initialized with {char_name} soul, prompt={len(voice_prompt)} chars")
+    agent = Agent(instructions=system_prompt, tools=[dispatch_research, commission_specialist])
+    logger.info(f"Agent initialized with {char_name} soul, prompt={len(system_prompt)} chars")
 
     session = AgentSession(
         stt=stt,
