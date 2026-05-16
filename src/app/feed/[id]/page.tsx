@@ -204,11 +204,11 @@ export default function FeedPage() {
   // Load published posts once unlocked
   useEffect(() => {
     if (!id || !unlocked) return;
-    fetch(`/api/posts?characterId=${id}&status=published&limit=50`)
+    fetch(`/api/posts?characterId=${id}&limit=50`)
       .then(r => r.json())
       .then(data => {
-        const published = (data.posts || []).filter((p: Post) => p.status === 'published');
-        setPosts(published);
+        const visible = (data.posts || []).filter((p: Post) => p.status !== 'rejected');
+        setPosts(visible);
       });
   }, [id, unlocked]);
 
