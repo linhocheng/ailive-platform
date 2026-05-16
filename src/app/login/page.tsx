@@ -31,27 +31,85 @@ function LoginForm() {
   }
 
   return (
-    <div className='flex min-h-screen items-center justify-center bg-[#F5F4F1] p-6'>
-      <div className='w-full max-w-xs rounded-2xl bg-white p-8 shadow-sm'>
-        <div className='mb-6'>
-          <div className='text-lg font-semibold tracking-tight'>AILIVE</div>
-          <div className='text-sm text-gray-400'>請輸入密碼</div>
+    <div style={{
+      minHeight: '100vh',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      background: 'var(--bg)',
+      padding: '24px',
+      fontFamily: 'var(--font-sans, "DM Sans", system-ui, sans-serif)',
+    }}>
+      <div style={{
+        width: '100%',
+        maxWidth: '360px',
+        background: 'var(--surface)',
+        border: '1px solid var(--border)',
+        borderRadius: '20px',
+        padding: '40px 36px',
+        boxShadow: '0 2px 0 rgba(26,25,22,0.04), 0 12px 40px -12px rgba(26,25,22,0.10)',
+      }}>
+        <div style={{ marginBottom: '28px' }}>
+          <div style={{
+            fontSize: '18px',
+            fontWeight: 600,
+            letterSpacing: '-0.01em',
+            color: 'var(--text-primary)',
+            marginBottom: '6px',
+          }}>
+            AILIVE
+          </div>
+          <div style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
+            請輸入密碼繼續
+          </div>
         </div>
-        <form onSubmit={onSubmit} className='flex flex-col gap-3'>
+
+        <form onSubmit={onSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
           <input
-            type='password'
+            type="password"
             autoFocus
-            placeholder='密碼'
+            placeholder="密碼"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             disabled={pending}
-            className='w-full rounded-lg border border-gray-200 px-4 py-2.5 text-sm outline-none focus:border-gray-400'
+            style={{
+              width: '100%',
+              border: '1.5px solid var(--border)',
+              borderRadius: '10px',
+              padding: '10px 14px',
+              fontSize: '14px',
+              fontFamily: 'inherit',
+              background: 'var(--surface)',
+              color: 'var(--text-primary)',
+              outline: 'none',
+              boxSizing: 'border-box',
+              transition: 'border-color 0.15s',
+            }}
+            onFocus={e => (e.target.style.borderColor = 'var(--accent)')}
+            onBlur={e => (e.target.style.borderColor = 'var(--border)')}
           />
-          {error && <div className='text-sm text-red-500'>{error}</div>}
+
+          {error && (
+            <div style={{ fontSize: '12.5px', color: '#C0392B' }}>{error}</div>
+          )}
+
           <button
-            type='submit'
+            type="submit"
             disabled={pending || !password}
-            className='w-full rounded-lg bg-gray-900 py-2.5 text-sm font-medium text-white disabled:opacity-40'
+            style={{
+              width: '100%',
+              background: 'var(--text-primary)',
+              color: '#fff',
+              border: 'none',
+              borderRadius: '10px',
+              padding: '11px',
+              fontSize: '13.5px',
+              fontWeight: 600,
+              fontFamily: 'inherit',
+              cursor: pending || !password ? 'default' : 'pointer',
+              opacity: pending || !password ? 0.4 : 1,
+              transition: 'opacity 0.15s',
+            }}
           >
             {pending ? '驗證中…' : '進入'}
           </button>

@@ -151,6 +151,33 @@
 .client-v2 .voice-btn .voice-meta { flex: 1; }
 .client-v2 .voice-btn .voice-meta small { display: block; color: rgba(255,255,255,0.55); font-size: 11px; letter-spacing: 0.04em; margin-top: 1px; }
 
+.client-v2 .feed-link-btn {
+  margin: 8px 24px 0;
+  padding: 10px 14px;
+  background: transparent;
+  border: 1.5px solid var(--line);
+  color: var(--ink-2);
+  border-radius: var(--r);
+  display: flex; align-items: center; gap: 10px;
+  font-size: 13px; font-weight: 500; letter-spacing: 0.02em;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.client-v2 .feed-link-btn:hover {
+  background: var(--bg-2);
+  border-color: var(--ink-3);
+  color: var(--ink);
+}
+.client-v2 .feed-link-btn .feed-link-icon {
+  width: 28px; height: 28px; border-radius: 50%;
+  background: var(--bg-2);
+  display: grid; place-items: center; flex-shrink: 0;
+}
+.client-v2 .feed-link-btn .feed-link-meta { flex: 1; }
+.client-v2 .feed-link-btn .feed-link-meta small {
+  display: block; color: var(--ink-3); font-size: 11px;
+  letter-spacing: 0.04em; margin-top: 1px;
+}
+
 .client-v2 .nav { padding: 20px 14px 14px; flex: 1; }
 .client-v2 .nav-label {
   font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase;

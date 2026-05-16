@@ -1026,6 +1026,20 @@ export default function ClientPage() {
             </div>
           </a>
 
+          <a
+            href={`/feed/${charId}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="feed-link-btn"
+            style={{ textDecoration: 'none' }}
+          >
+            <div className="feed-link-icon"><Icon name="eye" size={14} /></div>
+            <div className="feed-link-meta">
+              公開網誌
+              <small>圖文閱讀頁</small>
+            </div>
+          </a>
+
           <nav className="nav">
             <div className="nav-label">管理功能</div>
             {NAV.map(n => (
