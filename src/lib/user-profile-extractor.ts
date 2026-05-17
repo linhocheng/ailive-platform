@@ -6,6 +6,7 @@
  * 原則：只寫「確定知道的」，不推測，不覆蓋已有值。
  */
 import Anthropic from '@anthropic-ai/sdk';
+import { getAnthropicClient } from '@/lib/anthropic-via-bridge';
 import { upsertUserProfile, loadUserProfile } from '@/lib/user-profile';
 import { upsertUserObservations, loadUserObservations } from '@/lib/user-observations';
 
@@ -26,7 +27,7 @@ export async function autoExtractUserProfile(
   }
 
   try {
-    const client = new Anthropic({ apiKey });
+    const client = getAnthropicClient(apiKey);
     const resp = await client.messages.create({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 400,
