@@ -220,7 +220,6 @@ async def entrypoint(ctx: JobContext):
         model="nova-2",
         language="zh",
         interim_results=True,
-        diarize=True,
         api_key=deepgram_key,
     )
 
