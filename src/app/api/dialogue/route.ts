@@ -1908,7 +1908,7 @@ ${convData.userProfile ? `【我認識這個人】\n${convData.userProfile}\n\n`
           // 觸發時機：第 6 輪首次出現 → 之後每 8 輪刷一次
           // 不在每輪打，避免 Haiku 成本累積；不等「結束」，因為 dialogue 沒有結束信號
           // 與 voice-end / voice-stream 共用 extractSessionSummary lib
-          const shouldUpdateLastSession = newCount === 6 || (newCount > 6 && newCount % 8 === 0);
+          const shouldUpdateLastSession = newCount === 3 || (newCount > 3 && newCount % 8 === 0);
           if (shouldUpdateLastSession) {
             void (async () => {
               try {
