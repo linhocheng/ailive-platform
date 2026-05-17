@@ -54,6 +54,7 @@ from agent.firestore_loader import (
 from agent.promise_reflection import reflect_and_mark_fulfilled
 from agent.user_profile import load_user_profile, format_profile_block
 from agent.user_observations import load_user_observations, format_observations_block
+from agent.voice_identifier import VoiceIdentifier, extract_voice_embedding, TARGET_AUDIO_SAMPLES
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("ailive-realtime")
@@ -157,8 +158,50 @@ async def entrypoint(ctx: JobContext):
     await ctx.connect()
     logger.info("Connected to room, waiting for participant...")
 
+    # ── Voice Identification setup ────────────────────────────────────────────
+    # Capture first ~3s of audio from participant → extract MFCC embedding →
+    # compare against Firestore platform_voice_prints for this character.
+    # If userId already known from metadata: store/update embedding.
+    # If userId unknown: match by voice, ask name if no match.
+    _voice_buffer: list = []
+    _voice_capture_done = asyncio.Event()
+    _voice_id_triggered = False  # guard: run identification only once per session
+
     participant = await ctx.wait_for_participant()
     logger.info(f"Participant joined: {participant.identity}")
+
+    # ── Audio capture for voice identification ────────────────────────────────
+    async def _capture_audio_from_track(track) -> None:
+        """Accumulate audio frames until TARGET_AUDIO_SAMPLES, then signal done."""
+        try:
+            from livekit.rtc import AudioStream
+            audio_stream = AudioStream(track, sample_rate=16000, num_channels=1)
+            total = 0
+            async for ev in audio_stream:
+                _voice_buffer.append(ev.frame)
+                total += ev.frame.samples_per_channel
+                if total >= TARGET_AUDIO_SAMPLES:
+                    break
+        except Exception as e:
+            logger.warning(f"[voice-id] audio capture error: {e}")
+        finally:
+            _voice_capture_done.set()
+
+    @ctx.room.on("track_subscribed")
+    def _on_track_subscribed(track, publication, rmt_participant):
+        from livekit.rtc import TrackKind
+        if (track.kind == TrackKind.KIND_AUDIO and
+                rmt_participant.identity == participant.identity):
+            logger.info("[voice-id] audio track subscribed, starting capture")
+            asyncio.ensure_future(_capture_audio_from_track(track))
+
+    # Also check if track is already published (race condition guard)
+    for pub in participant.track_publications.values():
+        from livekit.rtc import TrackKind
+        if pub.kind == TrackKind.KIND_AUDIO and pub.track is not None:
+            logger.info("[voice-id] audio track already available, starting capture")
+            asyncio.ensure_future(_capture_audio_from_track(pub.track))
+            break
 
     # Voice Activity Detection
     vad = silero.VAD.load(
@@ -177,6 +220,7 @@ async def entrypoint(ctx: JobContext):
         model="nova-2",
         language="zh",
         interim_results=True,
+        diarize=True,
         api_key=deepgram_key,
     )
 
@@ -533,11 +577,86 @@ async def entrypoint(ctx: JobContext):
         elif "TTS" in cls_name:
             _cost_tts_chars["count"] += getattr(metrics, "characters_count", 0) or 0
 
+    # ── Voice identification runner ───────────────────────────────────────────
+    voice_identifier = VoiceIdentifier(db_rt, character_id) if character_id else None
+
+    async def _run_voice_identification() -> None:
+        """
+        Runs once per session after first user utterance.
+        - userId known: store/update embedding for future sessions
+        - userId unknown: match by voice, ask name if no match
+        """
+        nonlocal _voice_id_triggered
+        if _voice_id_triggered or not voice_identifier:
+            return
+        _voice_id_triggered = True
+
+        # Wait up to 3s for audio capture to complete
+        try:
+            await asyncio.wait_for(_voice_capture_done.wait(), timeout=3.0)
+        except asyncio.TimeoutError:
+            logger.info("[voice-id] audio capture timeout, proceeding with buffered audio")
+
+        if not _voice_buffer:
+            logger.info("[voice-id] no audio buffered, skipping identification")
+            return
+
+        embedding = await asyncio.to_thread(extract_voice_embedding, _voice_buffer)
+        if embedding is None:
+            logger.info("[voice-id] embedding extraction failed or insufficient audio")
+            return
+
+        if user_id:
+            # User is already identified from app metadata — store embedding for future use
+            display_name = ""
+            try:
+                user_ref = db_rt.collection("platform_users").document(user_id).get()
+                if user_ref.exists:
+                    display_name = (user_ref.to_dict() or {}).get("displayName", "") or user_id
+                else:
+                    display_name = user_id
+            except Exception:
+                display_name = user_id
+            try:
+                await asyncio.to_thread(
+                    voice_identifier.store_embedding, user_id, display_name, embedding
+                )
+                logger.info(f"[voice-id] embedding stored for known user={user_id}")
+            except Exception as e:
+                logger.warning(f"[voice-id] store failed: {e}")
+        else:
+            # User unknown — try to match by voice
+            matched_uid, matched_name, similarity = await asyncio.to_thread(
+                voice_identifier.find_best_match, embedding
+            )
+            logger.info(f"[voice-id] match result: uid={matched_uid} name={matched_name} sim={similarity:.3f}")
+            if matched_uid and matched_name:
+                try:
+                    await session.generate_reply(
+                        instructions=(
+                            f"你聽出來了，這是 {matched_name} 的聲音。"
+                            "用一句自然的話歡迎他，像是老朋友重逢，不要說「我識別出你的聲音」。"
+                        ),
+                    )
+                except Exception as e:
+                    logger.warning(f"[voice-id] proactive greeting failed: {e}")
+            else:
+                # No match — ask for name naturally (only if no initial greeting already triggered one)
+                try:
+                    await session.generate_reply(
+                        instructions=(
+                            "你不認識這個聲音。自然地問一句：你是誰？用角色本人的口氣問，不要像客服。"
+                        ),
+                    )
+                except Exception as e:
+                    logger.warning(f"[voice-id] ask-name greeting failed: {e}")
+
     # Phase 5：收集本次通話的 transcript（user + assistant）→ 通話結束寫回 Firestore
     transcript: list = []
 
     @session.on("conversation_item_added")
     def _on_item_added(event):
+        nonlocal _voice_id_triggered
         item = getattr(event, "item", None)
         if not item:
             return
@@ -551,6 +670,9 @@ async def entrypoint(ctx: JobContext):
                 "content": text.strip(),
                 "timestamp": time.time(),
             })
+        # Trigger voice identification on first user utterance
+        if role == "user" and not _voice_id_triggered:
+            asyncio.ensure_future(_run_voice_identification())
 
     @ctx.room.on("disconnected")
     def on_disconnected():
