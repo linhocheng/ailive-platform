@@ -20,6 +20,7 @@ import { generateEmbedding } from '@/lib/embeddings';
 import { redis } from '@/lib/redis';
 import { extractSessionSummary } from '@/lib/session-summary';
 import { reflectAndMarkFulfilled } from '@/lib/promise-reflection';
+import { autoExtractUserProfile } from '@/lib/user-profile-extractor';
 
 export const maxDuration = 60;
 
@@ -157,11 +158,22 @@ ${dialogueText}`,
       }
     }
 
+    // ── user profile 自動提取 ──
+    let profileResult = null;
+    if (userId) {
+      try {
+        profileResult = await autoExtractUserProfile(dialogueText, userId, characterId, process.env.ANTHROPIC_API_KEY || '');
+      } catch (e) {
+        console.warn('dialogue-end autoExtractUserProfile failed:', e);
+      }
+    }
+
     return NextResponse.json({
       success: true,
       insights: savedInsights.length,
       sessionSummary: sessionSummary ? true : hasExistingLastSession ? 'already_existed' : false,
       reflectionStats,
+      profileResult,
       message: [
         savedInsights.length > 0 ? `沉澱 ${savedInsights.length} 條記憶` : null,
         sessionSummary?.summary ? '寫入 lastSession' : null,

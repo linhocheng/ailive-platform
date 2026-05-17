@@ -49,6 +49,7 @@ from agent.firestore_loader import (
     extract_session_summary,
     build_system_prompt,
     extract_and_save_insights,
+    auto_extract_user_profile,
 )
 from agent.promise_reflection import reflect_and_mark_fulfilled
 from agent.user_profile import load_user_profile, format_profile_block
@@ -654,6 +655,20 @@ async def entrypoint(ctx: JobContext):
                         logger.info(f"promise-reflection: {ref_stats}")
                     except Exception as e:
                         logger.warning(f"promise-reflection failed: {e}")
+
+                # user profile 自動提取
+                if user_id:
+                    try:
+                        profile_stats = auto_extract_user_profile(
+                            transcript=transcript,
+                            user_id=user_id,
+                            character_id=character_id,
+                            api_key=anthropic_key,
+                        )
+                        logger.info(f"user-profile-extract: {profile_stats}")
+                    except Exception as e:
+                        logger.warning(f"auto_extract_user_profile failed: {e}")
+
             except Exception as e:
                 logger.error(f"save_conversation failed: {e}")
         else:

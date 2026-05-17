@@ -13,6 +13,7 @@ import { generateEmbedding } from '@/lib/embeddings';
 import { redis } from '@/lib/redis';
 import { extractSessionSummary } from '@/lib/session-summary';
 import { reflectAndMarkFulfilled } from '@/lib/promise-reflection';
+import { autoExtractUserProfile } from '@/lib/user-profile-extractor';
 
 export const maxDuration = 60;
 
@@ -132,12 +133,23 @@ ${dialogueText}`,
       } catch (e) { console.warn('reflectAndMarkFulfilled failed:', e); }
     }
 
+    // ── user profile 自動提取 ──
+    let profileResult = null;
+    if (userId) {
+      try {
+        profileResult = await autoExtractUserProfile(dialogueText, userId, characterId, process.env.ANTHROPIC_API_KEY || '');
+      } catch (e) {
+        console.warn('voice-end autoExtractUserProfile failed:', e);
+      }
+    }
+
     return NextResponse.json({
       success: true,
       insights,
       sessionSummary,
       saved: saved.length,
       reflection: reflectionStats,
+      profileResult,
       message: `已沉澱 ${saved.length} 條記憶${sessionSummary ? '、寫入 lastSession' : ''}${reflectionStats?.marked ? `、自動標 ${reflectionStats.marked} 條已兌現` : ''}`,
     });
   } catch (e: unknown) {
