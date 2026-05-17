@@ -38,11 +38,16 @@ export async function loadEpisodicBlock(
     const allFiltered = recentSnap.docs
       .map(d => ({ ...d.data(), id: d.id } as Record<string, unknown>))
       .filter((d: Record<string, unknown>) => {
-        // Cross-user leak 防護：帶 userId 的只給該用戶看
+        // Cross-user leak 防護：
+        // 1. 帶不同 userId 的 → 跳過
         if (d.userId && d.userId !== userId) return false;
+        // 2. identity 記憶（角色自知）→ 全局可見，但要非 archive
         if (d.tier === 'archive') return false;
         const mType = String(d.memoryType || '');
         if (mType === 'identity') return true;
+        // 3. 非 identity 且 userId=None：只有當前 userId 也為空時才帶入
+        //    避免 sleep_time/self_awareness 裡的他人名字（Polina/小艺）污染其他用戶
+        if (!d.userId && userId) return false;
         if (mType === 'knowledge') return false;
         return IDENTITY_SOURCES.has(String(d.source || ''));
       });

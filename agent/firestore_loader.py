@@ -238,13 +238,24 @@ def load_episodic_block(character_id: str, user_id: str | None) -> str:
             data = d.to_dict() or {}
             data["id"] = d.id
             uid = data.get("userId")
+            # 嚴格 user 隔離：
+            # - 帶有不同 userId 的 → 跳過
+            # - userId=None 的非 identity 記憶 → 可能包含其他用戶的對話內容，僅在
+            #   current user_id 也為 None/空（匿名場景無 userId）時才帶入
+            #   避免 sleep_time/self_awareness 裡的他人名字污染當前對話
             if uid and uid != user_id:
-                continue
-            if data.get("tier") == "archive":
                 continue
             mtype = str(data.get("memoryType") or "")
             if mtype == "identity":
-                all_filtered.append(data)
+                # identity 記憶（角色自我認知）→ 全局可見
+                if data.get("tier") != "archive":
+                    all_filtered.append(data)
+                continue
+            # 非 identity 的 userId=None 記憶：只有在當前 user_id 為空時才帶入
+            # 這樣避免 Polina/小艺 等他人上下文出現在新用戶的 episodic block
+            if not uid and user_id:
+                continue
+            if data.get("tier") == "archive":
                 continue
             if mtype == "knowledge":
                 continue
