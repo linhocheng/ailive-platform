@@ -655,3 +655,84 @@ def build_system_prompt(
             )
 
     return "\n".join(parts)
+
+
+def extract_and_save_insights(
+    transcript: list,
+    character_id: str,
+    conv_id: str,
+    api_key: str,
+) -> dict:
+    """通話結束後補跑 insight 提煉，寫入 platform_insights。
+    對齊 voice-end/route.ts 的邏輯（Python 版）。
+    """
+    if not api_key or len(transcript) < 2:
+        return {"saved": 0, "skipped": "too_short_or_no_key"}
+
+    try:
+        import anthropic as anthropic_sdk
+        client = anthropic_sdk.Anthropic(api_key=api_key)
+
+        dialogue_text = "\n".join(
+            f"{'用戶' if m.get('role') == 'user' else '角色'}：{(m.get('content') or '')[:150]}"
+            for m in transcript[-20:]
+        )
+
+        resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            messages=[{
+                "role": "user",
+                "content": (
+                    "以下是一段即時語音對話記錄，請提煉出 1-2 條值得角色記住的洞察。\n"
+                    "重點：用戶說了什麼重要的事？角色感受到了什麼？這次對話有什麼值得記住的？\n\n"
+                    "用 JSON 陣列回傳：[{\"title\":\"...\",\"content\":\"...\",\"importance\":1-3}]\n"
+                    "importance: 1=普通/2=重要/3=深刻\n"
+                    "只回傳 JSON，不要其他文字。\n\n"
+                    f"對話：\n{dialogue_text}"
+                ),
+            }],
+        )
+
+        raw = resp.content[0].text.strip()
+        cleaned = raw.replace("```json", "").replace("```", "").strip()
+        insights = json.loads(cleaned)
+
+        _ensure_init()
+        db = firestore.client()
+        today = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
+        saved = []
+
+        for ins in insights:
+            title = str(ins.get("title", ""))
+            content = str(ins.get("content", ""))
+            importance = int(ins.get("importance", 2))
+            if not title or not content:
+                continue
+            ref = db.collection("platform_insights").add({
+                "characterId": character_id,
+                "title": title,
+                "content": content,
+                "importance": importance,
+                "source": "realtime_conversation",
+                "eventDate": today,
+                "tier": "fresh",
+                "hitCount": 2 if importance >= 3 else 0,
+                "lastHitAt": None,
+                "conversationId": conv_id,
+                "createdAt": datetime.now(timezone.utc).isoformat(),
+            })
+            saved.append(ref[1].id)
+
+        if saved:
+            db.collection("platform_characters").document(character_id).update({
+                "growthMetrics.totalInsights": firestore.Increment(len(saved)),
+                "updatedAt": firestore.SERVER_TIMESTAMP,
+            })
+
+        logger.info(f"extract_and_save_insights: saved {len(saved)} insights for {character_id}")
+        return {"saved": len(saved), "ids": saved}
+
+    except Exception as e:
+        logger.error(f"extract_and_save_insights failed: {e}")
+        return {"saved": 0, "error": str(e)}

@@ -48,6 +48,7 @@ from agent.firestore_loader import (
     save_conversation,
     extract_session_summary,
     build_system_prompt,
+    extract_and_save_insights,
 )
 from agent.promise_reflection import reflect_and_mark_fulfilled
 from agent.user_profile import load_user_profile, format_profile_block
@@ -624,6 +625,18 @@ async def entrypoint(ctx: JobContext):
                     last_session=last_session,
                 )
                 logger.info(f"Saved to {conv_id}: {stats}")
+
+                # insight 提煉 — 補上文字/語音管道已有的記憶沉澱
+                try:
+                    insight_stats = extract_and_save_insights(
+                        transcript=transcript,
+                        character_id=character_id,
+                        conv_id=conv_id,
+                        api_key=anthropic_key,
+                    )
+                    logger.info(f"insights: {insight_stats}")
+                except Exception as e:
+                    logger.warning(f"extract_and_save_insights failed: {e}")
 
                 # B2.4：promise-reflection — 自動標記哪些 unfulfilled actions 被兌現
                 if user_id:
