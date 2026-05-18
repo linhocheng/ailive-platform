@@ -10,6 +10,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getFirestore } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
+import type * as FirebaseFirestore from 'firebase-admin/firestore';
 import { generateEmbedding, cosineSimilarity } from '@/lib/embeddings';
 
 export async function GET(req: NextRequest) {
@@ -53,11 +54,12 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ insights: results, query: q });
     }
 
-    // 列表
-    const snap = await db.collection('platform_insights')
-      .where('characterId', '==', characterId)
-      .limit(limit)
-      .get();
+    // 列表（可選 userId 過濾）
+    const userId = req.nextUrl.searchParams.get('userId');
+    let query = db.collection('platform_insights')
+      .where('characterId', '==', characterId) as FirebaseFirestore.Query;
+    if (userId) query = query.where('userId', '==', userId);
+    const snap = await query.limit(limit).get();
 
     const insights = snap.docs
       .map(d => { const data = d.data(); delete data.embedding; return { id: d.id, ...data } as Record<string, unknown>; })
@@ -108,13 +110,14 @@ export async function POST(req: NextRequest) {
 export async function PATCH(req: NextRequest) {
   try {
     const db = getFirestore();
-    const { id, hitCount, tier, content } = await req.json();
+    const { id, hitCount, tier, content, title } = await req.json();
 
     if (!id) return NextResponse.json({ error: 'id 必填' }, { status: 400 });
 
     const updates: Record<string, unknown> = { updatedAt: new Date().toISOString() };
     if (hitCount !== undefined) updates.hitCount = hitCount;
     if (tier !== undefined) updates.tier = tier;
+    if (title !== undefined) updates.title = title;
     if (content !== undefined) {
       updates.content = content;
       updates.embedding = await generateEmbedding(content);
