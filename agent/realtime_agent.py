@@ -582,8 +582,12 @@ async def entrypoint(ctx: JobContext):
     async def _run_voice_identification() -> None:
         """
         Runs once per session after first user utterance.
-        - userId known: store/update embedding for future sessions
-        - userId unknown: match by voice, ask name if no match
+        Flow:
+        1. Always try voice matching first (regardless of userId)
+        2. Match found & different userId → proactive "I know this voice" greeting
+        3. Match found & same userId → silent update (already know)
+        4. No match + userId set → store embedding silently for future sessions
+        5. No match + no userId → ask for name
         """
         nonlocal _voice_id_triggered
         if _voice_id_triggered or not voice_identifier:
@@ -605,50 +609,64 @@ async def entrypoint(ctx: JobContext):
             logger.info("[voice-id] embedding extraction failed or insufficient audio")
             return
 
-        if user_id:
-            # User is already identified from app metadata — store embedding for future use
-            display_name = ""
-            try:
-                user_ref = db_rt.collection("platform_users").document(user_id).get()
-                if user_ref.exists:
-                    display_name = (user_ref.to_dict() or {}).get("displayName", "") or user_id
-                else:
-                    display_name = user_id
-            except Exception:
-                display_name = user_id
-            try:
-                await asyncio.to_thread(
-                    voice_identifier.store_embedding, user_id, display_name, embedding
-                )
-                logger.info(f"[voice-id] embedding stored for known user={user_id}")
-            except Exception as e:
-                logger.warning(f"[voice-id] store failed: {e}")
-        else:
-            # User unknown — try to match by voice
-            matched_uid, matched_name, similarity = await asyncio.to_thread(
-                voice_identifier.find_best_match, embedding
-            )
-            logger.info(f"[voice-id] match result: uid={matched_uid} name={matched_name} sim={similarity:.3f}")
-            if matched_uid and matched_name:
+        # Always try voice matching first — catches cross-session same voice (anon userId changes each call)
+        matched_uid, matched_name, similarity = await asyncio.to_thread(
+            voice_identifier.find_best_match, embedding
+        )
+        logger.info(f"[voice-id] match result: uid={matched_uid} name={matched_name} sim={similarity:.3f} current_uid={user_id}")
+
+        if matched_uid and matched_name:
+            if matched_uid != user_id:
+                # Voice recognized, different auth session → proactive greeting
                 try:
                     await session.generate_reply(
                         instructions=(
-                            f"你聽出來了，這是 {matched_name} 的聲音。"
-                            "用一句自然的話歡迎他，像是老朋友重逢，不要說「我識別出你的聲音」。"
+                            f"你聽出來了——這個聲音是 {matched_name}。"
+                            "用一句自然的話打招呼，像老朋友聽到熟悉的聲音那樣，不要說「識別」「聲紋」這類詞。"
                         ),
                     )
+                    logger.info(f"[voice-id] proactive greeting sent for {matched_name}")
                 except Exception as e:
                     logger.warning(f"[voice-id] proactive greeting failed: {e}")
             else:
-                # No match — ask for name naturally (only if no initial greeting already triggered one)
+                # Same userId + same voice → update embedding silently
+                logger.info(f"[voice-id] same user verified by voice, updating embedding")
+
+            # Update stored embedding (fresher audio each session)
+            try:
+                display_name = matched_name
+                await asyncio.to_thread(
+                    voice_identifier.store_embedding, matched_uid, display_name, embedding
+                )
+            except Exception as e:
+                logger.warning(f"[voice-id] embedding update failed: {e}")
+
+        else:
+            # No match — new voice
+            if user_id:
+                # Store embedding with current userId for future recognition
+                display_name = user_id
+                try:
+                    user_ref = db_rt.collection("platform_users").document(user_id).get()
+                    if user_ref.exists:
+                        display_name = (user_ref.to_dict() or {}).get("displayName", "") or user_id
+                except Exception:
+                    pass
+                try:
+                    await asyncio.to_thread(
+                        voice_identifier.store_embedding, user_id, display_name, embedding
+                    )
+                    logger.info(f"[voice-id] new voice stored for user={user_id} name={display_name}")
+                except Exception as e:
+                    logger.warning(f"[voice-id] store failed: {e}")
+            else:
+                # No auth, no voice match → ask for name
                 try:
                     await session.generate_reply(
-                        instructions=(
-                            "你不認識這個聲音。自然地問一句：你是誰？用角色本人的口氣問，不要像客服。"
-                        ),
+                        instructions="你不認識這個聲音。用角色本人的口氣自然問一句：你是誰？不要像客服。",
                     )
                 except Exception as e:
-                    logger.warning(f"[voice-id] ask-name greeting failed: {e}")
+                    logger.warning(f"[voice-id] ask-name failed: {e}")
 
     # Phase 5：收集本次通話的 transcript（user + assistant）→ 通話結束寫回 Firestore
     transcript: list = []

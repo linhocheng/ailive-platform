@@ -20,7 +20,7 @@ import numpy as np
 
 logger = logging.getLogger("voice-identifier")
 
-SIMILARITY_THRESHOLD = 0.85
+SIMILARITY_THRESHOLD = 0.75  # MFCC 跨 session 跨設備，0.85 太嚴；0.75 較實際
 MIN_AUDIO_SAMPLES = 8000   # 0.5s at 16kHz
 TARGET_AUDIO_SAMPLES = 48000  # 3s at 16kHz
 
