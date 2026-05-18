@@ -35,6 +35,12 @@ load_dotenv(ROOT_DIR / ".env.local.fresh")  # 開發時用 ailive-platform 的 e
 from livekit.agents import Agent, AgentSession, JobContext, function_tool
 from livekit.plugins import silero, anthropic, deepgram
 
+# Pre-load librosa at module level（不要 lazy load：multi-thread 環境有競爭條件）
+try:
+    import librosa as _librosa_preload  # noqa: F401
+except ImportError:
+    pass
+
 # MiniMax 自訂 wrapper（江彬教訓 #6：官方 plugin 不相容 1.5.x）
 from agent.minimax_tts import MiniMaxCustomTTS
 
@@ -203,6 +209,7 @@ async def entrypoint(ctx: JobContext):
         prefix_padding_duration=0.3,
         min_speech_duration=0.1,
         activation_threshold=0.5,
+        max_buffered_speech=60.0,  # 靜音時 VAD buffer 上限 60s，防記憶體漲（Issue #2980）
     )
 
     # STT — Deepgram Nova-2（中文 language="zh"，無串流時間限制）
@@ -691,26 +698,43 @@ async def entrypoint(ctx: JobContext):
         duration = time.time() - call_start
         logger.info(f"Room disconnected after {duration:.1f}s, transcript={len(transcript)} msgs")
         # 通話結束寫回 conv（含 summary 壓縮 + P1 lastSession 快照）
+        # transcript 過長時壓縮 LLM 呼叫可能超時，用 asyncio task + timeout 保護
+        if transcript and conv_id and character_id:
+            asyncio.ensure_future(_save_session_async())
+
+    async def _save_session_async():
+        """on_disconnected 的 async 版本，加 90s timeout 防止拖垮 process。"""
+        SAVE_TIMEOUT = 90
+        try:
+            await asyncio.wait_for(_do_save_session(), timeout=SAVE_TIMEOUT)
+        except asyncio.TimeoutError:
+            logger.error(f"[save] timeout after {SAVE_TIMEOUT}s, transcript={len(transcript)} msgs — raw messages preserved in Firestore")
+        except Exception as e:
+            logger.error(f"[save] unexpected error: {e}")
+
+    async def _do_save_session():
         if transcript and conv_id and character_id:
             try:
                 anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
                 # P1：抽 lastSession（Smart Greeting 用）
-                last_session = extract_session_summary(transcript, anthropic_key)
+                last_session = await asyncio.to_thread(extract_session_summary, transcript, anthropic_key)
                 if last_session:
                     logger.info(f"lastSession: {last_session}")
-                stats = save_conversation(
-                    conv_id=conv_id,
-                    character_id=character_id,
-                    user_id=user_id,
-                    new_messages=transcript,
-                    anthropic_api_key=anthropic_key,
-                    last_session=last_session,
+                stats = await asyncio.to_thread(
+                    save_conversation,
+                    conv_id,
+                    character_id,
+                    user_id,
+                    transcript,
+                    anthropic_key,
+                    last_session,
                 )
                 logger.info(f"Saved to {conv_id}: {stats}")
 
                 # insight 提煉 — 補上文字/語音管道已有的記憶沉澱
                 try:
-                    insight_stats = extract_and_save_insights(
+                    insight_stats = await asyncio.to_thread(
+                        extract_and_save_insights,
                         transcript=transcript,
                         character_id=character_id,
                         conv_id=conv_id,
@@ -727,7 +751,8 @@ async def entrypoint(ctx: JobContext):
                             f"{'用戶' if m.get('role') == 'user' else '角色'}：{(m.get('content') or '')[:300]}"
                             for m in transcript
                         )
-                        ref_stats = reflect_and_mark_fulfilled(
+                        ref_stats = await asyncio.to_thread(
+                            reflect_and_mark_fulfilled,
                             character_id=character_id,
                             user_id=user_id,
                             transcript=transcript_text,
@@ -740,7 +765,8 @@ async def entrypoint(ctx: JobContext):
                 # user profile 自動提取
                 if user_id:
                     try:
-                        profile_stats = auto_extract_user_profile(
+                        profile_stats = await asyncio.to_thread(
+                            auto_extract_user_profile,
                             transcript=transcript,
                             user_id=user_id,
                             character_id=character_id,
@@ -777,7 +803,7 @@ async def entrypoint(ctx: JobContext):
                 expires_at = datetime.fromtimestamp(now_ts.timestamp() + 90 * 86400, tz=_tz.utc)
 
                 if _cost_llm["input"] > 0 or _cost_llm["output"] > 0:
-                    db_rt.collection("zhu_vitals_cost").add({
+                    llm_doc = {
                         "call_id": str(uuid.uuid4()),
                         "timestamp": now_ts,
                         "project": "ailive-platform",
@@ -791,11 +817,12 @@ async def entrypoint(ctx: JobContext):
                         "output_tokens": _cost_llm["output"],
                         "cost_usd_est": llm_cost,
                         "expires_at": expires_at,
-                    })
+                    }
+                    await asyncio.to_thread(db_rt.collection("zhu_vitals_cost").add, llm_doc)
                     logger.info(f"[cost] LLM {_cost_llm['input']}in/{_cost_llm['output']}out ${llm_cost:.4f}")
 
                 if _cost_tts_chars["count"] > 0:
-                    db_rt.collection("zhu_vitals_cost").add({
+                    tts_doc = {
                         "call_id": str(uuid.uuid4()),
                         "timestamp": now_ts,
                         "project": "ailive-platform",
@@ -807,7 +834,8 @@ async def entrypoint(ctx: JobContext):
                         "tts_characters": _cost_tts_chars["count"],
                         "cost_usd_est": tts_cost,
                         "expires_at": expires_at,
-                    })
+                    }
+                    await asyncio.to_thread(db_rt.collection("zhu_vitals_cost").add, tts_doc)
                     logger.info(f"[cost] TTS {_cost_tts_chars['count']} chars ${tts_cost:.4f}")
             except Exception as e:
                 logger.error(f"[cost] write failed: {e}")
