@@ -52,7 +52,6 @@ from agent.firestore_loader import (
     auto_extract_user_profile,
 )
 from agent.promise_reflection import reflect_and_mark_fulfilled
-from agent.user_profile import load_user_profile, format_profile_block
 from agent.user_observations import load_user_observations, format_observations_block
 from agent.voice_identifier import VoiceIdentifier, extract_voice_embedding, TARGET_AUDIO_SAMPLES
 
@@ -120,15 +119,10 @@ async def entrypoint(ctx: JobContext):
                 episodic_block = load_episodic_block(character_id, user_id)
             except Exception as e:
                 logger.warning(f"load_episodic_block failed: {e}")
-            # B3：UserProfile（事實 global）+ UserObservations（觀察 per-pair）
-            profile_block = ""
+            # B3：UserObservations（per-character-user 觀察）
+            # UserProfile（platform_users 全局）已移除 — 避免跨角色用戶資料混入
             observations_block = ""
             if user_id:
-                try:
-                    profile = load_user_profile(user_id)
-                    profile_block = format_profile_block(profile)
-                except Exception as e:
-                    logger.warning(f"load_user_profile failed: {e}")
                 try:
                     obs = load_user_observations(character_id, user_id)
                     observations_block = format_observations_block(obs, char_ctx.name)
@@ -138,7 +132,7 @@ async def entrypoint(ctx: JobContext):
                 char_ctx, conv_ctx,
                 actions=actions,
                 episodic_block=episodic_block,
-                profile_block=profile_block,
+                profile_block="",
                 observations_block=observations_block,
             )
             char_name = char_ctx.name
@@ -605,6 +599,7 @@ async def entrypoint(ctx: JobContext):
             return
 
         embedding = await asyncio.to_thread(extract_voice_embedding, _voice_buffer)
+        _voice_buffer.clear()  # PCM 用完即清，embedding 已在 Firestore
         if embedding is None:
             logger.info("[voice-id] embedding extraction failed or insufficient audio")
             return
