@@ -1,19 +1,34 @@
 /**
  * /api/user-observations — platform_user_observations CRUD
  *
- * GET  ?characterId=xxx&userId=yyy  → 讀取觀察
+ * GET  ?characterId=xxx&listUsers=1  → 列出該角色所有有資料的 userId
+ * GET  ?characterId=xxx&userId=yyy   → 讀取觀察
  * PATCH { characterId, userId, personality, preferences, inferredInterests, notes } → 更新
  */
 import { NextRequest, NextResponse } from 'next/server';
+import { getFirestore } from '@/lib/firebase-admin';
 import { loadUserObservations, upsertUserObservations } from '@/lib/user-observations';
 
 export async function GET(req: NextRequest) {
   try {
     const characterId = req.nextUrl.searchParams.get('characterId');
-    const userId = req.nextUrl.searchParams.get('userId');
-    if (!characterId || !userId) {
-      return NextResponse.json({ error: 'characterId, userId 必填' }, { status: 400 });
+    if (!characterId) return NextResponse.json({ error: 'characterId 必填' }, { status: 400 });
+
+    // listUsers：列出所有有 user_observations 的 userId
+    if (req.nextUrl.searchParams.get('listUsers') === '1') {
+      const db = getFirestore();
+      const snap = await db.collection('platform_user_observations')
+        .where('characterId', '==', characterId)
+        .get();
+      const users = snap.docs.map(d => {
+        const data = d.data();
+        return { userId: data.userId as string, updatedAt: data.updatedAt as string | undefined };
+      }).filter(u => u.userId);
+      return NextResponse.json({ users });
     }
+
+    const userId = req.nextUrl.searchParams.get('userId');
+    if (!userId) return NextResponse.json({ error: 'userId 必填' }, { status: 400 });
     const obs = await loadUserObservations(characterId, userId);
     return NextResponse.json({ observations: obs });
   } catch (e: unknown) {

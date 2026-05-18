@@ -54,7 +54,8 @@ export default function MemoryPage() {
   const [filter, setFilter] = useState('all');
 
   // 用戶記憶
-  const [myUserId, setMyUserId] = useState('');
+  const [availableUsers, setAvailableUsers] = useState<{ userId: string; updatedAt?: string }[]>([]);
+  const [selectedUserId, setSelectedUserId] = useState('');
   const [userItems, setUserItems] = useState<Insight[]>([]);
   const [userLoading, setUserLoading] = useState(false);
   const [obs, setObs] = useState<UserObservations>({});
@@ -101,26 +102,44 @@ export default function MemoryPage() {
   useEffect(() => {
     loadChar();
     fetch(`/api/characters/${id}`).then(r => r.json()).then(d => { setCharName(d.character?.name || ''); });
-    const uid = typeof window !== 'undefined' ? (localStorage.getItem('ailive_realtime_anon_uid') || '') : '';
-    setMyUserId(uid);
   }, [id]);
 
+  // tab 切到 user 時，拉可用的 userId 清單
   useEffect(() => {
-    if (tab === 'user' && myUserId) {
-      loadUser(myUserId);
-      loadObs(myUserId);
+    if (tab !== 'user') return;
+    fetch(`/api/user-observations?characterId=${id}&listUsers=1`)
+      .then(r => r.json())
+      .then(d => {
+        const users: { userId: string; updatedAt?: string }[] = d.users || [];
+        setAvailableUsers(users);
+        // 預選：localStorage 有且在清單裡就選它，否則選第一個
+        const localUid = typeof window !== 'undefined' ? (localStorage.getItem('ailive_realtime_anon_uid') || '') : '';
+        const match = users.find(u => u.userId === localUid);
+        const defaultUid = match ? localUid : (users[0]?.userId || '');
+        if (defaultUid && !selectedUserId) {
+          setSelectedUserId(defaultUid);
+        }
+      });
+  }, [tab, id]);
+
+  // selectedUserId 變了就載資料
+  useEffect(() => {
+    if (tab === 'user' && selectedUserId) {
+      loadUser(selectedUserId);
+      loadObs(selectedUserId);
+      setObsEditing(false);
     }
-  }, [tab, myUserId]);
+  }, [selectedUserId, tab]);
 
   const del = async (insightId: string) => {
     if (!confirm('確定刪除？')) return;
     await fetch(`/api/insights?id=${insightId}`, { method: 'DELETE' });
-    tab === 'char' ? loadChar() : loadUser(myUserId);
+    tab === 'char' ? loadChar() : loadUser(selectedUserId);
   };
 
   const promote = async (insightId: string, tier: string) => {
     await fetch('/api/insights', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: insightId, tier }) });
-    tab === 'char' ? loadChar() : loadUser(myUserId);
+    tab === 'char' ? loadChar() : loadUser(selectedUserId);
   };
 
   const startEdit = (item: Insight) => {
@@ -137,7 +156,7 @@ export default function MemoryPage() {
     });
     setEditingId(null);
     setEditSaving(false);
-    tab === 'char' ? loadChar() : loadUser(myUserId);
+    tab === 'char' ? loadChar() : loadUser(selectedUserId);
   };
 
   const saveObs = async () => {
@@ -153,7 +172,7 @@ export default function MemoryPage() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         characterId: id,
-        userId: myUserId,
+        userId: selectedUserId,
         personality: obsDraft.personality,
         preferences: prefsRaw,
         inferredInterests: interestsRaw,
@@ -162,7 +181,7 @@ export default function MemoryPage() {
     });
     setObsSaving(false);
     setObsEditing(false);
-    loadObs(myUserId);
+    loadObs(selectedUserId);
   };
 
   const filtered = filter === 'all' ? items : items.filter(i => i.tier === filter);
@@ -259,13 +278,24 @@ export default function MemoryPage() {
       {/* 對你的認識 tab */}
       {tab === 'user' && (
         <>
-          {!myUserId ? (
+          {availableUsers.length === 0 ? (
             <div style={{ color: '#999', padding: 32, textAlign: 'center', border: '2px dashed #e0e0e0', borderRadius: 12 }}>
-              找不到你的用戶 ID。請先在即時語音頁面開啟一次對話，ID 會自動建立。
+              這個角色還沒有任何用戶記憶。對話幾次後會自動累積。
             </div>
           ) : (
             <>
-              <div style={{ fontSize: 11, color: '#bbb', marginBottom: 20 }}>用戶 ID：{myUserId}</div>
+              {/* 用戶選擇器 */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20, padding: '10px 14px', background: '#f8f9fa', borderRadius: 8, border: '1px solid #e0e0e0' }}>
+                <span style={{ fontSize: 12, color: '#666', whiteSpace: 'nowrap' }}>查看用戶：</span>
+                <select value={selectedUserId} onChange={e => setSelectedUserId(e.target.value)}
+                  style={{ flex: 1, border: '1px solid #ddd', borderRadius: 4, padding: '4px 8px', fontSize: 12, background: '#fff', color: '#333' }}>
+                  {availableUsers.map(u => (
+                    <option key={u.userId} value={u.userId}>
+                      {u.userId}{u.updatedAt ? `  （最後更新 ${u.updatedAt.slice(0, 10)}）` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
 
               {/* 觀察區塊 */}
               <div style={{ background: '#f8f9fa', border: '1px solid #e0e0e0', borderRadius: 10, padding: 20, marginBottom: 24 }}>
