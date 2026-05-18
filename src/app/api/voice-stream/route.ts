@@ -39,7 +39,7 @@ import { buildTimeRulesBlock } from '@/lib/time-rules';
 import { loadUserProfile, upsertUserProfile, formatProfileBlock } from '@/lib/user-profile';
 import { loadUserObservations, upsertUserObservations, formatObservationsBlock } from '@/lib/user-observations';
 
-export const maxDuration = 120;
+export const maxDuration = 200;
 
 // ===== 句子切割 =====
 // 切句末標點（。！？!?\n），不切逗號，避免短碎片造成語氣不自然
@@ -1116,8 +1116,11 @@ ${recentMessages}` }],
         // 追蹤語音費用（Claude Sonnet streaming）
         try {
           const finalMsg = await claudeStream.finalMessage();
+          console.log(`[voice-stream] cost track: char=${characterId} in=${finalMsg.usage?.input_tokens} out=${finalMsg.usage?.output_tokens}`);
           await trackCost(characterId, 'claude-sonnet-4-6', finalMsg.usage?.input_tokens ?? 0, finalMsg.usage?.output_tokens ?? 0, 'voice-stream');
-        } catch { /* 不阻斷 */ }
+        } catch (e) {
+          console.error('[voice-stream] cost track failed:', characterId, e instanceof Error ? e.message : String(e));
+        }
 
         // ── Session State 更新（async，語音結束後才跑）──
         if (((convData.messageCount as number) || 0) + 2 >= 4) {

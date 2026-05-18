@@ -109,8 +109,8 @@ export async function trackCost(
         expires_at:    expiresAt(COST_TTL_DAYS),
       }),
     ]);
-  } catch {
-    // 費用追蹤失敗不阻斷主流程
+  } catch (e) {
+    console.error('[cost-tracker] write failed:', characterId, purpose, e instanceof Error ? e.message : String(e));
   }
 }
 

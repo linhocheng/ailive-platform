@@ -78,7 +78,7 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const db = getFirestore();
-    const { characterId, title, content, source, eventDate } = await req.json();
+    const { characterId, title, content, source, eventDate, userId, tier } = await req.json();
 
     if (!characterId || !content) {
       return NextResponse.json({ error: 'characterId, content 必填' }, { status: 400 });
@@ -88,18 +88,21 @@ export async function POST(req: NextRequest) {
     const now = new Date().toISOString();
     const today = now.slice(0, 10);
 
-    const docRef = await db.collection('platform_insights').add({
+    const doc: Record<string, unknown> = {
       characterId,
       title: title || '',
       content,
       source: source || 'manual',
       eventDate: eventDate || today,
-      tier: 'fresh',
-      hitCount: 0,          // ← 天條：初始值必須是 0
+      tier: tier || 'fresh',
+      hitCount: 0,
       lastHitAt: null,
       embedding,
       createdAt: now,
-    });
+    };
+    if (userId) doc.userId = userId;
+
+    const docRef = await db.collection('platform_insights').add(doc);
 
     return NextResponse.json({ success: true, id: docRef.id });
   } catch (e: unknown) {

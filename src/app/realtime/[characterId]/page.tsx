@@ -96,6 +96,7 @@ export default function RealtimeCallPage() {
   const roomRef = useRef<Room | null>(null);
   const audioElRef = useRef<HTMLAudioElement | null>(null);
   const callStartRef = useRef<number>(0);
+  const voiceEndFiredRef = useRef(false);
   const micAnalyserRef = useRef<{ ctx: AudioContext; analyser: AnalyserNode; raf: number } | null>(null);
   const agentAnalyserRef = useRef<{ ctx: AudioContext; analyser: AnalyserNode } | null>(null);
   const micLevelRef = useRef(0);
@@ -339,6 +340,14 @@ export default function RealtimeCallPage() {
   };
 
   const handleDisconnect = async () => {
+    if (!voiceEndFiredRef.current) {
+      voiceEndFiredRef.current = true;
+      await fetch('/api/voice-end', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ characterId, conversationId: `voice-${characterId}-${userId}` }),
+      }).catch((e) => console.error('[voice-end] failed:', e));
+    }
     if (roomRef.current) { await roomRef.current.disconnect(); roomRef.current = null; }
     stopMicMonitor();
     setState('disconnected'); setFlowForState('disconnected'); setElapsed(0); setMicMuted(false);
@@ -351,7 +360,17 @@ export default function RealtimeCallPage() {
     setMicMuted(next);
   }, [micMuted]);
 
-  useEffect(() => () => { if (roomRef.current) void roomRef.current.disconnect(); stopMicMonitor(); }, []);
+  useEffect(() => () => {
+    if (!voiceEndFiredRef.current && roomRef.current) {
+      voiceEndFiredRef.current = true;
+      navigator.sendBeacon('/api/voice-end', new Blob(
+        [JSON.stringify({ characterId, conversationId: `voice-${characterId}-${userId}` })],
+        { type: 'application/json' }
+      ));
+    }
+    if (roomRef.current) void roomRef.current.disconnect();
+    stopMicMonitor();
+  }, []);
 
   // 載入角色名
   useEffect(() => {

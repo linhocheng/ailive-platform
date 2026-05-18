@@ -64,6 +64,11 @@ export default function MemoryPage() {
   const [obsEditing, setObsEditing] = useState(false);
   const [obsDraft, setObsDraft] = useState<UserObservations>({});
 
+  // 新增記憶
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [addDraft, setAddDraft] = useState({ title: '', content: '', tier: 'fresh' });
+  const [addSaving, setAddSaving] = useState(false);
+
   // 編輯記憶
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState({ title: '', content: '' });
@@ -184,6 +189,63 @@ export default function MemoryPage() {
     loadObs(selectedUserId);
   };
 
+  const addInsight = async (forUserId?: string) => {
+    if (!addDraft.content.trim()) return;
+    setAddSaving(true);
+    const body: Record<string, unknown> = {
+      characterId: id,
+      title: addDraft.title,
+      content: addDraft.content,
+      tier: addDraft.tier,
+      source: 'manual',
+    };
+    if (forUserId) body.userId = forUserId;
+    await fetch('/api/insights', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    setAddDraft({ title: '', content: '', tier: 'fresh' });
+    setShowAddForm(false);
+    setAddSaving(false);
+    forUserId ? loadUser(forUserId) : loadChar();
+  };
+
+  const AddForm = ({ forUserId }: { forUserId?: string }) => (
+    <div style={{ background: '#f0f4ff', border: '1px solid #c5cae9', borderRadius: 10, padding: 16, marginBottom: 16 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <input
+          placeholder="標題（選填）"
+          value={addDraft.title}
+          onChange={e => setAddDraft(d => ({ ...d, title: e.target.value }))}
+          style={{ border: '1px solid #ccc', borderRadius: 4, padding: '6px 10px', fontSize: 13, boxSizing: 'border-box' }}
+        />
+        <textarea
+          placeholder="記憶內容（必填）"
+          value={addDraft.content}
+          onChange={e => setAddDraft(d => ({ ...d, content: e.target.value }))}
+          style={{ border: '1px solid #ccc', borderRadius: 4, padding: '6px 10px', fontSize: 13, minHeight: 80, boxSizing: 'border-box', resize: 'vertical' }}
+        />
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <select
+            value={addDraft.tier}
+            onChange={e => setAddDraft(d => ({ ...d, tier: e.target.value }))}
+            style={{ border: '1px solid #ccc', borderRadius: 4, padding: '4px 8px', fontSize: 12 }}
+          >
+            <option value="fresh">新鮮</option>
+            <option value="core">核心</option>
+          </select>
+          <button onClick={() => addInsight(forUserId)} disabled={addSaving || !addDraft.content.trim()}
+            style={{ background: '#1a1a2e', color: '#fff', border: 'none', borderRadius: 4, padding: '6px 16px', cursor: 'pointer', fontSize: 13 }}>
+            {addSaving ? '儲存中...' : '儲存'}
+          </button>
+          <button onClick={() => { setShowAddForm(false); setAddDraft({ title: '', content: '', tier: 'fresh' }); }}
+            style={{ background: 'none', border: '1px solid #ccc', borderRadius: 4, padding: '6px 12px', cursor: 'pointer', fontSize: 13 }}>取消</button>
+        </div>
+      </div>
+    </div>
+  );
+
   const filtered = filter === 'all' ? items : items.filter(i => i.tier === filter);
 
   const InsightCard = ({ item, showInject }: { item: Insight; showInject?: boolean }) => {
@@ -266,8 +328,13 @@ export default function MemoryPage() {
                   {t === 'all' ? '全部' : TIER_LABELS[t]}
                 </button>
               ))}
+              <button onClick={() => setShowAddForm(v => !v)}
+                style={{ padding: '5px 14px', border: '1px solid #3f51b5', borderRadius: 20, background: showAddForm ? '#3f51b5' : '#fff', color: showAddForm ? '#fff' : '#3f51b5', cursor: 'pointer', fontSize: 12 }}>
+                + 新增
+              </button>
             </div>
           </div>
+          {showAddForm && <AddForm />}
           {loading ? <div style={{ color: '#999' }}>載入中...</div> : filtered.length === 0
             ? <div style={{ color: '#bbb', textAlign: 'center', padding: 40, border: '2px dashed #e0e0e0', borderRadius: 12 }}>沒有記憶</div>
             : filtered.map(item => <InsightCard key={item.id} item={item} />)
@@ -360,7 +427,12 @@ export default function MemoryPage() {
               {/* 用戶記憶列表 */}
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
                 <h4 style={{ margin: 0, fontSize: 14, color: '#1a1a2e' }}>對你的記憶 {userLoading ? '' : `（${userItems.length} 條）`}</h4>
+                <button onClick={() => setShowAddForm(v => !v)}
+                  style={{ padding: '4px 12px', border: '1px solid #3f51b5', borderRadius: 20, background: showAddForm ? '#3f51b5' : '#fff', color: showAddForm ? '#fff' : '#3f51b5', cursor: 'pointer', fontSize: 12 }}>
+                  + 新增
+                </button>
               </div>
+              {showAddForm && <AddForm forUserId={selectedUserId} />}
               {userLoading ? <div style={{ color: '#999', fontSize: 13 }}>載入中...</div>
                 : userItems.length === 0
                   ? <div style={{ color: '#bbb', textAlign: 'center', padding: 32, border: '2px dashed #e0e0e0', borderRadius: 12, fontSize: 13 }}>
