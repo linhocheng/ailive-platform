@@ -163,7 +163,8 @@ const PLATFORM_TOOLS: Anthropic.Tool[] = [
 
 specialist 選擇：
 - painter（瞬）：圖、視覺作品、攝影、海報
-- strategist（奧）：>2000 字長文檔——規劃書／提案／策略書／市場分析／白皮書／企劃書／研究報告，產出可下載 docx
+- strategist（奧）：>2000 字長文檔——規劃書／提案／策略書／市場分析／白皮書／企劃書／研究報告／廣告創意／品牌策略，產出可下載 docx
+- philosopher（佐格）：哲學探索／思辨論述／人生提問／觀念深挖／價值思考，輸出散文式長文，產出可下載 docx
 
 呼叫紀律（重要）：
 - **決定派就直接呼叫，不要預告**。不要說「等我請奧寫」「我準備派給瞬」之後才呼叫。直接呼叫，然後在 reply 裡向用戶說明已派出。
@@ -176,8 +177,8 @@ specialist 選擇：
       properties: {
         specialist: {
           type: 'string',
-          enum: ['painter', 'strategist'],
-          description: 'painter=瞬（圖）｜strategist=奧（長文 docx）',
+          enum: ['painter', 'strategist', 'philosopher'],
+          description: 'painter=瞬（圖）｜strategist=奧（策略/商業長文 docx）｜philosopher=佐格（哲學/思辨長文 docx）',
         },
         brief: {
           type: 'string',
@@ -530,6 +531,7 @@ async function executeTool(
       painter:    { id: 'shun-001',              jobType: 'image',    name: '瞬', etaText: '1-2 分鐘' },
       strategist: { id: 'pEWC5m2MOddyGe9uw0u0',  jobType: 'strategy', name: '奧', etaText: '2-3 分鐘' },
       researcher: { id: 'dQHkL6vvhmKlNho8dA1L',  jobType: 'research', name: '索', etaText: '30-90 秒' },
+      philosopher: { id: 'aZxrUgUI5bPkwv24SHBe', jobType: 'strategy', name: '佐格', etaText: '3-5 分鐘' },
     };
     const specialistKey = String(toolInput.specialist || 'painter');
     const sp = SPECIALIST_MAP[specialistKey];
