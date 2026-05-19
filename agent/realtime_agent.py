@@ -485,12 +485,20 @@ async def entrypoint(ctx: JobContext):
         asyncio.ensure_future(_run_research(job_id, question, context))
         return f"RESEARCH_PENDING:{job_id}"
 
+    REALTIME_SPECIALIST_MAP = {
+        "strategist": {"id": "pEWC5m2MOddyGe9uw0u0", "name": "奧", "eta": "2-3 分鐘"},
+        "philosopher": {"id": "aZxrUgUI5bPkwv24SHBe", "name": "佐格", "eta": "3-5 分鐘"},
+    }
+
     @function_tool(
         name="commission_specialist",
         description=(
-            "把長任務委託給奧（策略師），非同步執行，docx 完成後出現在 dashboard。\n\n"
-            "適用場景：用戶要 >2000 字正式長文檔——規劃書、提案、策略書、市場分析、"
-            "白皮書、企劃書、研究報告；產出可下載 docx。\n\n"
+            "把長任務委託給專門角色，非同步執行，docx 完成後出現在 dashboard。\n\n"
+            "specialist 選擇：\n"
+            "- strategist（奧）：>2000 字正式長文檔——規劃書、提案、策略書、市場分析、"
+            "白皮書、企劃書、研究報告、廣告創意、品牌策略；產出可下載 docx。\n"
+            "- philosopher（佐格）：哲學探索、思辨論述、人生提問、觀念深挖、價值思考；"
+            "散文式長文，產出可下載 docx。\n\n"
             "呼叫紀律：\n"
             "- 決定派就直接呼叫，不要預告。決定後直接呼叫，工具回來再跟用戶說明。\n"
             "- 需要確認條件 → 一輪內問完，條件齊了那輪立刻呼叫，不要再文字整理一次。\n"
@@ -499,15 +507,16 @@ async def entrypoint(ctx: JobContext):
     )
     async def commission_specialist(brief: str, specialist: str = "strategist") -> str:  # type: ignore[misc]
         """
-        brief: 給奧的工作簡報（用戶要規劃什麼、為何、給誰看、特殊要求）
-        specialist: 目前即時語音只支援 strategist（奧）
+        brief: 給 specialist 的工作簡報
+        specialist: 'strategist'（奧，策略/商業長文）或 'philosopher'（佐格，哲學/思辨長文）
         """
         if not brief:
-            return "需要 brief 才能委託奧。"
-        if specialist != "strategist":
-            return f"⚠️ 即時語音目前只支援 strategist（奧），不支援 {specialist}。"
+            return "需要 brief 才能委託。"
+        sp = REALTIME_SPECIALIST_MAP.get(specialist)
+        if not sp:
+            return f"⚠️ 未知 specialist: {specialist}，請用 strategist 或 philosopher。"
 
-        assignee_id = "pEWC5m2MOddyGe9uw0u0"  # 奧
+        assignee_id = sp["id"]
 
         def _create_strategy_job():
             return db_rt.collection("platform_jobs").add({
@@ -526,7 +535,7 @@ async def entrypoint(ctx: JobContext):
 
         job_ref = await asyncio.to_thread(_create_strategy_job)
         job_id = job_ref[1].id
-        logger.info(f"[commission] strategy job={job_id[:8]} created, enqueuing...")
+        logger.info(f"[commission] {specialist} job={job_id[:8]} created, enqueuing...")
 
         try:
             await asyncio.to_thread(_sync_enqueue_strategy, job_id)
@@ -545,8 +554,8 @@ async def entrypoint(ctx: JobContext):
 
         short_id = job_id[:8]
         return (
-            f"JOB_PENDING:{job_id}:已委託奧，工作編號 {short_id}。"
-            f"2-3 分鐘內完成，策略書 docx 出現在 dashboard「策略書」頁面可下載。繼續陪用戶聊。"
+            f"JOB_PENDING:{job_id}:已委託{sp['name']}，工作編號 {short_id}。"
+            f"{sp['eta']}內完成，docx 出現在 dashboard「策略書」頁面可下載。繼續陪用戶聊。"
         )
 
     agent = Agent(instructions=system_prompt, tools=[dispatch_research, commission_specialist])
