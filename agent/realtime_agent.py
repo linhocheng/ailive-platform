@@ -498,7 +498,8 @@ async def entrypoint(ctx: JobContext):
             "- strategist（奧）：>2000 字正式長文檔——規劃書、提案、策略書、市場分析、"
             "白皮書、企劃書、研究報告、廣告創意、品牌策略；產出可下載 docx。\n"
             "- philosopher（佐格）：哲學探索、思辨論述、人生提問、觀念深挖、價值思考；"
-            "散文式長文，產出可下載 docx。\n\n"
+            "散文式長文，產出可下載 docx。\n"
+            "- self（你自己）：你本人親自執筆，用你自己的靈魂與風格寫長文；產出可下載 docx。\n\n"
             "呼叫紀律：\n"
             "- 決定派就直接呼叫，不要預告。決定後直接呼叫，工具回來再跟用戶說明。\n"
             "- 需要確認條件 → 一輪內問完，條件齊了那輪立刻呼叫，不要再文字整理一次。\n"
@@ -508,13 +509,16 @@ async def entrypoint(ctx: JobContext):
     async def commission_specialist(brief: str, specialist: str = "strategist") -> str:  # type: ignore[misc]
         """
         brief: 給 specialist 的工作簡報
-        specialist: 'strategist'（奧，策略/商業長文）或 'philosopher'（佐格，哲學/思辨長文）
+        specialist: 'strategist'（奧）/ 'philosopher'（佐格）/ 'self'（你本人執筆）
         """
         if not brief:
             return "需要 brief 才能委託。"
         sp = REALTIME_SPECIALIST_MAP.get(specialist)
+        # self-commission：角色親自執筆
+        if sp is None and specialist == "self":
+            sp = {"id": character_id, "name": char_name, "eta": "3-5 分鐘"}
         if not sp:
-            return f"⚠️ 未知 specialist: {specialist}，請用 strategist 或 philosopher。"
+            return f"⚠️ 未知 specialist: {specialist}，請用 strategist、philosopher 或 self。"
 
         assignee_id = sp["id"]
 

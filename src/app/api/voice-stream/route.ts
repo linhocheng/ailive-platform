@@ -365,6 +365,8 @@ ${timeRulesBlock}`;
 specialist 選擇：
 - painter（瞬）：圖、視覺、海報
 - strategist（奧）：>2000 字長文檔——規劃書／提案／策略書／市場分析／白皮書／企劃書／研究報告，產出可下載 docx
+- philosopher（佐格）：哲學探索／思辨論述／人生提問／觀念深挖，散文式長文，產出可下載 docx
+- self（你自己）：你本人親自執筆，用你自己的靈魂與風格寫長文，產出可下載 docx
 
 呼叫紀律（重要）：
 - **決定派就直接呼叫，不要預告**。不要說「等我請奧寫」「我準備派給瞬」之後才呼叫。直接呼叫，然後在 reply 裡向用戶說明。
@@ -375,7 +377,7 @@ specialist 選擇：
             input_schema: {
               type: 'object' as const,
               properties: {
-                specialist: { type: 'string', enum: ['painter', 'strategist'], description: 'painter=瞬（圖）｜strategist=奧（長文 docx）' },
+                specialist: { type: 'string', enum: ['painter', 'strategist', 'philosopher', 'self'], description: 'painter=瞬（圖）｜strategist=奧（策略長文 docx）｜philosopher=佐格（哲學長文 docx）｜self=你本人執筆' },
                 brief: { type: 'string', description: '給 specialist 的工作 brief。painter：畫面、氛圍、用途；strategist：用戶要規劃什麼、為何、給誰看、特殊要求。' },
                 refs: {
                   type: 'array',
@@ -669,15 +671,24 @@ specialist 選擇：
             });
           }
 
-          // ── commission_specialist ── 派 painter（瞬）/ strategist（奧）非同步
+          // ── commission_specialist ── 派 painter / strategist / philosopher / self 非同步
           if (toolName === 'commission_specialist') {
             const SPECIALIST_MAP: Record<string, { id: string; jobType: 'image' | 'strategy' | 'research'; name: string; etaText: string }> = {
-              painter:    { id: 'shun-001',              jobType: 'image',    name: '瞬', etaText: '1-2 分鐘' },
-              strategist: { id: 'pEWC5m2MOddyGe9uw0u0',  jobType: 'strategy', name: '奧', etaText: '2-3 分鐘' },
-              researcher: { id: 'dQHkL6vvhmKlNho8dA1L',  jobType: 'research', name: '索', etaText: '30-90 秒' },
+              painter:    { id: 'shun-001',              jobType: 'image',    name: '瞬',  etaText: '1-2 分鐘' },
+              strategist: { id: 'pEWC5m2MOddyGe9uw0u0',  jobType: 'strategy', name: '奧',  etaText: '2-3 分鐘' },
+              researcher: { id: 'dQHkL6vvhmKlNho8dA1L',  jobType: 'research', name: '索',  etaText: '30-90 秒' },
+              philosopher: { id: 'aZxrUgUI5bPkwv24SHBe', jobType: 'strategy', name: '佐格', etaText: '3-5 分鐘' },
             };
             const specialistKey = String(toolInput.specialist || 'painter');
-            const sp = SPECIALIST_MAP[specialistKey];
+            let sp = SPECIALIST_MAP[specialistKey];
+
+            // self-commission：角色親自執筆
+            if (!sp && specialistKey === 'self') {
+              const selfDoc = await db.collection('platform_characters').doc(characterId).get();
+              const selfName = selfDoc.exists ? String(selfDoc.data()?.name || '我') : '我';
+              sp = { id: characterId, jobType: 'strategy', name: selfName, etaText: '3-5 分鐘' };
+            }
+
             if (!sp) return `⚠️ 找不到 specialist: ${specialistKey}`;
 
             const brief = String(toolInput.brief || '');

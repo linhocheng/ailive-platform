@@ -266,10 +266,11 @@ export async function POST(req: NextRequest) {
     if (!apiKey) throw new Error('ANTHROPIC_API_KEY missing');
     const anthropic = getAnthropicClient(apiKey);
 
-    // 4. 階段 1：caller 把對話脈絡濃縮成 brief
+    // 4. 階段 1：caller 把對話脈絡濃縮成 brief（自派跳過：caller == assignee 無意義）
+    const isSelfCommission = callerCharacterId === assigneeId;
     let refinedBrief = brief.prompt;
     let stage1Tokens = { input: 0, output: 0 };
-    if (callerSoul) {
+    if (callerSoul && !isSelfCommission) {
       const recentText = recentMessages
         .map(m => `${m.role === 'user' ? '用戶' : (callerName || '我')}：${m.content}`)
         .join('\n');

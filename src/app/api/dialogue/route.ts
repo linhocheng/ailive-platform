@@ -109,6 +109,8 @@ const COMMISSION_DISCIPLINE_BLOCK = `
 你有 specialist 可以調度：
 - painter（瞬）：圖、攝影、視覺作品
 - strategist（奧）：>2000 字長文檔——規劃書／提案／策略書／市場分析／白皮書／企劃書／研究報告，產出可下載 docx
+- philosopher（佐格）：哲學探索／思辨論述／人生提問／觀念深挖，散文式長文，產出可下載 docx
+- self（你自己）：用你自己的靈魂與筆法親自執筆，輸出你風格的長文 docx
 
 派工硬規則（覆蓋你的對話節奏偏好）：
 1. 用戶要正式長文檔 / 視覺作品 → 走 commission_specialist。短回應、口頭意見、一兩段文字 → 你自己回，不用派。
@@ -165,6 +167,7 @@ specialist 選擇：
 - painter（瞬）：圖、視覺作品、攝影、海報
 - strategist（奧）：>2000 字長文檔——規劃書／提案／策略書／市場分析／白皮書／企劃書／研究報告／廣告創意／品牌策略，產出可下載 docx
 - philosopher（佐格）：哲學探索／思辨論述／人生提問／觀念深挖／價值思考，輸出散文式長文，產出可下載 docx
+- self（你自己）：你本人親自執筆，用你自己的靈魂與風格寫長文，產出可下載 docx
 
 呼叫紀律（重要）：
 - **決定派就直接呼叫，不要預告**。不要說「等我請奧寫」「我準備派給瞬」之後才呼叫。直接呼叫，然後在 reply 裡向用戶說明已派出。
@@ -177,8 +180,8 @@ specialist 選擇：
       properties: {
         specialist: {
           type: 'string',
-          enum: ['painter', 'strategist', 'philosopher'],
-          description: 'painter=瞬（圖）｜strategist=奧（策略/商業長文 docx）｜philosopher=佐格（哲學/思辨長文 docx）',
+          enum: ['painter', 'strategist', 'philosopher', 'self'],
+          description: 'painter=瞬（圖）｜strategist=奧（策略/商業長文 docx）｜philosopher=佐格（哲學/思辨長文 docx）｜self=你本人執筆',
         },
         brief: {
           type: 'string',
@@ -534,7 +537,16 @@ async function executeTool(
       philosopher: { id: 'aZxrUgUI5bPkwv24SHBe', jobType: 'strategy', name: '佐格', etaText: '3-5 分鐘' },
     };
     const specialistKey = String(toolInput.specialist || 'painter');
-    const sp = SPECIALIST_MAP[specialistKey];
+    let sp = SPECIALIST_MAP[specialistKey];
+
+    // self-commission：角色親自執筆，動態從 Firestore 取自己的名字
+    if (!sp && specialistKey === 'self') {
+      const db0 = getFirestore();
+      const selfDoc = await db0.collection('platform_characters').doc(characterId).get();
+      const selfName = selfDoc.exists ? String(selfDoc.data()?.name || '我') : '我';
+      sp = { id: characterId, jobType: 'strategy', name: selfName, etaText: '3-5 分鐘' };
+    }
+
     if (!sp) return `⚠️ 找不到 specialist: ${specialistKey}`;
 
     const brief = String(toolInput.brief || '');
