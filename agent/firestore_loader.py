@@ -818,7 +818,7 @@ def auto_extract_user_profile(
                     profile_updates[k] = v
             if profile_updates:
                 db.collection("platform_user_profiles").document(user_id).set(
-                    {**profile_updates, "updatedAt": firestore.SERVER_TIMESTAMP}, merge=True
+                    {**profile_updates, "updatedAt": datetime.now(timezone.utc).isoformat()}, merge=True
                 )
 
         # observations
@@ -840,7 +840,7 @@ def auto_extract_user_profile(
             if obs_updates:
                 db.collection("platform_user_observations").document(obs_id).set(
                     {**obs_updates, "characterId": character_id, "userId": user_id,
-                     "updatedAt": firestore.SERVER_TIMESTAMP}, merge=True
+                     "updatedAt": datetime.now(timezone.utc).isoformat()}, merge=True
                 )
 
         logger.info(f"auto_extract_user_profile: profile={profile_updates}, obs={obs_updates}")
