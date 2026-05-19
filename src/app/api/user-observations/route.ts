@@ -22,7 +22,12 @@ export async function GET(req: NextRequest) {
         .get();
       const users = snap.docs.map(d => {
         const data = d.data();
-        return { userId: data.userId as string, updatedAt: data.updatedAt as string | undefined };
+        const raw = data.updatedAt;
+        const updatedAt: string | undefined =
+          raw && typeof raw === 'object' && 'toDate' in raw
+            ? (raw as { toDate(): Date }).toDate().toISOString()
+            : typeof raw === 'string' ? raw : undefined;
+        return { userId: data.userId as string, updatedAt };
       }).filter(u => u.userId);
       return NextResponse.json({ users });
     }
