@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 const AUTH_COOKIE = 'ailive-auth';
-const PUBLIC_PREFIXES = ['/api/', '/login', '/_next/', '/favicon', '/icon-', '/apple-touch', '/sw.js', '/manifest', '/design-x'];
+const PUBLIC_PREFIXES = ['/api/', '/login', '/_next/', '/favicon', '/icon-', '/apple-touch', '/sw.js', '/manifest', '/design-x', '/client/'];
 
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
