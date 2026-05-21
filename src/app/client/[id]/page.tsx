@@ -543,8 +543,12 @@ function KnowledgeScreen({ charId }: { charId: string }) {
   const [clearing, setClearing] = useState<string | null>(null);
   const [uploadStatus, setUploadStatus] = useState<'idle' | 'uploading' | 'parsing' | 'done' | 'error'>('idle');
   const [uploadMsg, setUploadMsg] = useState('');
-  const [mode, setMode] = useState<'file' | 'manual'>('file');
+  const [mode, setMode] = useState<'file' | 'image' | 'manual'>('file');
+  const [imgTitle, setImgTitle] = useState('');
+  const [imgUploading, setImgUploading] = useState(false);
+  const [imgResult, setImgResult] = useState<{ ok: boolean; msg: string } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const imgInputRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -591,6 +595,42 @@ function KnowledgeScreen({ charId }: { charId: string }) {
     } catch (e: unknown) {
       setUploadStatus('error'); setUploadMsg(e instanceof Error ? e.message : String(e));
     } finally { if (fileInputRef.current) fileInputRef.current.value = ''; }
+  };
+
+  const uploadImage = (file: File) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result as string;
+      const img = new window.Image();
+      img.onload = async () => {
+        const MAX = 1600;
+        let { width, height } = img;
+        if (width > MAX || height > MAX) {
+          if (width > height) { height = Math.round(height * MAX / width); width = MAX; }
+          else { width = Math.round(width * MAX / height); height = MAX; }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = width; canvas.height = height;
+        canvas.getContext('2d')!.drawImage(img, 0, 0, width, height);
+        const compressed = canvas.toDataURL('image/jpeg', 0.88);
+        const base64 = compressed.split(',')[1];
+        setImgUploading(true); setImgResult(null);
+        try {
+          const res = await fetch('/api/knowledge-image', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ characterId: charId, title: imgTitle || file.name.replace(/\.[^.]+$/, ''), base64, mimeType: 'image/jpeg' }),
+          });
+          const data = await res.json();
+          if (data.success) { setImgResult({ ok: true, msg: '圖片已加入知識庫' }); setImgTitle(''); load(); }
+          else throw new Error(data.error || '上傳失敗');
+        } catch (e: unknown) {
+          setImgResult({ ok: false, msg: e instanceof Error ? e.message : '上傳失敗' });
+        } finally { setImgUploading(false); if (imgInputRef.current) imgInputRef.current.value = ''; }
+      };
+      img.src = dataUrl;
+    };
+    reader.readAsDataURL(file);
   };
 
   const isUploading = uploadStatus === 'uploading' || uploadStatus === 'parsing';
@@ -666,6 +706,7 @@ function KnowledgeScreen({ charId }: { charId: string }) {
             </div>
             <div className="k-uploader-tabs">
               <button className={`k-uploader-tab${mode === 'file' ? ' active' : ''}`} onClick={() => setMode('file')}>上傳文件</button>
+              <button className={`k-uploader-tab${mode === 'image' ? ' active' : ''}`} onClick={() => setMode('image')}>上傳圖片</button>
               <button className={`k-uploader-tab${mode === 'manual' ? ' active' : ''}`} onClick={() => setMode('manual')}>手動輸入</button>
             </div>
             <div className="k-uploader-body">
@@ -682,6 +723,17 @@ function KnowledgeScreen({ charId }: { charId: string }) {
                   </div>
                   {uploadStatus === 'done' && <div style={{ marginTop: 8, padding: '8px 12px', background: 'var(--green-soft)', borderRadius: 'var(--r-sm)', fontSize: 12, color: 'var(--green)' }}>{uploadMsg}</div>}
                   {uploadStatus === 'error' && <div style={{ marginTop: 8, padding: '8px 12px', background: 'var(--red-soft)', borderRadius: 'var(--r-sm)', fontSize: 12, color: 'var(--red)' }}>{uploadMsg}</div>}
+                </>
+              ) : mode === 'image' ? (
+                <>
+                  <input ref={imgInputRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) uploadImage(f); }} />
+                  <div className="field"><label className="field-label">圖片名稱（選填）</label><input className="input" value={imgTitle} onChange={e => setImgTitle(e.target.value)} placeholder="例：防曬霜正面產品圖" /></div>
+                  <div className="dropzone" onClick={() => { if (!imgUploading) { setImgResult(null); imgInputRef.current?.click(); } }}>
+                    <div className="drop-icon"><Icon name="image" size={32} /></div>
+                    <div className="drop-title">{imgUploading ? '上傳中…' : '點擊選擇圖片'}</div>
+                    <div className="drop-sub">{imgUploading ? '' : '支援 JPG、PNG、WebP，自動壓縮'}</div>
+                  </div>
+                  {imgResult && <div style={{ marginTop: 8, padding: '8px 12px', background: imgResult.ok ? 'var(--green-soft)' : 'var(--red-soft)', borderRadius: 'var(--r-sm)', fontSize: 12, color: imgResult.ok ? 'var(--green)' : 'var(--red)' }}>{imgResult.msg}</div>}
                 </>
               ) : (
                 <>
