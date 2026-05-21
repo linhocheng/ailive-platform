@@ -639,7 +639,10 @@ function KnowledgeScreen({ charId }: { charId: string }) {
               ) : (
                 items.map(item => (
                   <div key={item.id} className="k-row">
-                    <div className="k-icon"><Icon name="doc" size={15} /></div>
+                    {item.category === 'image' && item.imageUrl
+                      ? <div className="k-thumb"><img src={item.imageUrl} alt="" /></div>
+                      : <div className="k-icon"><Icon name="doc" size={15} /></div>
+                    }
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div className="k-title">{item.title || '未命名'}</div>
                       <div className="k-meta">

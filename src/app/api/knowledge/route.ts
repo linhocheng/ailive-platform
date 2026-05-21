@@ -10,7 +10,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getFirestore } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 import { generateEmbedding, cosineSimilarity } from '@/lib/embeddings';
-import { callGemini } from '@/lib/gemini-client';
 
 export async function GET(req: NextRequest) {
   try {
@@ -92,16 +91,7 @@ export async function POST(req: NextRequest) {
       : await generateEmbedding(`${title || ''} ${cleanedContent}`.slice(0, 1000));
     const now = new Date().toISOString();
 
-    // 自動生成 summary（15字以內，常駐注入用）
-    // 天命不是說明書，一句話說清楚核心觀點
-    let summary = title || content.slice(0, 15);
-    try {
-      const geminiSummary = await callGemini(
-        `用15字以內總結以下知識的核心觀點，用第一人稱，像角色自己說的一句話：\n\n標題：${title}\n內容：${content.slice(0,200)}\n\n只輸出那句話，不要其他文字。`,
-        { maxTokens: 40 }
-      );
-      if (geminiSummary) summary = geminiSummary.slice(0, 30);
-    } catch { /* 生成失敗用 title 代替 */ }
+    const summary = (title || content).slice(0, 30);
 
     const docRef = await db.collection('platform_knowledge').add({
       characterId,
