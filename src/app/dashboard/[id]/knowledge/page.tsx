@@ -30,7 +30,12 @@ export default function KnowledgePage() {
   const [uploadMsg, setUploadMsg] = useState('');
   const [resourceStatus, setResourceStatus] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
   const [resourceMsg, setResourceMsg] = useState('');
+  const [catFilter, setCatFilter] = useState<string | null>(null);
+  const [imgTitle, setImgTitle] = useState('');
+  const [imgUploading, setImgUploading] = useState(false);
+  const [imgResult, setImgResult] = useState<{ ok: boolean; msg: string } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const imgInputRef = useRef<HTMLInputElement>(null);
 
   const load = () => {
     setLoading(true);
@@ -146,11 +151,47 @@ export default function KnowledgePage() {
     }
   };
 
+  const uploadImage = (file: File) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result as string;
+      const img = new window.Image();
+      img.onload = async () => {
+        const MAX = 1600;
+        let { width, height } = img;
+        if (width > MAX || height > MAX) {
+          if (width > height) { height = Math.round(height * MAX / width); width = MAX; }
+          else { width = Math.round(width * MAX / height); height = MAX; }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = width; canvas.height = height;
+        canvas.getContext('2d')!.drawImage(img, 0, 0, width, height);
+        const base64 = canvas.toDataURL('image/jpeg', 0.88).split(',')[1];
+        setImgUploading(true); setImgResult(null);
+        try {
+          const res = await fetch('/api/knowledge-image', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ characterId: id, title: imgTitle || file.name.replace(/\.[^.]+$/, ''), base64, mimeType: 'image/jpeg' }),
+          });
+          const data = await res.json();
+          if (data.success) { setImgResult({ ok: true, msg: '圖片已加入知識庫' }); setImgTitle(''); load(); }
+          else throw new Error(data.error || '上傳失敗');
+        } catch (e: unknown) {
+          setImgResult({ ok: false, msg: e instanceof Error ? e.message : '上傳失敗' });
+        } finally { setImgUploading(false); if (imgInputRef.current) imgInputRef.current.value = ''; }
+      };
+      img.src = dataUrl;
+    };
+    reader.readAsDataURL(file);
+  };
+
   // 統計各 category 數量
   const categoryCount = items.reduce<Record<string, number>>((acc, item) => {
     acc[item.category] = (acc[item.category] || 0) + 1;
     return acc;
   }, {});
+  const filteredItems = catFilter ? items.filter(i => i.category === catFilter) : items;
 
   const inputStyle = {
     width: '100%', border: '1px solid #e0e0e0', borderRadius: 6,
@@ -228,6 +269,31 @@ export default function KnowledgePage() {
             )}
           </div>
 
+          {/* 上傳圖片 */}
+          <div style={{ background: '#fff', border: '1px solid #e0e0e0', borderRadius: 12, padding: 20 }}>
+            <h3 style={{ margin: '0 0 6px', fontSize: 15 }}>🖼️ 上傳圖片</h3>
+            <p style={{ margin: '0 0 12px', fontSize: 12, color: '#888' }}>支援 JPG、PNG、WebP，自動壓縮後存入知識庫</p>
+            <input ref={imgInputRef} type="file" accept="image/*" style={{ display: 'none' }}
+              onChange={e => { const f = e.target.files?.[0]; if (f) uploadImage(f); }} />
+            <input value={imgTitle} onChange={e => setImgTitle(e.target.value)} placeholder="圖片名稱（選填）" style={inputStyle} />
+            <button
+              onClick={() => { setImgResult(null); imgInputRef.current?.click(); }}
+              disabled={imgUploading}
+              style={{
+                width: '100%', background: imgUploading ? '#f5f5f5' : '#f8fff8',
+                border: `2px dashed ${imgUploading ? '#ddd' : '#80c080'}`,
+                borderRadius: 8, padding: '14px 10px',
+                cursor: imgUploading ? 'default' : 'pointer',
+                fontSize: 14, color: imgUploading ? '#999' : '#2e7d32', fontWeight: 600,
+              }}
+            >
+              {imgUploading ? '⏳ 上傳中…' : '＋ 選擇圖片'}
+            </button>
+            {imgResult && (
+              <div style={{ marginTop: 10, padding: '10px 12px', background: imgResult.ok ? '#e8f5e9' : '#ffebee', borderRadius: 8, fontSize: 13, color: imgResult.ok ? '#2e7d32' : '#c00' }}>{imgResult.msg}</div>
+            )}
+          </div>
+
           {/* 手動新增 */}
           <div style={{ background: '#fff', border: '1px solid #e0e0e0', borderRadius: 12, padding: 20 }}>
             <h3 style={{ margin: '0 0 16px', fontSize: 15 }}>✏️ 手動新增</h3>
@@ -279,14 +345,26 @@ export default function KnowledgePage() {
 
         {/* 右側：列表 */}
         <div>
-          <h3 style={{ margin: '0 0 16px', color: '#1a1a2e' }}>共 {items.length} 條知識</h3>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
+            <h3 style={{ margin: 0, color: '#1a1a2e' }}>共 {items.length} 條知識</h3>
+            <button onClick={() => setCatFilter(null)}
+              style={{ fontSize: 12, padding: '3px 10px', borderRadius: 20, border: '1px solid #ddd', cursor: 'pointer', background: catFilter === null ? '#1a1a2e' : '#fff', color: catFilter === null ? '#fff' : '#555' }}>
+              全部
+            </button>
+            {Object.entries(categoryCount).map(([cat, count]) => (
+              <button key={cat} onClick={() => setCatFilter(cat)}
+                style={{ fontSize: 12, padding: '3px 10px', borderRadius: 20, border: '1px solid #ddd', cursor: 'pointer', background: catFilter === cat ? '#1a1a2e' : (catColor[cat] || '#f0f0f0'), color: catFilter === cat ? '#fff' : '#555' }}>
+                {cat} {count}
+              </button>
+            ))}
+          </div>
           {loading ? (
             <div style={{ color: '#999' }}>載入中...</div>
-          ) : items.length === 0 ? (
+          ) : filteredItems.length === 0 ? (
             <div style={{ color: '#bbb', textAlign: 'center', padding: 40, border: '2px dashed #e0e0e0', borderRadius: 12 }}>
               還沒有知識，從左側新增或上傳文件
             </div>
-          ) : items.map(item => (
+          ) : filteredItems.map(item => (
             <div key={item.id} style={{ background: '#fff', border: '1px solid #e0e0e0', borderRadius: 10, padding: 16, marginBottom: 10 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
