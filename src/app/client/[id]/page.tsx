@@ -544,6 +544,7 @@ function KnowledgeScreen({ charId }: { charId: string }) {
   const [uploadStatus, setUploadStatus] = useState<'idle' | 'uploading' | 'parsing' | 'done' | 'error'>('idle');
   const [uploadMsg, setUploadMsg] = useState('');
   const [mode, setMode] = useState<'file' | 'image' | 'manual'>('file');
+  const [catFilter, setCatFilter] = useState<string | null>(null);
   const [imgTitle, setImgTitle] = useState('');
   const [imgUploading, setImgUploading] = useState(false);
   const [imgResult, setImgResult] = useState<{ ok: boolean; msg: string } | null>(null);
@@ -636,6 +637,7 @@ function KnowledgeScreen({ charId }: { charId: string }) {
   const isUploading = uploadStatus === 'uploading' || uploadStatus === 'parsing';
   const categoryCount = items.reduce<Record<string, number>>((acc, item) => { acc[item.category] = (acc[item.category] || 0) + 1; return acc; }, {});
   const totalHits = items.reduce((sum, k) => sum + k.hitCount, 0);
+  const filteredItems = catFilter ? items.filter(i => i.category === catFilter) : items;
 
   return (
     <>
@@ -658,9 +660,9 @@ function KnowledgeScreen({ charId }: { charId: string }) {
           <div>
             <div className="post-toolbar" style={{ marginBottom: 14 }}>
               <div className="pills" style={{ flexWrap: 'wrap' }}>
-                <button className="pill active" onClick={() => {}}><span>全部</span><span className="pill-count">{items.length}</span></button>
+                <button className={`pill${catFilter === null ? ' active' : ''}`} onClick={() => setCatFilter(null)}><span>全部</span><span className="pill-count">{items.length}</span></button>
                 {Object.entries(categoryCount).map(([cat, count]) => (
-                  <button key={cat} className="pill">
+                  <button key={cat} className={`pill${catFilter === cat ? ' active' : ''}`} onClick={() => setCatFilter(cat)}>
                     <span>{cat}</span>
                     <span className="pill-count">{count}</span>
                   </button>
@@ -677,7 +679,7 @@ function KnowledgeScreen({ charId }: { charId: string }) {
               ) : items.length === 0 ? (
                 <div className="empty" style={{ border: 0 }}><div className="empty-icon"><Icon name="book" size={28} /></div><h4>還沒有知識</h4><p>從右側上傳文件或手動輸入新增。</p></div>
               ) : (
-                items.map(item => (
+                filteredItems.map(item => (
                   <div key={item.id} className="k-row">
                     {item.category === 'image' && item.imageUrl
                       ? <div className="k-thumb"><img src={item.imageUrl} alt="" /></div>
