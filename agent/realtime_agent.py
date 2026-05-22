@@ -212,14 +212,14 @@ async def entrypoint(ctx: JobContext):
         max_buffered_speech=60.0,  # 靜音時 VAD buffer 上限 60s，防記憶體漲（Issue #2980）
     )
 
-    # STT — Deepgram Nova-2（中文 language="zh"，無串流時間限制）
+    # STT — Deepgram Nova-2（detect_language=True 支援中英混用）
     deepgram_key = os.environ.get("DEEPGRAM_API_KEY", "")
     if not deepgram_key:
         logger.critical("DEEPGRAM_API_KEY missing")
         return
     stt = deepgram.STT(
         model="nova-2",
-        language="zh",
+        detect_language=True,
         interim_results=True,
         api_key=deepgram_key,
     )
