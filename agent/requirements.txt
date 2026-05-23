@@ -22,5 +22,8 @@ firebase-admin>=6.5.0
 # 環境變數
 python-dotenv>=1.0.0
 
+# 聲紋識別（voice_identifier.py — 純 numpy，無 librosa）
+numpy>=1.24.0
+
 # 其他
 httpx>=0.26.0

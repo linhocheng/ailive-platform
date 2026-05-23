@@ -655,3 +655,180 @@ def build_system_prompt(
             )
 
     return "\n".join(parts)
+
+
+def extract_and_save_insights(
+    transcript: list,
+    character_id: str,
+    conv_id: str,
+    api_key: str,
+) -> dict:
+    """通話結束後補跑 insight 提煉，寫入 platform_insights。"""
+    if not api_key or len(transcript) < 2:
+        return {"saved": 0, "skipped": "too_short_or_no_key"}
+
+    try:
+        import anthropic as anthropic_sdk
+        client = anthropic_sdk.Anthropic(api_key=api_key)
+
+        dialogue_text = "\n".join(
+            f"{'用戶' if m.get('role') == 'user' else '角色'}：{(m.get('content') or '')[:150]}"
+            for m in transcript[-20:]
+        )
+
+        resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            messages=[{
+                "role": "user",
+                "content": (
+                    "以下是一段即時語音對話記錄，請提煉出 1-2 條值得角色記住的洞察。\n"
+                    "重點：用戶說了什麼重要的事？角色感受到了什麼？這次對話有什麼值得記住的？\n\n"
+                    "用 JSON 陣列回傳：[{\"title\":\"...\",\"content\":\"...\",\"importance\":1-3}]\n"
+                    "importance: 1=普通/2=重要/3=深刻\n"
+                    "只回傳 JSON，不要其他文字。\n\n"
+                    f"對話：\n{dialogue_text}"
+                ),
+            }],
+        )
+
+        raw = resp.content[0].text.strip()
+        cleaned = raw.replace("```json", "").replace("```", "").strip()
+        insights = json.loads(cleaned)
+
+        _ensure_init()
+        db = firestore.client()
+        today = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
+        saved = []
+
+        for ins in insights:
+            title = str(ins.get("title", ""))
+            content = str(ins.get("content", ""))
+            importance = int(ins.get("importance", 2))
+            if not title or not content:
+                continue
+            ref = db.collection("platform_insights").add({
+                "characterId": character_id,
+                "title": title,
+                "content": content,
+                "importance": importance,
+                "source": "realtime_conversation",
+                "eventDate": today,
+                "tier": "fresh",
+                "hitCount": 2 if importance >= 3 else 0,
+                "lastHitAt": None,
+                "conversationId": conv_id,
+                "createdAt": datetime.now(timezone.utc).isoformat(),
+            })
+            saved.append(ref[1].id)
+
+        if saved:
+            db.collection("platform_characters").document(character_id).update({
+                "growthMetrics.totalInsights": firestore.Increment(len(saved)),
+                "updatedAt": firestore.SERVER_TIMESTAMP,
+            })
+
+        logger.info(f"extract_and_save_insights: saved {len(saved)} insights for {character_id}")
+        return {"saved": len(saved), "ids": saved}
+
+    except Exception as e:
+        logger.error(f"extract_and_save_insights failed: {e}")
+        return {"saved": 0, "error": str(e)}
+
+
+def auto_extract_user_profile(
+    transcript: list,
+    user_id: str,
+    character_id: str,
+    api_key: str,
+) -> dict:
+    """Session 結束後自動從 transcript 提取用戶事實，更新 profile + observations。"""
+    if not user_id or not api_key or len(transcript) < 2:
+        return {"profile": {}, "observations": {}, "skipped": "too_short_or_no_user"}
+
+    try:
+        import anthropic as anthropic_sdk
+        client = anthropic_sdk.Anthropic(api_key=api_key)
+
+        dialogue_text = "\n".join(
+            f"{'用戶' if m.get('role') == 'user' else '角色'}：{(m.get('content') or '')[:150]}"
+            for m in transcript[-20:]
+        )
+        if len(dialogue_text) < 50:
+            return {"profile": {}, "observations": {}, "skipped": "too_short"}
+
+        resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{
+                "role": "user",
+                "content": (
+                    "以下是一段對話記錄。請從「用戶」說的話中，提取用戶主動透露的具體事實。\n\n"
+                    "規則：\n"
+                    "- 只寫用戶明確說出的，不要推測\n"
+                    "- 沒有就留空，不要填 null 或空字串\n"
+                    "- interests / preferences 用陣列\n\n"
+                    "回傳格式（JSON，只含有值的欄位）：\n"
+                    '{"profile":{"name":"...","age":數字,"job":"...","location":"...","interests":["..."]},'
+                    '"observations":{"personality":"...","preferences":["..."],"notes":"..."}}\n\n'
+                    "只回傳 JSON，不要說明文字。\n\n"
+                    f"對話：\n{dialogue_text[:2000]}"
+                ),
+            }],
+        )
+
+        raw = resp.content[0].text.strip()
+        cleaned = raw.replace("```json", "").replace("```", "").strip()
+        parsed = json.loads(cleaned)
+
+        _ensure_init()
+        db = firestore.client()
+        profile_updates = {}
+        obs_updates = {}
+
+        profile_data = parsed.get("profile", {})
+        if profile_data:
+            existing_doc = db.collection("platform_user_profiles").document(user_id).get()
+            existing = existing_doc.to_dict() or {} if existing_doc.exists else {}
+            for k, v in profile_data.items():
+                if not v:
+                    continue
+                if k == "interests" and isinstance(v, list):
+                    existing_interests = existing.get("interests") or []
+                    new_items = [i for i in v if i not in existing_interests]
+                    if new_items:
+                        profile_updates["interests"] = (existing_interests + new_items)[-10:]
+                elif not existing.get(k):
+                    profile_updates[k] = v
+            if profile_updates:
+                db.collection("platform_user_profiles").document(user_id).set(
+                    {**profile_updates, "updatedAt": firestore.SERVER_TIMESTAMP}, merge=True
+                )
+
+        obs_data = parsed.get("observations", {})
+        if obs_data:
+            obs_id = f"{character_id}_{user_id}"
+            existing_doc = db.collection("platform_user_observations").document(obs_id).get()
+            existing = existing_doc.to_dict() or {} if existing_doc.exists else {}
+            for k, v in obs_data.items():
+                if not v:
+                    continue
+                if k == "preferences" and isinstance(v, list):
+                    existing_prefs = existing.get("preferences") or []
+                    new_items = [i for i in v if i not in existing_prefs]
+                    if new_items:
+                        obs_updates["preferences"] = (existing_prefs + new_items)[-10:]
+                elif not existing.get(k):
+                    obs_updates[k] = v
+            if obs_updates:
+                db.collection("platform_user_observations").document(obs_id).set(
+                    {**obs_updates, "characterId": character_id, "userId": user_id,
+                     "updatedAt": firestore.SERVER_TIMESTAMP}, merge=True
+                )
+
+        logger.info(f"auto_extract_user_profile: profile={profile_updates}, obs={obs_updates}")
+        return {"profile": profile_updates, "observations": obs_updates}
+
+    except Exception as e:
+        logger.error(f"auto_extract_user_profile failed: {e}")
+        return {"profile": {}, "observations": {}, "error": str(e)}

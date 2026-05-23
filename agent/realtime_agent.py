@@ -48,7 +48,10 @@ from agent.firestore_loader import (
     save_conversation,
     extract_session_summary,
     build_system_prompt,
+    extract_and_save_insights,
+    auto_extract_user_profile,
 )
+from agent.voice_identifier import VoiceIdentifier, extract_voice_embedding, TARGET_AUDIO_SAMPLES
 from agent.promise_reflection import reflect_and_mark_fulfilled
 from agent.user_profile import load_user_profile, format_profile_block
 from agent.user_observations import load_user_observations, format_observations_block
@@ -158,10 +161,40 @@ async def entrypoint(ctx: JobContext):
     participant = await ctx.wait_for_participant()
     logger.info(f"Participant joined: {participant.identity}")
 
-    # ── 主動打斷設定 ──────────────────────────────────────────────
-    MAX_UTTERANCE_SECS = 90          # 超過 90 秒強制截斷
-    QUESTION_RE = re.compile(r'[？?]\s*$')   # interim 以問句結尾 → 立刻截斷
-    INTERIM_CHAR_LIMIT = 200         # interim 累積超過 200 字 → 截斷
+    # ── Voice Identification setup ────────────────────────────────────────────
+    _voice_buffer: list = []
+    _voice_capture_done = asyncio.Event()
+    _voice_id_triggered = False
+
+    async def _capture_audio_from_track(track) -> None:
+        try:
+            from livekit.rtc import AudioStream
+            audio_stream = AudioStream(track, sample_rate=16000, num_channels=1)
+            total = 0
+            async for ev in audio_stream:
+                _voice_buffer.append(ev.frame)
+                total += ev.frame.samples_per_channel
+                if total >= TARGET_AUDIO_SAMPLES:
+                    break
+        except Exception as e:
+            logger.warning(f"[voice-id] audio capture error: {e}")
+        finally:
+            _voice_capture_done.set()
+
+    @ctx.room.on("track_subscribed")
+    def _on_track_subscribed(track, publication, rmt_participant):
+        from livekit.rtc import TrackKind
+        if (track.kind == TrackKind.KIND_AUDIO and
+                rmt_participant.identity == participant.identity):
+            logger.info("[voice-id] audio track subscribed, starting capture")
+            asyncio.ensure_future(_capture_audio_from_track(track))
+
+    for pub in participant.track_publications.values():
+        from livekit.rtc import TrackKind
+        if pub.kind == TrackKind.KIND_AUDIO and pub.track is not None:
+            logger.info("[voice-id] audio track already available, starting capture")
+            asyncio.ensure_future(_capture_audio_from_track(pub.track))
+            break
 
     # Voice Activity Detection
     vad = silero.VAD.load(
@@ -169,7 +202,6 @@ async def entrypoint(ctx: JobContext):
         prefix_padding_duration=0.3,
         min_speech_duration=0.1,
         activation_threshold=0.5,
-        max_buffered_speech=90.0,    # 對齊 MAX_UTTERANCE_SECS，避免 VAD 丟棄音訊
     )
 
     # STT — Deepgram Nova-2（中文 language="zh"，無串流時間限制）
@@ -542,6 +574,7 @@ async def entrypoint(ctx: JobContext):
 
     @session.on("conversation_item_added")
     def _on_item_added(event):
+        nonlocal _voice_id_triggered
         item = getattr(event, "item", None)
         if not item:
             return
@@ -555,53 +588,74 @@ async def entrypoint(ctx: JobContext):
                 "content": text.strip(),
                 "timestamp": time.time(),
             })
+        # Trigger voice identification on first user utterance
+        if role == "user" and not _voice_id_triggered:
+            asyncio.ensure_future(_run_voice_identification())
 
-    # ── 主動打斷：90 秒 timeout + 問句即時截斷 ────────────────────
-    _utterance_timer: asyncio.Task | None = None
-    _interrupted_this_turn: bool = False   # 防同一句話打斷兩次
+    # ── Voice identification runner ───────────────────────────────────────────
+    voice_identifier = VoiceIdentifier(db_rt, character_id) if character_id else None
 
-    async def _do_interrupt() -> None:
+    async def _run_voice_identification() -> None:
+        nonlocal _voice_id_triggered
+        if _voice_id_triggered or not voice_identifier:
+            return
+        _voice_id_triggered = True
+
         try:
-            await session.interrupt()
-        except Exception as e:
-            logger.warning(f"interrupt failed: {e}")
+            await asyncio.wait_for(_voice_capture_done.wait(), timeout=3.0)
+        except asyncio.TimeoutError:
+            logger.info("[voice-id] audio capture timeout, proceeding with buffered audio")
 
-    @session.on("user_state_changed")
-    def _on_user_state(event) -> None:
-        nonlocal _utterance_timer, _interrupted_this_turn
-        new_state = str(getattr(event, "new_state", ""))
-
-        if new_state == "speaking":
-            _interrupted_this_turn = False
-            if _utterance_timer:
-                _utterance_timer.cancel()
-            async def _timeout_task():
-                await asyncio.sleep(MAX_UTTERANCE_SECS)
-                logger.info(f"[interrupt] utterance exceeded {MAX_UTTERANCE_SECS}s")
-                await _do_interrupt()
-            _utterance_timer = asyncio.ensure_future(_timeout_task())
-
-        elif new_state in ("listening", "away"):
-            if _utterance_timer:
-                _utterance_timer.cancel()
-                _utterance_timer = None
-
-    @session.on("user_input_transcribed")
-    def _on_transcribed(event) -> None:
-        nonlocal _interrupted_this_turn
-        if _interrupted_this_turn:
+        if not _voice_buffer:
+            logger.info("[voice-id] no audio buffered, skipping identification")
             return
-        if getattr(event, "is_final", True):
-            return  # 只處理 interim
-        text: str = getattr(event, "transcript", "") or ""
-        if not text:
+
+        embedding = await asyncio.to_thread(extract_voice_embedding, _voice_buffer)
+        if embedding is None:
+            logger.info("[voice-id] embedding extraction failed or insufficient audio")
             return
-        should_cut = QUESTION_RE.search(text) or len(text) > INTERIM_CHAR_LIMIT
-        if should_cut:
-            reason = "question" if QUESTION_RE.search(text) else f"len={len(text)}"
-            logger.info(f"[interrupt] {reason}: {text[-30:]!r}")
-            _interrupted_this_turn = True
-            asyncio.ensure_future(_do_interrupt())
+
+        if user_id:
+            display_name = ""
+            try:
+                user_ref = db_rt.collection("platform_users").document(user_id).get()
+                if user_ref.exists:
+                    display_name = (user_ref.to_dict() or {}).get("displayName", "") or user_id
+                else:
+                    display_name = user_id
+            except Exception:
+                display_name = user_id
+            try:
+                await asyncio.to_thread(
+                    voice_identifier.store_embedding, user_id, display_name, embedding
+                )
+                logger.info(f"[voice-id] embedding stored for known user={user_id}")
+            except Exception as e:
+                logger.warning(f"[voice-id] store failed: {e}")
+        else:
+            matched_uid, matched_name, similarity = await asyncio.to_thread(
+                voice_identifier.find_best_match, embedding
+            )
+            logger.info(f"[voice-id] match result: uid={matched_uid} name={matched_name} sim={similarity:.3f}")
+            if matched_uid and matched_name:
+                try:
+                    await session.generate_reply(
+                        instructions=(
+                            f"你聽出來了，這是 {matched_name} 的聲音。"
+                            "用一句自然的話歡迎他，像是老朋友重逢，不要說「我識別出你的聲音」。"
+                        ),
+                    )
+                except Exception as e:
+                    logger.warning(f"[voice-id] proactive greeting failed: {e}")
+            else:
+                try:
+                    await session.generate_reply(
+                        instructions=(
+                            "你不認識這個聲音。自然地問一句：你是誰？用角色本人的口氣問，不要像客服。"
+                        ),
+                    )
+                except Exception as e:
+                    logger.warning(f"[voice-id] ask-name greeting failed: {e}")
 
     @ctx.room.on("disconnected")
     def on_disconnected():
@@ -625,6 +679,18 @@ async def entrypoint(ctx: JobContext):
                 )
                 logger.info(f"Saved to {conv_id}: {stats}")
 
+                # insight 提煉 — 補上文字/語音管道已有的記憶沉澱
+                try:
+                    insight_stats = extract_and_save_insights(
+                        transcript=transcript,
+                        character_id=character_id,
+                        conv_id=conv_id,
+                        api_key=anthropic_key,
+                    )
+                    logger.info(f"insights: {insight_stats}")
+                except Exception as e:
+                    logger.warning(f"extract_and_save_insights failed: {e}")
+
                 # B2.4：promise-reflection — 自動標記哪些 unfulfilled actions 被兌現
                 if user_id:
                     try:
@@ -641,6 +707,20 @@ async def entrypoint(ctx: JobContext):
                         logger.info(f"promise-reflection: {ref_stats}")
                     except Exception as e:
                         logger.warning(f"promise-reflection failed: {e}")
+
+                # user profile 自動提取
+                if user_id:
+                    try:
+                        profile_stats = auto_extract_user_profile(
+                            transcript=transcript,
+                            user_id=user_id,
+                            character_id=character_id,
+                            api_key=anthropic_key,
+                        )
+                        logger.info(f"user-profile-extract: {profile_stats}")
+                    except Exception as e:
+                        logger.warning(f"auto_extract_user_profile failed: {e}")
+
             except Exception as e:
                 logger.error(f"save_conversation failed: {e}")
         else:

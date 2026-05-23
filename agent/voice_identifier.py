@@ -1,14 +1,14 @@
 """
 voice_identifier.py — 跨 session 聲紋識別
 
-使用 librosa MFCC 特徵提取 + cosine similarity
-不依賴 PyTorch，Docker image 輕量
+純 numpy 實作（無 librosa/scipy/numba），CPU 零 JIT 延遲。
+特徵：ZCR + 能量 + FFT 頻譜（重心/帶寬/滾降/平坦度）+ 8 頻段能量分布 = 20-d
 
 Firestore collection: platform_voice_prints
 Doc ID: {characterId}_{userId}
 Fields:
   character_id, user_id, display_name,
-  embedding: List[float] (52-d),
+  embedding: List[float] (20-d),
   created_at, last_seen
 """
 
@@ -20,30 +20,21 @@ import numpy as np
 
 logger = logging.getLogger("voice-identifier")
 
-SIMILARITY_THRESHOLD = 0.75  # MFCC 跨 session 跨設備，0.85 太嚴；0.75 較實際
+SIMILARITY_THRESHOLD = 0.92  # 純幾何特徵，比 MFCC 更穩定，閾值拉高
 MIN_AUDIO_SAMPLES = 8000   # 0.5s at 16kHz
 TARGET_AUDIO_SAMPLES = 48000  # 3s at 16kHz
 
 
 def extract_voice_embedding(audio_frames: List) -> Optional[np.ndarray]:
     """
-    從 LiveKit AudioFrames 提取 52-d 聲紋向量
-    (MFCC 13×2 stats + delta 13×2 stats)
-
-    Returns normalized ndarray or None if insufficient audio / librosa unavailable
+    從 LiveKit AudioFrames 提取 20-d 聲紋向量（純 numpy，無 librosa）
+    ZCR + 能量 + 頻譜重心/帶寬/滾降/平坦度（各 mean+std）+ 8 頻段能量分布
     """
-    try:
-        import librosa
-    except ImportError:
-        logger.warning("librosa not installed, voice identification disabled")
-        return None
-
     try:
         pcm_chunks = []
         for frame in audio_frames:
             raw = bytes(frame.data)
             samples = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
-            # Downmix to mono if multi-channel
             if frame.num_channels > 1:
                 samples = samples[:: frame.num_channels]
             pcm_chunks.append(samples)
@@ -56,18 +47,75 @@ def extract_voice_embedding(audio_frames: List) -> Optional[np.ndarray]:
             logger.debug(f"[voice-id] too short: {len(audio)} samples")
             return None
 
-        # All LiveKit frames are already 16kHz when requested via AudioStream(sample_rate=16000)
         sr = 16000
+        frame_length = 512
+        hop_length = 256
 
-        mfcc = librosa.feature.mfcc(y=audio, sr=sr, n_mfcc=13)
-        delta = librosa.feature.delta(mfcc)
+        n_frames = (len(audio) - frame_length) // hop_length + 1
+        if n_frames < 1:
+            return None
 
-        features = np.concatenate([
-            np.mean(mfcc, axis=1),   # 13
-            np.std(mfcc, axis=1),    # 13
-            np.mean(delta, axis=1),  # 13
-            np.std(delta, axis=1),   # 13
-        ])  # 52-d total
+        frames = np.stack([
+            audio[i * hop_length: i * hop_length + frame_length]
+            for i in range(n_frames)
+        ])  # (n_frames, frame_length)
+
+        # ZCR
+        signs = np.sign(frames)
+        zcr = np.mean(np.abs(np.diff(signs, axis=1)), axis=1) / 2
+        zcr_mean, zcr_std = float(np.mean(zcr)), float(np.std(zcr))
+
+        # Short-time energy
+        energy = np.mean(frames ** 2, axis=1)
+        energy_mean, energy_std = float(np.mean(energy)), float(np.std(energy))
+
+        # FFT-based spectral features
+        fft_mag = np.abs(np.fft.rfft(frames, axis=1))  # (n_frames, frame_length//2+1)
+        freqs = np.fft.rfftfreq(frame_length, d=1.0 / sr)
+        fft_sum = np.sum(fft_mag, axis=1) + 1e-10
+
+        # Spectral centroid
+        centroid = np.sum(freqs * fft_mag, axis=1) / fft_sum
+        centroid_mean, centroid_std = float(np.mean(centroid)), float(np.std(centroid))
+
+        # Spectral bandwidth
+        bandwidth = np.sqrt(
+            np.sum(((freqs[None, :] - centroid[:, None]) ** 2) * fft_mag, axis=1) / fft_sum
+        )
+        bandwidth_mean, bandwidth_std = float(np.mean(bandwidth)), float(np.std(bandwidth))
+
+        # Spectral rolloff (85%)
+        cumsum = np.cumsum(fft_mag, axis=1)
+        threshold = 0.85 * cumsum[:, -1:]
+        rolloff_idx = np.argmax(cumsum >= threshold, axis=1)
+        rolloff = freqs[rolloff_idx]
+        rolloff_mean, rolloff_std = float(np.mean(rolloff)), float(np.std(rolloff))
+
+        # Spectral flatness
+        geo_mean = np.exp(np.mean(np.log(fft_mag + 1e-10), axis=1))
+        arith_mean = np.mean(fft_mag, axis=1) + 1e-10
+        flatness = geo_mean / arith_mean
+        flatness_mean, flatness_std = float(np.mean(flatness)), float(np.std(flatness))
+
+        # 8-band energy distribution（normalize by sr）
+        n_bands = 8
+        band_size = fft_mag.shape[1] // n_bands
+        band_energy = np.array([
+            float(np.mean(fft_mag[:, i * band_size: (i + 1) * band_size]))
+            for i in range(n_bands)
+        ])
+        band_sum = np.sum(band_energy) + 1e-10
+        band_energy = band_energy / band_sum
+
+        features = np.array([
+            zcr_mean, zcr_std,
+            energy_mean, energy_std,
+            centroid_mean / sr, centroid_std / sr,
+            bandwidth_mean / sr, bandwidth_std / sr,
+            rolloff_mean / sr, rolloff_std / sr,
+            flatness_mean, flatness_std,
+            *band_energy,
+        ], dtype=np.float32)  # 20-d
 
         norm = np.linalg.norm(features)
         if norm > 0:
