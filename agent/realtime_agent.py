@@ -663,128 +663,60 @@ async def entrypoint(ctx: JobContext):
 
     @ctx.room.on("disconnected")
     def on_disconnected():
-        # daemon=False 確保 process 等這條 thread 跑完才退出
         import threading
-        threading.Thread(target=_sync_on_disconnected, daemon=False).start()
+        threading.Thread(target=_enqueue_cleanup_job, daemon=False).start()
 
-    def _sync_on_disconnected():
-        duration = time.time() - call_start
-        logger.info(f"Room disconnected after {duration:.1f}s, transcript={len(transcript)} msgs")
-        if transcript and conv_id and character_id:
-            try:
-                anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
-                last_session = extract_session_summary(transcript, anthropic_key)
-                if last_session:
-                    logger.info(f"lastSession: {last_session}")
-                stats = save_conversation(
-                    conv_id=conv_id,
-                    character_id=character_id,
-                    user_id=user_id,
-                    new_messages=transcript,
-                    anthropic_api_key=anthropic_key,
-                    last_session=last_session,
-                )
-                logger.info(f"Saved to {conv_id}: {stats}")
+    def _enqueue_cleanup_job():
+        try:
+            duration = time.time() - call_start
+            logger.info(f"[cleanup] Room disconnected after {duration:.1f}s, enqueueing job")
+            if not (transcript and conv_id and character_id):
+                logger.info(f"[cleanup] Skip: transcript={len(transcript)}, conv_id={conv_id}, char_id={character_id}")
+                return
 
-                try:
-                    insight_stats = extract_and_save_insights(
-                        transcript=transcript,
-                        character_id=character_id,
-                        conv_id=conv_id,
-                        api_key=anthropic_key,
-                    )
-                    logger.info(f"insights: {insight_stats}")
-                except Exception as e:
-                    logger.warning(f"extract_and_save_insights failed: {e}")
+            # 1. Write staging doc（transcript + cost accumulators）
+            db_rt.collection("platform_cleanup_queue").document(conv_id).set({
+                "convId": conv_id,
+                "characterId": character_id,
+                "userId": user_id or "",
+                "transcript": transcript,
+                "costLlm": dict(_cost_llm),
+                "costTtsChars": dict(_cost_tts_chars),
+                "enqueuedAt": datetime.now(timezone.utc).isoformat(),
+            })
+            logger.info(f"[cleanup] staging doc written: {conv_id}")
 
-                if user_id:
-                    try:
-                        transcript_text = "\n".join(
-                            f"{'用戶' if m.get('role') == 'user' else '角色'}：{(m.get('content') or '')[:300]}"
-                            for m in transcript
-                        )
-                        ref_stats = reflect_and_mark_fulfilled(
-                            character_id=character_id,
-                            user_id=user_id,
-                            transcript=transcript_text,
-                            anthropic_api_key=anthropic_key,
-                        )
-                        logger.info(f"promise-reflection: {ref_stats}")
-                    except Exception as e:
-                        logger.warning(f"promise-reflection failed: {e}")
+            # 2. Enqueue Cloud Tasks via ADC（Cloud Run compute SA 已有 cloudtasks.enqueuer）
+            import base64
+            import google.auth
+            import google.auth.transport.requests as _greq
+            creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+            creds.refresh(_greq.Request())
 
-                if user_id:
-                    try:
-                        profile_stats = auto_extract_user_profile(
-                            transcript=transcript,
-                            user_id=user_id,
-                            character_id=character_id,
-                            api_key=anthropic_key,
-                        )
-                        logger.info(f"user-profile-extract: {profile_stats}")
-                    except Exception as e:
-                        logger.warning(f"auto_extract_user_profile failed: {e}")
+            project_id = os.environ.get("GCP_PROJECT_ID", "ailive-realtime-2026")
+            cleanup_url = os.environ.get("CLEANUP_WORKER_URL", "")
+            cleanup_secret = os.environ.get("CLEANUP_SECRET", "")
+            if not cleanup_url or not cleanup_secret:
+                logger.error("[cleanup] CLEANUP_WORKER_URL or CLEANUP_SECRET missing")
+                return
 
-            except Exception as e:
-                logger.error(f"save_conversation failed: {e}")
-        else:
-            logger.info(f"Skip save: transcript={len(transcript)}, conv_id={conv_id}, char_id={character_id}")
-
-        if character_id:
-            try:
-                import uuid
-                from datetime import timezone as _tz
-                PRICING = {
-                    "claude-haiku-4-5-20251001": {"input": 0.80, "output": 4.00},
-                    "claude-sonnet-4-6":          {"input": 3.00, "output": 15.00},
-                }
-                TTS_PRICING = {"minimax": 0.014, "elevenlabs": 0.30}
-                model_used = "claude-haiku-4-5-20251001"
-                p = PRICING.get(model_used, {"input": 0.80, "output": 4.00})
-                llm_cost = (
-                    _cost_llm["input"] / 1_000_000 * p["input"]
-                    + _cost_llm["output"] / 1_000_000 * p["output"]
-                )
-                tts_provider_name = "minimax"
-                tts_cost = _cost_tts_chars["count"] / 1000 * TTS_PRICING.get(tts_provider_name, 0)
-                now_ts = datetime.now(_tz.utc)
-                expires_at = datetime.fromtimestamp(now_ts.timestamp() + 90 * 86400, tz=_tz.utc)
-
-                if _cost_llm["input"] > 0 or _cost_llm["output"] > 0:
-                    db_rt.collection("zhu_vitals_cost").add({
-                        "call_id": str(uuid.uuid4()),
-                        "timestamp": now_ts,
-                        "project": "ailive-platform",
-                        "worker_id": "ailive-voice-stream",
-                        "character_id": character_id,
-                        "type": "llm",
-                        "route": "anthropic-sdk",
-                        "model": model_used,
-                        "purpose": "voice-stream",
-                        "input_tokens": _cost_llm["input"],
-                        "output_tokens": _cost_llm["output"],
-                        "cost_usd_est": llm_cost,
-                        "expires_at": expires_at,
-                    })
-                    logger.info(f"[cost] LLM {_cost_llm['input']}in/{_cost_llm['output']}out ${llm_cost:.4f}")
-
-                if _cost_tts_chars["count"] > 0:
-                    db_rt.collection("zhu_vitals_cost").add({
-                        "call_id": str(uuid.uuid4()),
-                        "timestamp": now_ts,
-                        "project": "ailive-platform",
-                        "worker_id": "ailive-tts",
-                        "character_id": character_id,
-                        "type": "tts",
-                        "purpose": "voice-stream-tts",
-                        "tts_provider": tts_provider_name,
-                        "tts_characters": _cost_tts_chars["count"],
-                        "cost_usd_est": tts_cost,
-                        "expires_at": expires_at,
-                    })
-                    logger.info(f"[cost] TTS {_cost_tts_chars['count']} chars ${tts_cost:.4f}")
-            except Exception as e:
-                logger.error(f"[cost] write failed: {e}")
+            parent = f"projects/{project_id}/locations/asia-east1/queues/ailive-cleanup"
+            body_b64 = base64.b64encode(json.dumps({"convId": conv_id}).encode()).decode()
+            resp = httpx.post(
+                f"https://cloudtasks.googleapis.com/v2/{parent}/tasks",
+                headers={"Authorization": f"Bearer {creds.token}", "Content-Type": "application/json"},
+                json={"task": {"httpRequest": {
+                    "httpMethod": "POST",
+                    "url": cleanup_url,
+                    "headers": {"Content-Type": "application/json", "X-Cleanup-Secret": cleanup_secret},
+                    "body": body_b64,
+                }, "dispatchDeadline": "600s"}},
+                timeout=10.0,
+            )
+            resp.raise_for_status()
+            logger.info(f"[cleanup] enqueued task for conv_id={conv_id}")
+        except Exception as e:
+            logger.error(f"[cleanup] enqueue failed: {e}", exc_info=True)
 
     await session.start(agent=agent, room=ctx.room)
     logger.info("Session started, agent active")
