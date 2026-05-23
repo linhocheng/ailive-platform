@@ -7,7 +7,7 @@ livekit-agents==1.5.1
 livekit-plugins-elevenlabs==1.5.1
 livekit-plugins-silero==1.5.1
 livekit-plugins-anthropic==1.5.1
-livekit-plugins-deepgram==1.5.1
+livekit-plugins-soniox==1.5.1
 
 # MiniMax 自訂 wrapper（不用官方 plugin，江彬教訓 #6 不相容 1.5.x）
 # 用 aiohttp 直打 MiniMax t2a_v2 REST API，取得 PCM 後 emit AudioFrame

@@ -33,7 +33,7 @@ load_dotenv(ROOT_DIR / ".env")
 load_dotenv(ROOT_DIR / ".env.local.fresh")  # 開發時用 ailive-platform 的 env
 
 from livekit.agents import Agent, AgentSession, JobContext, function_tool
-from livekit.plugins import silero, anthropic, deepgram
+from livekit.plugins import silero, anthropic, soniox
 
 # MiniMax 自訂 wrapper（江彬教訓 #6：官方 plugin 不相容 1.5.x）
 from agent.minimax_tts import MiniMaxCustomTTS
@@ -204,16 +204,17 @@ async def entrypoint(ctx: JobContext):
         activation_threshold=0.5,
     )
 
-    # STT — Deepgram Nova-2（中文 language="zh"，無串流時間限制）
-    deepgram_key = os.environ.get("DEEPGRAM_API_KEY", "")
-    if not deepgram_key:
-        logger.critical("DEEPGRAM_API_KEY missing")
+    # STT — Soniox stt-rt-v4（中英文雙語 language_hints=["zh","en"]）
+    soniox_key = os.environ.get("SONIOX_API_KEY", "")
+    if not soniox_key:
+        logger.critical("SONIOX_API_KEY missing")
         return
-    stt = deepgram.STT(
-        model="nova-2",
-        language="zh",
-        interim_results=True,
-        api_key=deepgram_key,
+    stt = soniox.STT(
+        api_key=soniox_key,
+        params=soniox.STTOptions(
+            model="stt-rt-v4",
+            language_hints=["zh", "en"],
+        ),
     )
 
     # LLM — 優先走 Bridge VM（Max 月費），fallback 直接 API key
@@ -602,70 +603,76 @@ async def entrypoint(ctx: JobContext):
         _voice_id_triggered = True
 
         try:
-            await asyncio.wait_for(_voice_capture_done.wait(), timeout=3.0)
-        except asyncio.TimeoutError:
-            logger.info("[voice-id] audio capture timeout, proceeding with buffered audio")
-
-        if not _voice_buffer:
-            logger.info("[voice-id] no audio buffered, skipping identification")
-            return
-
-        embedding = await asyncio.to_thread(extract_voice_embedding, _voice_buffer)
-        if embedding is None:
-            logger.info("[voice-id] embedding extraction failed or insufficient audio")
-            return
-
-        if user_id:
-            display_name = ""
             try:
-                user_ref = db_rt.collection("platform_users").document(user_id).get()
-                if user_ref.exists:
-                    display_name = (user_ref.to_dict() or {}).get("displayName", "") or user_id
-                else:
+                await asyncio.wait_for(_voice_capture_done.wait(), timeout=3.0)
+            except asyncio.TimeoutError:
+                logger.info("[voice-id] audio capture timeout, proceeding with buffered audio")
+
+            if not _voice_buffer:
+                logger.info("[voice-id] no audio buffered, skipping identification")
+                return
+
+            embedding = await asyncio.to_thread(extract_voice_embedding, _voice_buffer)
+            if embedding is None:
+                logger.info("[voice-id] embedding extraction failed or insufficient audio")
+                return
+
+            if user_id:
+                display_name = ""
+                try:
+                    user_ref = db_rt.collection("platform_users").document(user_id).get()
+                    if user_ref.exists:
+                        display_name = (user_ref.to_dict() or {}).get("displayName", "") or user_id
+                    else:
+                        display_name = user_id
+                except Exception:
                     display_name = user_id
-            except Exception:
-                display_name = user_id
-            try:
-                await asyncio.to_thread(
-                    voice_identifier.store_embedding, user_id, display_name, embedding
-                )
-                logger.info(f"[voice-id] embedding stored for known user={user_id}")
-            except Exception as e:
-                logger.warning(f"[voice-id] store failed: {e}")
-        else:
-            matched_uid, matched_name, similarity = await asyncio.to_thread(
-                voice_identifier.find_best_match, embedding
-            )
-            logger.info(f"[voice-id] match result: uid={matched_uid} name={matched_name} sim={similarity:.3f}")
-            if matched_uid and matched_name:
                 try:
-                    await session.generate_reply(
-                        instructions=(
-                            f"你聽出來了，這是 {matched_name} 的聲音。"
-                            "用一句自然的話歡迎他，像是老朋友重逢，不要說「我識別出你的聲音」。"
-                        ),
+                    await asyncio.to_thread(
+                        voice_identifier.store_embedding, user_id, display_name, embedding
                     )
+                    logger.info(f"[voice-id] embedding stored for known user={user_id}")
                 except Exception as e:
-                    logger.warning(f"[voice-id] proactive greeting failed: {e}")
+                    logger.warning(f"[voice-id] store failed: {e}")
             else:
-                try:
-                    await session.generate_reply(
-                        instructions=(
-                            "你不認識這個聲音。自然地問一句：你是誰？用角色本人的口氣問，不要像客服。"
-                        ),
-                    )
-                except Exception as e:
-                    logger.warning(f"[voice-id] ask-name greeting failed: {e}")
+                matched_uid, matched_name, similarity = await asyncio.to_thread(
+                    voice_identifier.find_best_match, embedding
+                )
+                logger.info(f"[voice-id] match result: uid={matched_uid} name={matched_name} sim={similarity:.3f}")
+                if matched_uid and matched_name:
+                    try:
+                        await session.generate_reply(
+                            instructions=(
+                                f"你聽出來了，這是 {matched_name} 的聲音。"
+                                "用一句自然的話歡迎他，像是老朋友重逢，不要說「我識別出你的聲音」。"
+                            ),
+                        )
+                    except Exception as e:
+                        logger.warning(f"[voice-id] proactive greeting failed: {e}")
+                else:
+                    try:
+                        await session.generate_reply(
+                            instructions=(
+                                "你不認識這個聲音。自然地問一句：你是誰？用角色本人的口氣問，不要像客服。"
+                            ),
+                        )
+                    except Exception as e:
+                        logger.warning(f"[voice-id] ask-name greeting failed: {e}")
+        finally:
+            _voice_buffer.clear()
 
     @ctx.room.on("disconnected")
     def on_disconnected():
+        # daemon=False 確保 process 等這條 thread 跑完才退出
+        import threading
+        threading.Thread(target=_sync_on_disconnected, daemon=False).start()
+
+    def _sync_on_disconnected():
         duration = time.time() - call_start
         logger.info(f"Room disconnected after {duration:.1f}s, transcript={len(transcript)} msgs")
-        # 通話結束寫回 conv（含 summary 壓縮 + P1 lastSession 快照）
         if transcript and conv_id and character_id:
             try:
                 anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
-                # P1：抽 lastSession（Smart Greeting 用）
                 last_session = extract_session_summary(transcript, anthropic_key)
                 if last_session:
                     logger.info(f"lastSession: {last_session}")
@@ -679,7 +686,6 @@ async def entrypoint(ctx: JobContext):
                 )
                 logger.info(f"Saved to {conv_id}: {stats}")
 
-                # insight 提煉 — 補上文字/語音管道已有的記憶沉澱
                 try:
                     insight_stats = extract_and_save_insights(
                         transcript=transcript,
@@ -691,7 +697,6 @@ async def entrypoint(ctx: JobContext):
                 except Exception as e:
                     logger.warning(f"extract_and_save_insights failed: {e}")
 
-                # B2.4：promise-reflection — 自動標記哪些 unfulfilled actions 被兌現
                 if user_id:
                     try:
                         transcript_text = "\n".join(
@@ -708,7 +713,6 @@ async def entrypoint(ctx: JobContext):
                     except Exception as e:
                         logger.warning(f"promise-reflection failed: {e}")
 
-                # user profile 自動提取
                 if user_id:
                     try:
                         profile_stats = auto_extract_user_profile(
@@ -726,7 +730,6 @@ async def entrypoint(ctx: JobContext):
         else:
             logger.info(f"Skip save: transcript={len(transcript)}, conv_id={conv_id}, char_id={character_id}")
 
-        # Write cost record to zhu_vitals_cost
         if character_id:
             try:
                 import uuid
@@ -735,14 +738,14 @@ async def entrypoint(ctx: JobContext):
                     "claude-haiku-4-5-20251001": {"input": 0.80, "output": 4.00},
                     "claude-sonnet-4-6":          {"input": 3.00, "output": 15.00},
                 }
-                TTS_PRICING = {"minimax": 0.014, "elevenlabs": 0.30}  # USD per 1000 chars
+                TTS_PRICING = {"minimax": 0.014, "elevenlabs": 0.30}
                 model_used = "claude-haiku-4-5-20251001"
                 p = PRICING.get(model_used, {"input": 0.80, "output": 4.00})
                 llm_cost = (
                     _cost_llm["input"] / 1_000_000 * p["input"]
                     + _cost_llm["output"] / 1_000_000 * p["output"]
                 )
-                tts_provider_name = "minimax"  # agent always uses MiniMaxCustomTTS
+                tts_provider_name = "minimax"
                 tts_cost = _cost_tts_chars["count"] / 1000 * TTS_PRICING.get(tts_provider_name, 0)
                 now_ts = datetime.now(_tz.utc)
                 expires_at = datetime.fromtimestamp(now_ts.timestamp() + 90 * 86400, tz=_tz.utc)
