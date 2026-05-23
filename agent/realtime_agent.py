@@ -688,6 +688,7 @@ async def entrypoint(ctx: JobContext):
 
             # 2. Enqueue Cloud Tasks via ADC（Cloud Run compute SA 已有 cloudtasks.enqueuer）
             import base64
+            import httpx
             import google.auth
             import google.auth.transport.requests as _greq
             creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
