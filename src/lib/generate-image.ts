@@ -124,13 +124,17 @@ export async function generateImageForCharacter(
     negativePrompt?: string;
     fixedElements?: string[];
     refs?: RefImage[];
+    referenceImages?: string[];
   } | undefined;
 
   const characterSheet = vi?.characterSheet || '';
   const imagePromptPrefix = vi?.imagePromptPrefix || '';
   const negativePrompt = vi?.negativePrompt || 'different face, inconsistent features';
   const fixedElements = (vi?.fixedElements || []).filter(Boolean).join(', ');
-  const refs = vi?.refs || [];
+  // refs 是 source of truth；舊角色只有平面 referenceImages 時 fallback，避免那些照片隱形
+  const refs: RefImage[] = (vi?.refs && vi.refs.length > 0)
+    ? vi.refs
+    : (vi?.referenceImages || []).map(url => ({ url, angle: '' }));
 
   const apiKey = process.env.ANTHROPIC_API_KEY || '';
   // Grok: XAI_API_KEY via grok-imagen

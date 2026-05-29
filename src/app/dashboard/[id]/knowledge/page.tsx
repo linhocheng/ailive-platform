@@ -272,10 +272,10 @@ export default function KnowledgePage() {
           {/* 上傳圖片 */}
           <div style={{ background: '#fff', border: '1px solid #e0e0e0', borderRadius: 12, padding: 20 }}>
             <h3 style={{ margin: '0 0 6px', fontSize: 15 }}>🖼️ 上傳圖片</h3>
-            <p style={{ margin: '0 0 12px', fontSize: 12, color: '#888' }}>支援 JPG、PNG、WebP，自動壓縮後存入知識庫</p>
+            <p style={{ margin: '0 0 12px', fontSize: 12, color: '#888' }}>支援 JPG、PNG、WebP，自動壓縮後存入知識庫。標題格式「產品名 — 正面/斜躺/大頭/半身」可自動同步至產品主檔</p>
             <input ref={imgInputRef} type="file" accept="image/*" style={{ display: 'none' }}
               onChange={e => { const f = e.target.files?.[0]; if (f) uploadImage(f); }} />
-            <input value={imgTitle} onChange={e => setImgTitle(e.target.value)} placeholder="圖片名稱（選填）" style={inputStyle} />
+            <input value={imgTitle} onChange={e => setImgTitle(e.target.value)} placeholder="例：防曬霜 — 產品正面（可自動比對產品）" style={inputStyle} />
             <button
               onClick={() => { setImgResult(null); imgInputRef.current?.click(); }}
               disabled={imgUploading}

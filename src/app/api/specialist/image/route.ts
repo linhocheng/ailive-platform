@@ -50,7 +50,7 @@ export async function POST(req: NextRequest) {
   const body = await req.json() as {
     jobId: string;
     assigneeId: string;
-    brief: { prompt: string; refs?: string[]; mood?: string | null; aspectRatio?: string };
+    brief: { prompt: string; refs?: string[]; sceneRefUrl?: string | null; mood?: string | null; aspectRatio?: string };
   };
 
   const { jobId, brief } = body;
@@ -101,6 +101,18 @@ export async function POST(req: NextRequest) {
 
     const hasRefs = refsSuccessful.length > 0;
 
+    // 3.2 場景靈感圖（sceneRefUrl）—— 用戶傳的參考圖，下載後排在所有 refs 之後
+    let sceneRefData: Awaited<ReturnType<typeof downloadRefsBase64>>['successful'][0] | null = null;
+    const sceneRefUrl = typeof brief.sceneRefUrl === 'string' && /^https?:\/\//i.test(brief.sceneRefUrl)
+      ? brief.sceneRefUrl : null;
+    if (sceneRefUrl) {
+      const r = await downloadRefsBase64([sceneRefUrl]);
+      sceneRefData = r.successful[0] ?? null;
+      if (!sceneRefData) console.log(`[specialist/image] job=${jobId?.slice(0, 8)} sceneRef 下載失敗，繼續`);
+    }
+
+    const hasAnyImages = hasRefs || !!sceneRefData;
+
     // 4. Sonnet 4.6 + 瞬的 soul：brief → Gemini prompt + workLog
     const apiKey = (process.env.ANTHROPIC_API_KEY || '').replace(/^"|"$/g, '');
     const anthropic = getAnthropicClient(apiKey);
@@ -110,22 +122,16 @@ export async function POST(req: NextRequest) {
 1. 把 brief 轉成適合 Gemini image model 的英文 prompt（詳細、精準，包含光線/構圖/氛圍/技術細節）
 2. 寫一段工作日誌（繁體中文，2-4 句），說明你的光影決策`;
 
-    // refs 專屬指令（動態 inject）
-    const refsInstructions = hasRefs ? `
+    // refs 使用規則（固定，不需要判斷）
+    const refsInstructions = hasAnyImages ? `
 
-你會看到 user 附上的 ${refsSuccessful.length} 張參考圖（順序與下面 image 區塊一致）。每張圖你要自己判斷它的角色，例如：
-- 風格靈感（整體氛圍、光線、色調、質感）
-- 要實際畫進圖裡的物件/產品
-- 要保留的人臉特徵
-- 要複製的場景/構圖
-- 要對照的紋理
-- 其他
+參考圖使用規則（固定，照順序套用，不需要判斷）：
+${hasRefs && refsSuccessful.length >= 1 ? `- 第 1 張（身份錨點）：保留圖中人物的臉部特徵與整體辨識度。服裝、造型、妝容可依場景設定自由變換。` : ''}
+${hasRefs && refsSuccessful.length >= 2 ? `- 第 2 張（產品參考）：保留產品外觀細節（形狀、顏色、包裝、標籤文字），不得更動。` : ''}
+${sceneRefData ? `- 最後一張（場景靈感）：複製這張圖的場景構圖、光線、氛圍。不複製圖中任何人物的臉。` : ''}
 
-把你的判斷直接寫進 PROMPT 英文指令裡，明確告訴 Gemini 每張圖的用途。
-範例寫法：
-"The first image is style inspiration — replicate its color palette and lighting atmosphere. The second image is the product to feature centrally — replicate its exact bottle shape, label, and color..."
-
-不要在 WORKLOG 裡重述 refs 分工；WORKLOG 只說你的光影決策。` : '';
+把以上規則直接反映在 PROMPT 英文指令裡，明確告訴 Gemini 每張圖的用途與處理方式。
+WORKLOG 只說你的光影決策，不重述分工。` : '';
 
     const sysPrompt = `${shunSoul}
 
@@ -137,16 +143,16 @@ ${baseInstructions}${refsInstructions}
 PROMPT: <英文 prompt，一行>
 WORKLOG: <工作日誌，繁體中文，2-4 句>`;
 
-    // user content：有 refs 則 multimodal（images + text），無則純文字
+    // user content：有圖則 multimodal（refs → sceneRef → text），無則純文字
     const userTextParts = [`Brief: ${brief.prompt}`];
     if (brief.mood) userTextParts.push(`氛圍: ${brief.mood}`);
     if (brief.aspectRatio) userTextParts.push(`比例: ${brief.aspectRatio}`);
     const userText = userTextParts.join('\n');
 
-    const userContent: Anthropic.MessageParam['content'] = hasRefs
-      ? [
-          ...refsSuccessful.map((ref): Anthropic.ImageBlockParam => {
-            // Anthropic media_type 白名單
+    // 所有圖片：refs（身份+產品）在前，sceneRef 在後
+    const allImageBlocks: Anthropic.ImageBlockParam[] = [
+      ...refsSuccessful.map((ref): Anthropic.ImageBlockParam => {
+        // Anthropic media_type 白名單
             const mt = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'].includes(ref.mimeType)
               ? ref.mimeType as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp'
               : 'image/jpeg';
@@ -155,8 +161,17 @@ WORKLOG: <工作日誌，繁體中文，2-4 句>`;
               source: { type: 'base64', media_type: mt, data: ref.data },
             };
           }),
-          { type: 'text', text: userText },
-        ]
+    ];
+    // sceneRef 排最後（讓 Shun 知道最後那張是場景靈感）
+    if (sceneRefData) {
+      const mt = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'].includes(sceneRefData.mimeType)
+        ? sceneRefData.mimeType as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp'
+        : 'image/jpeg';
+      allImageBlocks.push({ type: 'image', source: { type: 'base64', media_type: mt, data: sceneRefData.data } });
+    }
+
+    const userContent: Anthropic.MessageParam['content'] = hasAnyImages
+      ? [...allImageBlocks, { type: 'text', text: userText }]
       : userText;
 
     // Prompt Caching：瞬 soul + 指令每次固定，標 cache_control
@@ -178,13 +193,14 @@ WORKLOG: <工作日誌，繁體中文，2-4 句>`;
       : `${imagePromptPrefix ? imagePromptPrefix + ', ' : ''}${brief.prompt}`;
     const workLog = worklogMatch ? worklogMatch[1].trim() : '完成。';
 
-    // 5. 生圖
+    // 5. 生圖：refs + sceneRef 全部一起送進 Gemini
     const storagePath = `platform-specialist-images/${SHUN_ID}`;
-    const imgResult = hasRefs
-      ? await generateWithGeminiRefs(geminiPrompt, refsSuccessful, storagePath)
+    const allGeminiRefs = sceneRefData ? [...refsSuccessful, sceneRefData] : refsSuccessful;
+    const imgResult = allGeminiRefs.length > 0
+      ? await generateWithGeminiRefs(geminiPrompt, allGeminiRefs, storagePath)
       : await generateWithGemini(geminiPrompt, null, storagePath);
 
-    console.log(`[specialist/image] job=${jobId?.slice(0, 8)} refs=${refsSuccessful.length}/${cappedRefs.length} url=${imgResult.imageUrl.slice(-30)}`);
+    console.log(`[specialist/image] job=${jobId?.slice(0, 8)} refs=${refsSuccessful.length}/${cappedRefs.length} sceneRef=${!!sceneRefData} url=${imgResult.imageUrl.slice(-30)}`);
 
     // 5.1 寫除錯資訊回 platform_jobs.output（dot notation 不影響 worker 寫的 imageUrl/workLog）
     // 後台對賬：brief.prompt → geminiPrompt → 真實送進 Gemini 的字串
@@ -194,6 +210,7 @@ WORKLOG: <工作日誌，繁體中文，2-4 句>`;
           'output.geminiPrompt': geminiPrompt,
           'output.imagePromptPrefix': imagePromptPrefix,
           'output.refsUsed': refsSuccessful.map(r => r.sourceUrl),
+          'output.sceneRefUsed': sceneRefUrl ?? null,
         });
       } catch (e) {
         console.warn('[specialist/image] write debug fields failed:', e);

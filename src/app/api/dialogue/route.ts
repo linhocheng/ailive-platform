@@ -214,7 +214,8 @@ specialist 選擇：
       properties: {
         prompt: { type: 'string', description: '圖像描述（英文更準）' },
         aspect_ratio: { type: 'string', enum: ['1:1', '16:9', '9:16', '4:3', '3:4'], description: '比例，預設 1:1' },
-        reference_image_url: { type: 'string', description: '產品參考圖 URL——從知識庫搜到產品圖時，把 imageUrl 填在這裡，讓繪圖師照著真實產品畫，而不是靠想像。' },
+        reference_image_url: { type: 'string', description: '產品參考圖 URL——從 query_product_card 取得。有身份臉孔時選純產品圖（如「純產品正面」），沒有身份臉孔時選模特兒合照圖（如「模特兒全身」），讓繪圖師照著真實產品畫。' },
+        scene_reference_url: { type: 'string', description: '場景靈感圖 URL——用戶傳來的參考圖，用於複製場景構圖、光線、氛圍。繪圖師只抄場景，不複製圖中人物的臉。' },
       },
       required: ['prompt'],
     },
@@ -275,13 +276,12 @@ specialist 選擇：
   },
   {
     name: 'query_product_card',
-    description: '查詢特定產品的完整資料，包括所有圖片URL、成分、功效、使用方法。當需要生圖、寫發文、介紹某個產品時，用這個而不是 query_knowledge_base。直接從產品主檔拿，不靠語意搜尋，結果100%精準。',
+    description: '查詢產品資料。兩種用法：①填產品關鍵字（例如「卸妝露」「精華霜」）→ 回傳該產品完整資料含圖片URL；②不填或填「*」→ 回傳全部產品目錄（名稱+圖片數，不含URL）。需要生圖、寫發文、介紹某個產品時，先查這個，直接從產品主檔拿，100%精準。生圖選圖規則：有身份臉孔選「純產品」類（純產品正面/斜躺），沒有身份臉孔選「模特兒」類（模特兒全身/半身）。',
     input_schema: {
       type: 'object' as const,
       properties: {
-        product_name: { type: 'string', description: '產品名稱，可以只說關鍵字，例如「卸妝露」「慕斯花」「精華霜」「潤白凝霜」' },
+        product_name: { type: 'string', description: '產品關鍵字，例如「卸妝露」「慕斯花」「精華霜」「潤白凝霜」。不填或填「*」= 列出全部目錄' },
       },
-      required: ['product_name'],
     },
   },
   {
@@ -464,7 +464,7 @@ async function executeTool(
   toolInput: Record<string, unknown>,
   characterId: string,
   onHaikuTokens?: (input: number, output: number) => void,
-  context?: { conversationId?: string; userId?: string },
+  context?: { conversationId?: string; userId?: string; userSceneImageUrl?: string },
 ): Promise<string> {
   const db = getFirestore();
 
@@ -516,15 +516,19 @@ async function executeTool(
   if (toolName === 'generate_image') {
     // Phase 2: generate_image stub → commission_specialist（瞬，非同步）
     const prompt = String(toolInput.prompt || '');
-    // 自動帶入角色 characterSheet 為第一張 ref（臉部一致性）
     const charDoc2 = await db.collection('platform_characters').doc(characterId).get();
     const charSheet = String(charDoc2.data()?.visualIdentity?.characterSheet || '');
+    // refs[0] = 身份圖（有則排第一，瞬以此鎖臉）；refs[1] = 知識庫產品圖
     const refs: string[] = [];
     if (charSheet) refs.push(charSheet);
     if (toolInput.reference_image_url) refs.push(String(toolInput.reference_image_url));
+    // scene_reference_url 優先用 Vivi 自己填的；沒有才用這回合用戶傳圖自動上傳的 URL
+    const sceneRefUrl = toolInput.scene_reference_url
+      ? String(toolInput.scene_reference_url)
+      : (context?.userSceneImageUrl ?? undefined);
     return await executeTool(
       'commission_specialist',
-      { specialist: 'painter', brief: prompt, refs, aspect_ratio: toolInput.aspect_ratio || '1:1' },
+      { specialist: 'painter', brief: prompt, refs, sceneRefUrl, aspect_ratio: toolInput.aspect_ratio || '1:1' },
       characterId, onHaikuTokens, context,
     );
   }
@@ -558,6 +562,7 @@ async function executeTool(
       ? {
           prompt: brief,
           refs: Array.isArray(toolInput.refs) ? toolInput.refs : [],
+          sceneRefUrl: toolInput.sceneRefUrl ? String(toolInput.sceneRefUrl) : null,
           mood: toolInput.mood ? String(toolInput.mood) : null,
           aspectRatio: toolInput.aspect_ratio ? String(toolInput.aspect_ratio) : '1:1',
         }
@@ -726,11 +731,25 @@ async function executeTool(
   }
 
   if (toolName === 'query_product_card') {
-    const productName = String(toolInput.product_name || '');
-    if (!productName) return '需要產品名稱。';
+    const productName = String(toolInput.product_name || '').trim();
     const db2 = getFirestore();
     const snap = await db2.collection('platform_products')
       .where('characterId', '==', characterId).get();
+
+    // list_all mode：不填或填「*」→ 回傳全部產品目錄（名稱+圖片數，不含URL）
+    if (!productName || productName === '*') {
+      if (snap.empty) return '目前知識庫裡還沒有產品資料。';
+      const lines = snap.docs
+        .map(d => {
+          const name = String(d.data().productName || '（未命名）');
+          const imgCount = Object.keys(d.data().images || {}).length;
+          const keys = Object.keys(d.data().images || {}).join('、');
+          return `- ${name}（${imgCount} 張圖：${keys || '無'}）`;
+        })
+        .sort();
+      return `【我的全部產品（${snap.size} 款）】\n${lines.join('\n')}\n\n要看某款的完整資料和圖片URL，用這個工具填入產品名稱查詢。`;
+    }
+
     // 模糊比對：query 包含產品名 或 產品名包含 query 後四字
     const match = snap.docs.find(doc => {
       const name = String(doc.data().productName || '');
@@ -1239,6 +1258,26 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'characterId, message 必填' }, { status: 400 });
     }
 
+    // 用戶傳圖時，提前上傳至 Storage 拿 URL，供同回合 generate_image.scene_reference_url 使用
+    let userSceneImageUrl: string | undefined;
+    if (image?.data) {
+      try {
+        const { getFirebaseAdmin } = await import('@/lib/firebase-admin');
+        const admin = getFirebaseAdmin();
+        const bucket = admin.storage().bucket();
+        const mimeType = image.media_type || 'image/jpeg';
+        const ext = mimeType.includes('png') ? 'png' : mimeType.includes('webp') ? 'webp' : 'jpg';
+        const imgBuffer = Buffer.from(image.data, 'base64');
+        const filePath = generateImagePath(`platform-user-images/${characterId}`).replace(/\.jpg$/, `.${ext}`);
+        const file = bucket.file(filePath);
+        await file.save(imgBuffer, { metadata: { contentType: mimeType } });
+        await file.makePublic();
+        userSceneImageUrl = `https://storage.googleapis.com/${bucket.name}/${filePath}`;
+      } catch (e) {
+        console.warn('[dialogue] early image upload failed, scene_reference_url will be unavailable:', e);
+      }
+    }
+
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) return NextResponse.json({ error: 'ANTHROPIC_API_KEY 未設定' }, { status: 500 });
 
@@ -1247,6 +1286,18 @@ export async function POST(req: NextRequest) {
     const { data: char, skills: cachedSkills } = await getCachedChar(db, characterId);
     if (!char.soul_core && !char.system_soul && !char.enhancedSoul) {
       return NextResponse.json({ error: '角色尚未完成鑄魂，請先呼叫 /api/soul-enhance' }, { status: 400 });
+    }
+
+    // 若 resource_awareness 超過 24h 或從未建立 → 背景自動更新（不阻塞對話）
+    const lastRA = String(char.last_resource_awareness_at || '');
+    const raStale = !lastRA || (Date.now() - new Date(lastRA).getTime() > 24 * 60 * 60 * 1000);
+    if (raStale) {
+      const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://ailive-platform.vercel.app';
+      fetch(`${baseUrl}/api/tools/resource-awareness`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ characterId }),
+      }).catch(e => console.warn('[dialogue] resource-awareness auto-refresh failed:', e));
     }
 
     // 動態組 generate_image description（注入角色 refs 清單）
@@ -1678,8 +1729,8 @@ ${convData.userProfile ? `【我認識這個人】\n${convData.userProfile}\n\n`
 
             if (finalMsg.stop_reason === 'tool_use') {
               const toolResults: Anthropic.ToolResultBlockParam[] = [];
-              // 同回合追蹤：query_product_card 執行後立刻存圖片 URL，給 generate_image 用
-              let sameRoundProductImageUrl: string | null = null;
+              // 同回合追蹤：query_product_card 執行後存 key→url 映射，給 generate_image auto-inject 用
+              let sameRoundProductImages: Record<string, string> = {};
               for (const tb of toolUseBlocks) {
                 toolsUsed.push(tb.name);
                 // web_search 是 server-side tool，Anthropic 自己執行，
@@ -1689,29 +1740,47 @@ ${convData.userProfile ? `【我認識這個人】\n${convData.userProfile}\n\n`
                   continue;
                 }
 
-                // generate_image 程式層兜底：若 Vivi 忘記填 reference_image_url，
-                // 自動從本回合或前幾輪 query_product_card 結果中提取產品圖 URL
+                // generate_image 程式層兜底：若角色忘記填 reference_image_url，
+                // 從本回合或前幾輪 query_product_card 結果提取，依角色有無身份臉孔選對應圖類型
                 const toolInput = tb.input as Record<string, unknown>;
                 if (tb.name === 'generate_image' && !toolInput.reference_image_url) {
-                  const productUrl = sameRoundProductImageUrl || (() => {
-                    // 從 currentMessages 往回掃，找 query_product_card 回傳的圖片 URL
-                    for (let mi = currentMessages.length - 1; mi >= 0; mi--) {
-                      const msg = currentMessages[mi] as { role: string; content: unknown };
-                      if (msg.role !== 'user' || !Array.isArray(msg.content)) continue;
-                      for (const blk of msg.content as Array<Record<string, unknown>>) {
-                        if (blk.type !== 'tool_result') continue;
-                        const c = typeof blk.content === 'string' ? blk.content : '';
-                        // query_product_card 結果有「圖片（」標記，裡面有真實產品圖 URL
-                        if (!c.includes('圖片（') && !c.includes('reference_image_url')) continue;
-                        const m = c.match(/https?:\/\/\S+/);
-                        if (m) return m[0];
-                      }
+                  const imageMap: Record<string, string> = Object.keys(sameRoundProductImages).length > 0
+                    ? sameRoundProductImages
+                    : (() => {
+                        const map: Record<string, string> = {};
+                        for (let mi = currentMessages.length - 1; mi >= 0; mi--) {
+                          const msg = currentMessages[mi] as { role: string; content: unknown };
+                          if (msg.role !== 'user' || !Array.isArray(msg.content)) continue;
+                          for (const blk of msg.content as Array<Record<string, unknown>>) {
+                            if (blk.type !== 'tool_result') continue;
+                            const c = typeof blk.content === 'string' ? blk.content : '';
+                            if (!c.includes('圖片（')) continue;
+                            for (const line of c.split('\n')) {
+                              const m = line.match(/^\s*(\S+)：(https?:\/\/\S+)/);
+                              if (m) map[m[1]] = m[2];
+                            }
+                          }
+                          if (Object.keys(map).length > 0) break;
+                        }
+                        return map;
+                      })();
+
+                  if (Object.keys(imageMap).length > 0) {
+                    const charDocInject = await db.collection('platform_characters').doc(characterId).get();
+                    const hasCharSheet = !!charDocInject.data()?.visualIdentity?.characterSheet;
+                    let picked: string | null = null;
+                    if (hasCharSheet) {
+                      // 有身份臉孔 → 選純產品圖（避免兩張圖都有人臉）
+                      picked = imageMap['純產品正面'] ?? imageMap['純產品斜躺'] ?? null;
+                    } else {
+                      // 無身份臉孔 → 選模特兒合照圖（模特兒就是視覺身份）
+                      picked = imageMap['模特兒全身'] ?? imageMap['模特兒半身'] ?? imageMap['模特兒大頭'] ?? null;
                     }
-                    return null;
-                  })();
-                  if (productUrl) {
-                    toolInput.reference_image_url = productUrl;
-                    console.log(`[dialogue] auto-inject product image URL into generate_image: ${productUrl.slice(0, 60)}`);
+                    if (!picked) picked = Object.values(imageMap)[0]; // fallback 任一張
+                    if (picked) {
+                      toolInput.reference_image_url = picked;
+                      console.log(`[dialogue] auto-inject product image (${hasCharSheet ? '有臉→純產品' : '無臉→模特兒'}): ${picked.slice(0, 60)}`);
+                    }
                   }
                 }
 
@@ -1720,7 +1789,7 @@ ${convData.userProfile ? `【我認識這個人】\n${convData.userProfile}\n\n`
                   result = await executeTool(
                     tb.name, toolInput, characterId,
                     (inp, out) => { haikuInputTokens += inp; haikuOutputTokens += out; },
-                    { conversationId: conversationId || undefined, userId: userId || undefined },
+                    { conversationId: conversationId || undefined, userId: userId || undefined, userSceneImageUrl },
                   );
                 } catch (toolErr) {
                   // 天條：任何 tool throw 都必須 push tool_result（可標 is_error），
@@ -1755,10 +1824,12 @@ ${convData.userProfile ? `【我認識這個人】\n${convData.userProfile}\n\n`
                     content: `${msg}\n（工作編號：${jobId.slice(0, 8)}）\n妳現在繼續跟 user 聊，瞬完成後圖片會直接出現在這個對話裡。`,
                   });
                 } else {
-                  // query_product_card 執行完，存圖片 URL 供同回合 generate_image 用
+                  // query_product_card 執行完，提取 key→url 映射供同回合 generate_image auto-inject 用
                   if (tb.name === 'query_product_card') {
-                    const urlMatch = result.match(/https?:\/\/\S+/);
-                    if (urlMatch) sameRoundProductImageUrl = urlMatch[0];
+                    for (const line of result.split('\n')) {
+                      const m = line.match(/^\s*(\S+)：(https?:\/\/\S+)/);
+                      if (m) sameRoundProductImages[m[1]] = m[2];
+                    }
                   }
                   toolResults.push({ type: 'tool_result', tool_use_id: tb.id, content: result });
                 }
@@ -1776,25 +1847,8 @@ ${convData.userProfile ? `【我認識這個人】\n${convData.userProfile}\n\n`
               .join('') || '（無回覆）';
           }
 
-          // 6. 存訊息
-          let userImageUrl: string | undefined;
-          if (image?.data) {
-            try {
-              const { getFirebaseAdmin } = await import('@/lib/firebase-admin');
-              const admin = getFirebaseAdmin();
-              const bucket = admin.storage().bucket();
-              const mimeType = image.media_type || 'image/jpeg';
-              const ext = mimeType.includes('png') ? 'png' : mimeType.includes('webp') ? 'webp' : 'jpg';
-              const imgBuffer = Buffer.from(image.data, 'base64');
-              const filePath = generateImagePath(`platform-user-images/${characterId}`).replace(/\.jpg$/, `.${ext}`);
-              const file = bucket.file(filePath);
-              await file.save(imgBuffer, { metadata: { contentType: mimeType } });
-              await file.makePublic();
-              userImageUrl = `https://storage.googleapis.com/${bucket.name}/${filePath}`;
-            } catch (e) {
-              console.warn('[dialogue] user image persist failed:', e);
-            }
-          }
+          // 6. 存訊息（圖片已在請求開頭提前上傳，直接複用 userSceneImageUrl）
+          const userImageUrl = userSceneImageUrl;
           const userEntry: Record<string, unknown> = {
             role: 'user',
             content: message + (image ? ' [附圖]' : ''),

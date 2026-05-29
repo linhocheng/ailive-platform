@@ -355,8 +355,8 @@ ${timeRulesBlock}`;
           },
           {
             name: 'query_product_card',
-            description: '查某款產品的完整資料（成分、功效、圖片URL）。聊到產品、要生圖、要介紹某款時，用這個而不是 query_knowledge_base。直接拿，100% 準確。',
-            input_schema: { type: 'object' as const, properties: { product_name: { type: 'string', description: '產品關鍵字，例如「卸妝露」「慕斯花」「精華霜」' } }, required: ['product_name'] },
+            description: '查產品資料。①填關鍵字（例如「卸妝露」「精華霜」）→ 完整資料含圖片URL；②不填或填「*」→ 全部產品目錄（名稱+圖片數）。直接拿，100% 準確。',
+            input_schema: { type: 'object' as const, properties: { product_name: { type: 'string', description: '產品關鍵字，不填或填「*」= 列全部目錄' } } },
           },
           {
             name: 'commission_specialist',
@@ -635,11 +635,24 @@ specialist 選擇：
           }
 
           if (toolName === 'query_product_card') {
-            const productName = String(toolInput.product_name || '');
-            if (!productName) return '需要產品名稱。';
+            const productName = String(toolInput.product_name || '').trim();
             const { getFirestore } = await import('@/lib/firebase-admin');
             const db2 = getFirestore();
             const snap = await db2.collection('platform_products').where('characterId', '==', characterId).get();
+
+            // list_all mode
+            if (!productName || productName === '*') {
+              if (snap.empty) return '目前知識庫裡還沒有產品資料。';
+              const lines = snap.docs
+                .map((d: FirebaseFirestore.QueryDocumentSnapshot) => {
+                  const name = String(d.data().productName || '（未命名）');
+                  const keys = Object.keys(d.data().images || {}).join('、');
+                  return `- ${name}（${keys || '無圖片'}）`;
+                })
+                .sort();
+              return `【我的全部產品（${snap.size} 款）】\n${lines.join('\n')}`;
+            }
+
             const match = snap.docs.find((doc: FirebaseFirestore.QueryDocumentSnapshot) => {
               const name = String(doc.data().productName || '');
               return name.includes(productName) || productName.includes(name) ||
