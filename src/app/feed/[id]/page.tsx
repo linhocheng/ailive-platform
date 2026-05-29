@@ -7,7 +7,7 @@ interface Character {
   id: string;
   name: string;
   mission: string;
-  clientPassword?: string;
+  clientPasswordRequired?: boolean;
   visualIdentity?: { characterSheet?: string };
 }
 
@@ -133,15 +133,25 @@ function PasswordGate({
 
   useEffect(() => { inputRef.current?.focus(); }, []);
 
-  const submit = () => {
-    const stored = char.clientPassword;
-    if (!stored || pw === stored) {
-      sessionStorage.setItem(`feed_unlocked_${char.id}`, '1');
-      onUnlock();
-    } else {
-      setError('密碼錯誤，請再試一次');
-      setPw('');
-      inputRef.current?.focus();
+  const submit = async () => {
+    if (!pw.trim()) return;
+    setError('');
+    try {
+      const res = await fetch(`/api/client-auth/${char.id}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: pw }),
+      });
+      if (res.ok) {
+        sessionStorage.setItem(`feed_unlocked_${char.id}`, '1');
+        onUnlock();
+      } else {
+        setError('密碼錯誤，請再試一次');
+        setPw('');
+        inputRef.current?.focus();
+      }
+    } catch {
+      setError('驗證失敗，請再試一次');
     }
   };
 
@@ -194,7 +204,7 @@ export default function FeedPage() {
         setChar(c);
         // Check session unlock
         const stored = sessionStorage.getItem(`feed_unlocked_${id}`);
-        const needsPw = !!c.clientPassword;
+        const needsPw = !!c.clientPasswordRequired;
         if (!needsPw || stored === '1') setUnlocked(true);
         setLoading(false);
       })

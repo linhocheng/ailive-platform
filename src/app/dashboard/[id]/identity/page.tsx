@@ -197,8 +197,29 @@ export default function IdentityPage() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ visualIdentity: newVi }),
           });
-          setMsg('✅ 上傳成功');
-          setTimeout(() => setMsg(''), 2000);
+          setMsg('✅ 上傳成功，辨識角度中…');
+
+          // 看圖判角度（vision 是 angle 的唯一真相源；檔名解析只是即時預設）
+          try {
+            const dRes = await fetch('/api/image/detect-angle', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ characterId: id, url: d.url }),
+            });
+            const dJson = await dRes.json();
+            if (dJson.success && dJson.detected) {
+              const merged = newStructured.map(r => r.url === d.url
+                ? { ...r, angle: dJson.detected.angle, framing: dJson.detected.framing, expression: dJson.detected.expression }
+                : r);
+              setVi({ ...newVi, refs: merged });
+              setMsg(`✅ 上傳成功（角度：${dJson.detected.angle}）`);
+            } else {
+              setMsg('✅ 上傳成功');
+            }
+          } catch {
+            setMsg('✅ 上傳成功');
+          }
+          setTimeout(() => setMsg(''), 2500);
         } else {
           setMsg(`❌ ${d.error}`);
         }

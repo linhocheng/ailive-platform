@@ -5,10 +5,15 @@ import { useParams } from 'next/navigation';
 import { useChat } from '@/hooks/useChat';
 
 // ── Types ──────────────────────────────────────────────────────────────────
+interface RefImage { url: string; angle: string; framing?: string; expression?: string; name?: string; }
 interface Character {
   id: string; name: string; mission: string; type: string;
-  enhancedSoul: string; clientPassword?: string;
-  visualIdentity?: { characterSheet?: string };
+  enhancedSoul: string; clientPasswordRequired?: boolean;
+  visualIdentity?: {
+    characterSheet?: string;
+    referenceImages?: string[];
+    refs?: RefImage[];
+  };
 }
 interface Post {
   id: string; content: string; imageUrl?: string; topic: string;
@@ -26,7 +31,7 @@ interface ImageItem {
   url: string; conversationId: string; timestamp: string;
   source: string; specialistName?: string; workLog?: string;
 }
-type Tab = 'posts' | 'schedule' | 'knowledge' | 'gallery' | 'chat';
+type Tab = 'posts' | 'schedule' | 'knowledge' | 'gallery' | 'chat' | 'identity';
 
 // ── Constants ──────────────────────────────────────────────────────────────
 const DAYS_LABEL: Record<string,string> = { mon:'一',tue:'二',wed:'三',thu:'四',fri:'五',sat:'六',sun:'日' };
@@ -86,18 +91,26 @@ function PasswordGate({ char, onUnlock }: { char: Character; onUnlock: () => voi
   const inputRef = useRef<HTMLInputElement>(null);
   useEffect(() => { inputRef.current?.focus(); }, []);
 
-  const submit = () => {
+  const submit = async () => {
     if (!pw.trim()) return;
     setChecking(true); setError('');
-    const stored = char.clientPassword;
-    const ok = !stored || pw === stored;
-    if (ok) {
-      sessionStorage.setItem(`client_unlocked_${char.id}`, '1');
-      onUnlock();
-    } else {
-      setError('密碼錯誤，請再試一次');
-      setChecking(false); setPw('');
-      inputRef.current?.focus();
+    try {
+      const res = await fetch(`/api/client-auth/${char.id}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: pw }),
+      });
+      if (res.ok) {
+        sessionStorage.setItem(`client_unlocked_${char.id}`, '1');
+        onUnlock();
+      } else {
+        setError('密碼錯誤，請再試一次');
+        setChecking(false); setPw('');
+        inputRef.current?.focus();
+      }
+    } catch {
+      setError('驗證失敗，請再試一次');
+      setChecking(false);
     }
   };
 
@@ -753,6 +766,169 @@ function KnowledgeScreen({ charId }: { charId: string }) {
   );
 }
 
+// ── IdentityScreen ─────────────────────────────────────────────────────────
+function IdentityScreen({ charId, char, onCharUpdate }: {
+  charId: string;
+  char: Character;
+  onCharUpdate: (c: Character) => void;
+}) {
+  const [uploading, setUploading] = useState(false);
+  const [msg, setMsg] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
+  const vi = char.visualIdentity || {};
+  const refs: RefImage[] = vi.refs || (vi.referenceImages || []).map(url => ({ url, angle: '' }));
+
+  const handleFile = async (file: File) => {
+    setUploading(true); setMsg('');
+    try {
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = ev => {
+          const img = new Image();
+          img.onload = () => {
+            const MAX = 1200;
+            let { width, height } = img;
+            if (width > MAX || height > MAX) {
+              if (width > height) { height = Math.round(height * MAX / width); width = MAX; }
+              else { width = Math.round(width * MAX / height); height = MAX; }
+            }
+            const canvas = document.createElement('canvas');
+            canvas.width = width; canvas.height = height;
+            canvas.getContext('2d')!.drawImage(img, 0, 0, width, height);
+            resolve(canvas.toDataURL('image/jpeg', 0.88).split(',')[1]);
+          };
+          img.onerror = reject;
+          img.src = ev.target?.result as string;
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+
+      const filename = `ref-${Date.now()}.jpg`;
+      const uploadRes = await fetch('/api/image/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ base64, contentType: 'image/jpeg', characterId: charId, filename }),
+      });
+      const { url, error } = await uploadRes.json();
+      if (!url) throw new Error(error || '上傳失敗');
+
+      const newRef: RefImage = { url, angle: '', name: file.name.replace(/\.[^.]+$/, '') };
+      const newRefs = [...refs, newRef];
+      const newRefImages = newRefs.map(r => r.url);
+      const newVi = {
+        ...vi,
+        refs: newRefs,
+        referenceImages: newRefImages,
+        characterSheet: vi.characterSheet || url,
+      };
+
+      await fetch(`/api/characters/${charId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ visualIdentity: newVi }),
+      });
+
+      onCharUpdate({ ...char, visualIdentity: newVi });
+      setMsg('上傳成功，辨識角度中…');
+
+      // 看圖判角度（generate-image 的 selectBestRef 靠 angle 選圖；server 已寫回 Firestore）
+      try {
+        const dRes = await fetch('/api/image/detect-angle', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ characterId: charId, url }),
+        });
+        const dJson = await dRes.json();
+        if (dJson.success && dJson.detected) {
+          const merged = newRefs.map(r => r.url === url
+            ? { ...r, angle: dJson.detected.angle, framing: dJson.detected.framing, expression: dJson.detected.expression }
+            : r);
+          const mergedVi = { ...newVi, refs: merged };
+          onCharUpdate({ ...char, visualIdentity: mergedVi });
+          setMsg(`上傳成功（角度：${dJson.detected.angle}）`);
+        } else {
+          setMsg('上傳成功（角度待辨識）');
+        }
+      } catch {
+        setMsg('上傳成功（角度待辨識）');
+      }
+      setTimeout(() => setMsg(''), 2800);
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : '上傳失敗');
+    } finally {
+      setUploading(false);
+      if (inputRef.current) inputRef.current.value = '';
+    }
+  };
+
+  const setPrimary = async (url: string) => {
+    const newVi = { ...vi, characterSheet: url };
+    await fetch(`/api/characters/${charId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ visualIdentity: newVi }),
+    });
+    onCharUpdate({ ...char, visualIdentity: newVi });
+  };
+
+  return (
+    <>
+      <div className="topbar">
+        <div className="topbar-title">
+          <h1>身份照片</h1>
+          <span className="subtitle">{refs.length} 張參考照片</span>
+        </div>
+      </div>
+      <div className="content">
+        <div className="page-head">
+          <h2>讓 AI 角色維持一致的臉孔</h2>
+          <p>上傳角色照片，生圖時 AI 會參考這些照片維持臉孔一致性。系統會自動辨識每張照片的角度，點擊任一張可設為主要參考。</p>
+        </div>
+
+        <input ref={inputRef} type="file" accept="image/*" style={{ display: 'none' }}
+          onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f); }} />
+
+        <div className="dropzone" onClick={() => { if (!uploading) { setMsg(''); inputRef.current?.click(); } }}>
+          <div className="drop-icon"><Icon name="image" size={32} /></div>
+          <div className="drop-title">{uploading ? '上傳中…' : '點擊選擇照片，或拖放至此'}</div>
+          <div className="drop-sub">{uploading ? '' : '支援 JPG、PNG、WebP，自動壓縮並辨識角度'}</div>
+        </div>
+
+        {msg && (
+          <div style={{ marginTop: 8, padding: '8px 12px', background: msg.includes('成功') ? 'var(--green-soft)' : 'var(--red-soft)', borderRadius: 'var(--r-sm)', fontSize: 12, color: msg.includes('成功') ? 'var(--green)' : 'var(--red)' }}>
+            {msg}
+          </div>
+        )}
+
+        {refs.length === 0 ? (
+          <div className="empty" style={{ marginTop: 16 }}>
+            <div className="empty-icon"><Icon name="image" size={28} /></div>
+            <h4>還沒有身份照片</h4>
+            <p>上傳第一張照片，AI 角色就能維持一致的臉孔。</p>
+          </div>
+        ) : (
+          <div className="gallery-grid" style={{ marginTop: 16 }}>
+            {refs.map((ref, i) => {
+              const isPrimary = vi.characterSheet === ref.url;
+              return (
+                <div key={i} className={`gallery-cell${isPrimary ? ' is-primary' : ''}`}
+                  onClick={() => !isPrimary && setPrimary(ref.url)}
+                  title={isPrimary ? '主要參考' : '點擊設為主要參考'}
+                >
+                  <img src={ref.url} alt="" />
+                  {ref.angle && <div className="ident-badge angle">{ref.angle}</div>}
+                  {isPrimary && <div className="ident-badge primary"><Icon name="check" size={11} />主要</div>}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
 // ── GalleryScreen ──────────────────────────────────────────────────────────
 function GalleryScreen({ charId }: { charId: string }) {
   const [images, setImages] = useState<ImageItem[]>([]);
@@ -1002,7 +1178,12 @@ export default function ClientPage() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   useEffect(() => {
-    fetch(`/api/characters/${charId}`).then(r => r.json()).then(d => setChar(d.character || null));
+    fetch(`/api/characters/${charId}`).then(r => r.json()).then(d => {
+      const c = d.character || null;
+      setChar(c);
+      // 沒設密碼的角色直接放行（選一：開放）
+      if (c && !c.clientPasswordRequired) setUnlocked(true);
+    });
     if (typeof window !== 'undefined' && sessionStorage.getItem(`client_unlocked_${charId}`) === '1') setUnlocked(true);
   }, [charId]);
 
@@ -1023,6 +1204,7 @@ export default function ClientPage() {
     { key: 'schedule' as Tab,  icon: 'calendar', label: '排程' },
     { key: 'knowledge' as Tab, icon: 'book',     label: '知識庫' },
     { key: 'gallery' as Tab,   icon: 'image',    label: '生圖' },
+    { key: 'identity' as Tab,  icon: 'sparkle',  label: '身份照片' },
     { key: 'chat' as Tab,      icon: 'chat',     label: '聊天' },
   ];
 
@@ -1120,6 +1302,7 @@ export default function ClientPage() {
           {tab === 'schedule'  && <ScheduleScreen  charId={charId} />}
           {tab === 'knowledge' && <KnowledgeScreen charId={charId} />}
           {tab === 'gallery'   && <GalleryScreen   charId={charId} />}
+          {tab === 'identity'  && <IdentityScreen  charId={charId} char={char} onCharUpdate={setChar} />}
           {tab === 'chat'      && <ChatScreen      charId={charId} char={char} />}
         </main>
       </div>

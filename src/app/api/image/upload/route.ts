@@ -6,6 +6,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getFirebaseAdmin } from '@/lib/firebase-admin';
+import { assertCharAccess } from '@/lib/char-access';
 
 export const maxDuration = 30;
 
@@ -15,6 +16,10 @@ export async function POST(req: NextRequest) {
 
     if (!base64 || !characterId || !filename) {
       return NextResponse.json({ error: 'base64, characterId, filename 必填' }, { status: 400 });
+    }
+
+    if (!(await assertCharAccess(req, characterId))) {
+      return NextResponse.json({ error: '無權限' }, { status: 401 });
     }
 
     const admin = getFirebaseAdmin();

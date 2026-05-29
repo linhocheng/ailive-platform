@@ -6,8 +6,22 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getFirestore } from '@/lib/firebase-admin';
 import { redis } from '@/lib/redis';
+import { assertCharAccess, hasOperatorAccess } from '@/lib/char-access';
 
-export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+/**
+ * 非 operator 不該看到 clientPassword（看到就能自取 cli cookie、繞過鎖）。
+ * 換成 boolean clientPasswordRequired 讓前台仍知道要不要顯示密碼門。
+ */
+function sanitizeForViewer(data: Record<string, unknown>, isOperator: boolean): Record<string, unknown> {
+  const clientPasswordRequired = !!data.clientPassword;
+  if (isOperator) return { ...data, clientPasswordRequired };
+  const copy: Record<string, unknown> = { ...data, clientPasswordRequired };
+  delete copy.clientPassword;
+  return copy;
+}
+
+export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const isOperator = hasOperatorAccess(req);
   try {
     const { id } = await params;
 
@@ -17,7 +31,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       const cached = await redis.get(`char:${id}`);
       if (cached) {
         const data = JSON.parse(cached as string);
-        return NextResponse.json({ character: { id, ...data } });
+        return NextResponse.json({ character: { id, ...sanitizeForViewer(data, isOperator) } });
       }
     } catch (_e) { /* 不阻斷，往下讀 Firestore */ }
 
@@ -29,7 +43,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     // 寫回 cache（10 分鐘，PATCH 會 del）
     try { await redis.set(`char:${id}`, JSON.stringify(data), 60 * 10); } catch (_e) { /* 不阻斷 */ }
 
-    return NextResponse.json({ character: { id: doc.id, ...data } });
+    return NextResponse.json({ character: { id: doc.id, ...sanitizeForViewer(data, isOperator) } });
   } catch (e: unknown) {
     return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
   }
@@ -38,14 +52,24 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params;
+
+    if (!(await assertCharAccess(req, id))) {
+      return NextResponse.json({ error: '無權限' }, { status: 401 });
+    }
+
     const db = getFirestore();
     const body = await req.json();
 
-    const allowed = ['name', 'type', 'rawSoul', 'enhancedSoul', 'soul_core', 'soul_full', 'system_soul', 'clientPassword',
-      'mission', 'status', 'lineChannelToken', 'lineChannelSecret',
-      'igAccessToken', 'igUserId', 'visualIdentity', 'voiceId',
-      'ttsProvider', 'voiceIdMinimax', 'ttsSettings',
-      'tier', 'manages', 'reportsTo'];
+    // operator 可改全部；client（只憑 cli cookie）只能改身份照，
+    // 不准碰靈魂 / clientPassword / 平台 token，避免提權與竄改。
+    const isOperator = hasOperatorAccess(req);
+    const allowed = isOperator
+      ? ['name', 'type', 'rawSoul', 'enhancedSoul', 'soul_core', 'soul_full', 'system_soul', 'clientPassword',
+         'mission', 'status', 'lineChannelToken', 'lineChannelSecret',
+         'igAccessToken', 'igUserId', 'visualIdentity', 'voiceId',
+         'ttsProvider', 'voiceIdMinimax', 'ttsSettings',
+         'tier', 'manages', 'reportsTo']
+      : ['visualIdentity'];
     const updates: Record<string, unknown> = { updatedAt: new Date().toISOString() };
     for (const key of allowed) {
       if (body[key] !== undefined) updates[key] = body[key];

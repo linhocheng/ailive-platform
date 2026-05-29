@@ -466,6 +466,11 @@
 .client-v2 .gallery-cell .meta { position: absolute; bottom: 0; left: 0; right: 0; padding: 16px 8px 6px; background: linear-gradient(180deg, transparent, rgba(0,0,0,0.6)); color: #fff; font-size: 11px; opacity: 0; transition: opacity 0.15s ease; }
 .client-v2 .gallery-cell:hover .meta { opacity: 1; }
 .client-v2 .gallery-empty { aspect-ratio: 1; background: var(--bg-2); border: 1px dashed var(--line); border-radius: var(--r); display: grid; place-items: center; color: var(--ink-4); font-size: 12px; }
+/* ── Identity badges (reuse gallery-cell) ── */
+.client-v2 .gallery-cell.is-primary { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+.client-v2 .ident-badge { position: absolute; display: inline-flex; align-items: center; gap: 3px; font-size: 10px; line-height: 1; padding: 4px 6px; border-radius: 5px; font-weight: 500; }
+.client-v2 .ident-badge.angle { top: 6px; right: 6px; background: rgba(15,12,8,0.62); color: #fff; backdrop-filter: blur(2px); }
+.client-v2 .ident-badge.primary { bottom: 6px; left: 6px; background: var(--accent); color: #fff; font-weight: 600; }
 .client-v2 .gallery-lightbox { position: fixed; inset: 0; background: rgba(15,12,8,0.78); backdrop-filter: blur(8px); display: grid; place-items: center; z-index: 100; padding: 40px; }
 .client-v2 .gallery-lightbox-inner { max-width: 1000px; max-height: 90vh; width: 100%; background: var(--card); border-radius: var(--r-xl); overflow: hidden; display: grid; grid-template-columns: 1fr 280px; box-shadow: var(--shadow-pop); }
 .client-v2 .lightbox-image { background: var(--bg-2); min-height: 480px; display: grid; place-items: center; overflow: hidden; }
