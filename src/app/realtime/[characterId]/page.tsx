@@ -84,6 +84,7 @@ export default function RealtimeCallPage() {
   const [state, setState] = useState<CallState>('idle');
   const [errorMsg, setErrorMsg] = useState('');
   const [characterName, setCharacterName] = useState('');
+  const [characterImage, setCharacterImage] = useState(''); // 角色身份照；無則用預設星空底圖
   const [captions, setCaptions] = useState<Caption[]>([]);
   const [elapsed, setElapsed] = useState(0);
   const [health, setHealth] = useState<Health>(INITIAL_HEALTH);
@@ -372,13 +373,16 @@ export default function RealtimeCallPage() {
     stopMicMonitor();
   }, []);
 
-  // 載入角色名
+  // 載入角色名 + 身份照
   useEffect(() => {
     fetch(`/api/characters/${characterId}`).then(r=>r.json()).then(d => {
       if (d.character?.name) setCharacterName(d.character.name);
+      if (d.character?.visualIdentity?.characterSheet) setCharacterImage(d.character.visualIdentity.characterSheet);
     }).catch(() => {});
   }, [characterId]);
 
+  const hasCharImage = !!characterImage;
+  const bgSrc = characterImage || '/default-voice-bg.jpg';
   const canConnect = state === 'idle' || state === 'disconnected' || state === 'error';
   const canDisconnect = state === 'connected' || state === 'waiting-agent' || state === 'in-call';
   const inCall = state === 'in-call' || state === 'waiting-agent';
@@ -391,8 +395,15 @@ export default function RealtimeCallPage() {
 
   return (
     <div style={{ position:'fixed', inset:0, background:'#000', overflow:'hidden', fontFamily:"'Inter', system-ui, sans-serif" }}>
-      {/* 粒子 canvas */}
-      <canvas ref={canvasRef} style={{ position:'absolute', inset:0, display:'block', filter:'contrast(1.1) brightness(1.2)' }} />
+      {/* 底圖：角色有圖用角色身份照，無則用預設星空底圖 */}
+      <img src={bgSrc} alt="" style={{
+        position:'absolute', inset:0, width:'100%', height:'100%', objectFit:'cover',
+        filter:'blur(12px) brightness(0.35)', transform:'scale(1.08)',
+      }} />
+      {/* 漸層遮罩：邊緣加深、中心透亮，保護文字可讀性 */}
+      <div style={{ position:'absolute', inset:0, background:'radial-gradient(ellipse at center, transparent 0%, rgba(0,0,0,0.6) 100%)' }} />
+      {/* 粒子 canvas — screen 混合疊在底圖上 */}
+      <canvas ref={canvasRef} style={{ position:'absolute', inset:0, display:'block', filter:'contrast(1.1) brightness(1.2)', mixBlendMode:'screen' }} />
 
       {/* 右上角燈號 */}
       <div style={{ position:'absolute', top:20, right:20, display:'flex', gap:8, alignItems:'center' }}>
@@ -418,8 +429,8 @@ export default function RealtimeCallPage() {
       {/* 中심 */}
       <div style={{ position:'absolute', inset:0, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', pointerEvents:'none' }}>
 
-        {/* 角色名 */}
-        <div style={{ marginBottom:20, fontSize:28, fontWeight:900, letterSpacing:'0.25em', textTransform:'uppercase', color:'#fff' }}>
+        {/* 角色名 — 有角色照時縮小，避免蓋過人物；星空底圖維持原字級 */}
+        <div style={{ marginBottom:20, fontSize: hasCharImage ? 18 : 28, fontWeight:900, letterSpacing:'0.25em', textTransform:'uppercase', color:'#fff', transition:'font-size 0.4s ease' }}>
           {characterName || characterId}
         </div>
 
