@@ -395,15 +395,25 @@ export default function RealtimeCallPage() {
 
   return (
     <div style={{ position:'fixed', inset:0, background:'#000', overflow:'hidden', fontFamily:"'Inter', system-ui, sans-serif" }}>
-      {/* 底圖：角色有圖用角色身份照，無則用預設星空底圖 */}
+      {/* 底圖：角色有圖用角色身份照（100% 清晰無遮擋）；無則用星空底圖（模糊壓暗） */}
       <img src={bgSrc} alt="" style={{
         position:'absolute', inset:0, width:'100%', height:'100%', objectFit:'cover',
-        filter:'blur(12px) brightness(0.35)', transform:'scale(1.08)',
+        filter: hasCharImage ? 'none' : 'blur(12px) brightness(0.35)',
+        transform: hasCharImage ? 'none' : 'scale(1.08)',
       }} />
-      {/* 漸層遮罩：邊緣加深、中心透亮，保護文字可讀性 */}
-      <div style={{ position:'absolute', inset:0, background:'radial-gradient(ellipse at center, transparent 0%, rgba(0,0,0,0.6) 100%)' }} />
+      {/* 漸層遮罩：僅星空底圖時加，保護置中文字；角色照不加遮罩 */}
+      {!hasCharImage && (
+        <div style={{ position:'absolute', inset:0, background:'radial-gradient(ellipse at center, transparent 0%, rgba(0,0,0,0.6) 100%)' }} />
+      )}
       {/* 粒子 canvas — screen 混合疊在底圖上 */}
       <canvas ref={canvasRef} style={{ position:'absolute', inset:0, display:'block', filter:'contrast(1.1) brightness(1.2)', mixBlendMode:'screen' }} />
+
+      {/* 角色名（角色照版）移到左上角，文字陰影保可讀，不遮照片 */}
+      {hasCharImage && (
+        <div style={{ position:'absolute', top:24, left:24, fontSize:18, fontWeight:900, letterSpacing:'0.2em', textTransform:'uppercase', color:'#fff', textShadow:'0 2px 12px rgba(0,0,0,0.85)' }}>
+          {characterName || characterId}
+        </div>
+      )}
 
       {/* 右上角燈號 */}
       <div style={{ position:'absolute', top:20, right:20, display:'flex', gap:8, alignItems:'center' }}>
@@ -429,10 +439,12 @@ export default function RealtimeCallPage() {
       {/* 中심 */}
       <div style={{ position:'absolute', inset:0, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', pointerEvents:'none' }}>
 
-        {/* 角色名 — 有角色照時縮小，避免蓋過人物；星空底圖維持原字級 */}
-        <div style={{ marginBottom:20, fontSize: hasCharImage ? 18 : 28, fontWeight:900, letterSpacing:'0.25em', textTransform:'uppercase', color:'#fff', transition:'font-size 0.4s ease' }}>
-          {characterName || characterId}
-        </div>
+        {/* 角色名 — 星空底圖時置中；角色照版移到左上角（見上方） */}
+        {!hasCharImage && (
+          <div style={{ marginBottom:20, fontSize:28, fontWeight:900, letterSpacing:'0.25em', textTransform:'uppercase', color:'#fff' }}>
+            {characterName || characterId}
+          </div>
+        )}
 
         {/* 主按鈕 */}
         <div

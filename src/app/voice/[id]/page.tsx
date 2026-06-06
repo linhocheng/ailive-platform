@@ -461,15 +461,25 @@ export default function VoicePage() {
 
   return (
     <div style={{ position:'fixed', inset:0, background:'#000', overflow:'hidden', fontFamily:"'Inter', sans-serif" }}>
-      {/* 底圖：角色有圖用角色身份照，無則用預設星空底圖 */}
+      {/* 底圖：角色有圖用角色身份照（100% 清晰無遮擋）；無則用星空底圖（模糊壓暗） */}
       <img src={bgSrc} alt="" style={{
         position:'absolute', inset:0, width:'100%', height:'100%', objectFit:'cover',
-        filter:'blur(12px) brightness(0.35)', transform:'scale(1.08)',
+        filter: hasCharImage ? 'none' : 'blur(12px) brightness(0.35)',
+        transform: hasCharImage ? 'none' : 'scale(1.08)',
       }} />
-      {/* 漸層遮罩：邊緣加深、中心透亮，保護文字可讀性 */}
-      <div style={{ position:'absolute', inset:0, background:'radial-gradient(ellipse at center, transparent 0%, rgba(0,0,0,0.6) 100%)' }} />
+      {/* 漸層遮罩：僅星空底圖時加，保護置中文字；角色照不加遮罩 */}
+      {!hasCharImage && (
+        <div style={{ position:'absolute', inset:0, background:'radial-gradient(ellipse at center, transparent 0%, rgba(0,0,0,0.6) 100%)' }} />
+      )}
       {/* 粒子 Canvas — screen 混合疊在底圖上 */}
       <canvas ref={canvasRef} style={{ position:'absolute', inset:0, display:'block', filter:'contrast(1.1) brightness(1.2)', mixBlendMode:'screen' }} />
+
+      {/* 角色名（角色照版）移到左上角，文字陰影保可讀，不遮照片 */}
+      {hasCharImage && (
+        <div style={{ position:'absolute', top:24, left:24, fontSize:16, letterSpacing:'0.2em', textTransform:'uppercase', color:'#fff', fontWeight:200, textShadow:'0 2px 12px rgba(0,0,0,0.85)' }}>
+          {char?.name||'…'}
+        </div>
+      )}
 
       {/* 頂部：角色資訊 */}
       <div style={{ position:'absolute', top:0, left:0, right:0, display:'flex', alignItems:'center', justifyContent:'space-between', padding:'24px 24px 0' }}>
@@ -485,18 +495,19 @@ export default function VoicePage() {
       {/* 中心：按鈕 */}
       <div style={{ position:'absolute', inset:0, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', pointerEvents:'none' }}>
 
-        {/* 角色名 — 按鈕上方；有角色照時縮小，星空底圖維持原字級 */}
-        <div style={{
-          marginBottom:20,
-          fontSize: hasCharImage ? 14 : 18,
-          letterSpacing:'0.3em',
-          textTransform:'uppercase',
-          color:'rgba(255,255,255,0.85)',
-          fontWeight:200,
-          borderBottom:'1px solid rgba(255,255,255,0.4)',
-          paddingBottom:4,
-          transition:'font-size 0.4s ease',
-        }}>{char?.name||'…'}</div>
+        {/* 角色名 — 星空底圖時置中於按鈕上方；角色照版移到左上角（見上方） */}
+        {!hasCharImage && (
+          <div style={{
+            marginBottom:20,
+            fontSize:18,
+            letterSpacing:'0.3em',
+            textTransform:'uppercase',
+            color:'rgba(255,255,255,0.85)',
+            fontWeight:200,
+            borderBottom:'1px solid rgba(255,255,255,0.4)',
+            paddingBottom:4,
+          }}>{char?.name||'…'}</div>
+        )}
 
         {/* ping 圈（playing 時） */}
         {state==='playing' && (
