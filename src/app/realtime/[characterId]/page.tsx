@@ -436,8 +436,8 @@ export default function RealtimeCallPage() {
         )}
       </div>
 
-      {/* 中심 */}
-      <div style={{ position:'absolute', inset:0, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', pointerEvents:'none' }}>
+      {/* 中심 — 角色照版整組控制移到下方，避免蓋住人物 */}
+      <div style={{ position:'absolute', inset:0, display:'flex', flexDirection:'column', alignItems:'center', justifyContent: hasCharImage ? 'flex-end' : 'center', paddingBottom: hasCharImage ? 96 : 0, pointerEvents:'none' }}>
 
         {/* 角色名 — 星空底圖時置中；角色照版移到左上角（見上方） */}
         {!hasCharImage && (
@@ -450,7 +450,7 @@ export default function RealtimeCallPage() {
         <div
           onClick={canConnect ? handleConnect : canDisconnect ? handleDisconnect : undefined}
           style={{ pointerEvents:'auto', cursor: (canConnect||canDisconnect) ? 'pointer' : 'default',
-            width:240, height:240, borderRadius:'50%',
+            width: hasCharImage ? 80 : 240, height: hasCharImage ? 80 : 240, borderRadius:'50%',
             background:'rgba(255,255,255,0.04)', backdropFilter:'blur(20px)',
             border:`1px solid ${state==='in-call' ? 'rgba(0,242,255,0.5)' : state==='connecting'||state==='waiting-agent' ? 'rgba(255,255,255,0.5)' : 'rgba(255,255,255,0.15)'}`,
             display:'flex', alignItems:'center', justifyContent:'center',
@@ -458,7 +458,7 @@ export default function RealtimeCallPage() {
           }}
         >
           <div style={{
-            width:40, height:40, borderRadius:'50%',
+            width: hasCharImage ? 14 : 40, height: hasCharImage ? 14 : 40, borderRadius:'50%',
             background: state==='in-call' ? '#00f2ff' : state==='error' ? '#ef4444' : '#fff',
             boxShadow:`0 0 24px ${state==='in-call' ? '#00f2ff' : state==='error' ? '#ef4444' : '#fff'}`,
             transition:'all 0.6s ease',

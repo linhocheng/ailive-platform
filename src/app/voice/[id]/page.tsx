@@ -492,8 +492,8 @@ export default function VoicePage() {
         </div>
       </div>
 
-      {/* 中心：按鈕 */}
-      <div style={{ position:'absolute', inset:0, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', pointerEvents:'none' }}>
+      {/* 中心：按鈕 — 角色照版整組控制移到下方，避免蓋住人物 */}
+      <div style={{ position:'absolute', inset:0, display:'flex', flexDirection:'column', alignItems:'center', justifyContent: hasCharImage ? 'flex-end' : 'center', paddingBottom: hasCharImage ? 90 : 0, pointerEvents:'none' }}>
 
         {/* 角色名 — 星空底圖時置中於按鈕上方；角色照版移到左上角（見上方） */}
         {!hasCharImage && (
@@ -511,15 +511,15 @@ export default function VoicePage() {
 
         {/* ping 圈（playing 時） */}
         {state==='playing' && (
-          <div style={{ position:'absolute', width:360, height:360, borderRadius:'50%', border:'1px solid rgba(0,242,255,0.12)', animation:'ping 1.8s ease-out infinite' }} />
+          <div style={{ position:'absolute', width: hasCharImage ? 120 : 360, height: hasCharImage ? 120 : 360, borderRadius:'50%', border:'1px solid rgba(0,242,255,0.12)', animation:'ping 1.8s ease-out infinite' }} />
         )}
 
         <div
           onClick={disabled ? undefined : handleMainButton}
-          style={{ position:'relative', width:320, height:320, display:'flex', alignItems:'center', justifyContent:'center', pointerEvents:'auto', cursor: disabled ? 'default' : 'pointer' }}
+          style={{ position:'relative', width: hasCharImage ? 110 : 320, height: hasCharImage ? 110 : 320, display:'flex', alignItems:'center', justifyContent:'center', pointerEvents:'auto', cursor: disabled ? 'default' : 'pointer' }}
         >
           <div style={{
-            width:240, height:240, borderRadius:'50%',
+            width: hasCharImage ? 80 : 240, height: hasCharImage ? 80 : 240, borderRadius:'50%',
             background:'rgba(255,255,255,0.04)',
             backdropFilter:'blur(20px)',
             border:`1px solid ${ringColor}`,
@@ -529,7 +529,7 @@ export default function VoicePage() {
             animation: state==='processing' ? 'breathe 1s infinite alternate' : 'none',
           }}>
             <div style={{
-              width:40, height:40, borderRadius:'50%',
+              width: hasCharImage ? 14 : 40, height: hasCharImage ? 14 : 40, borderRadius:'50%',
               background: dotColor,
               boxShadow:`0 0 24px ${dotColor}`,
               transform:`scale(${dotScale})`,
