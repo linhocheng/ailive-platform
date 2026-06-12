@@ -23,6 +23,7 @@ export const maxDuration = 30;
 
 const THRESHOLD = 0.3;
 const MAX_IMAGES = 2;
+const PER_PRODUCT_CAP = 3; // 語義 fallback 時單一產品最多取幾條，破除同域壟斷
 
 function imageRank(title: string, query = ''): number {
   const t = title.toLowerCase();
@@ -109,6 +110,10 @@ export async function POST(req: NextRequest) {
     let queryEmbedding: number[] | null = null;
     let supplementImages: Record<string, unknown>[] = [];
 
+    // 參考層：general（法規、指引、文案規定）是策展規範，與查詢路徑無關，永遠帶入。
+    // 不靠語義分數競爭——窄域 embedding 全擠在高分區，會把參考資料擠出 top-N。
+    const generalDocs = textDocs.filter(d => d.category === 'general');
+
     if (matchedProduct) {
       const short = matchedProduct.includes(' ') ? matchedProduct.split(' ').slice(1).join(' ') : matchedProduct;
       knowledgeResults = allKnowledge.filter(d => {
@@ -120,20 +125,33 @@ export async function POST(req: NextRequest) {
         .sort((a, b) => imageRank(String(a.title || ''), query) - imageRank(String(b.title || ''), query))
         .slice(0, MAX_IMAGES);
     } else {
-      const textWithEmb = textDocs.filter(d => d.embedding && Array.isArray(d.embedding));
-      if (textWithEmb.length > 0) {
+      const nonGeneralWithEmb = textDocs.filter(d => d.category !== 'general' && d.embedding && Array.isArray(d.embedding));
+      if (nonGeneralWithEmb.length > 0) {
         queryEmbedding = await generateEmbedding(query);
-        knowledgeResults = textWithEmb
+        const ranked: Record<string, unknown>[] = nonGeneralWithEmb
           .map(d => ({ ...d, _score: cosineSimilarity(queryEmbedding!, d.embedding as number[]) }))
           .filter(d => (d._score as number) >= THRESHOLD)
-          .sort((a, b) => (b._score as number) - (a._score as number))
-          .slice(0, limit);
+          .sort((a, b) => (b._score as number) - (a._score as number));
+        // 同域去壟斷：每個產品最多取 PER_PRODUCT_CAP 條，避免單一產品塞滿 top-N
+        const perProduct = new Map<string, number>();
+        for (const d of ranked) {
+          const pn = extractProductName(String(d.title || ''));
+          const c = perProduct.get(pn) || 0;
+          if (c >= PER_PRODUCT_CAP) continue;
+          perProduct.set(pn, c + 1);
+          knowledgeResults.push(d);
+          if (knowledgeResults.length >= limit) break;
+        }
       }
       if (knowledgeResults.length > 0) {
         const kws = extractKeywords(knowledgeResults.map(d => String(d.title || '')));
         supplementImages = findImages(imageDocs, kws, query);
       }
     }
+
+    // 參考層去重後置頂（規範先於細節，且永不被 slice 截斷）
+    const seenIds = new Set(knowledgeResults.map(d => d._id));
+    knowledgeResults = [...generalDocs.filter(d => !seenIds.has(d._id)), ...knowledgeResults];
 
     let insightResults: Record<string, unknown>[] = [];
     const insightWithEmb = insightDocs.filter(d => d.embedding && Array.isArray(d.embedding));
@@ -193,7 +211,12 @@ export async function POST(req: NextRequest) {
           messages: [{ role: 'user', content: `以下是知識庫搜尋結果，問題是「${query}」：\n\n${rawContext}\n\n請用2-3句話整理：這些條目裡有哪些關鍵資訊？有沒有可以直接用的圖片URL？直接輸出整理結果，不要標題不要列點。` }],
         });
         const reasoned = (reasonRes.content[0] as Anthropic.TextBlock).text.trim();
-        const top3 = scored.slice(0, 3).map(item => {
+        // 壓縮顯示：參考層（general）全列，非參考層取分數前 3。避免 general 置頂把產品/記憶擠出結構化區塊。
+        const compactItems = [
+          ...scored.filter(d => (d as Record<string, unknown>).category === 'general'),
+          ...scored.filter(d => (d as Record<string, unknown>).category !== 'general').slice(0, 3),
+        ];
+        const top3 = compactItems.map(item => {
           const d = item as Record<string, unknown>;
           const tag = d._type === 'knowledge' ? `[天命・${d.category || '一般'}]` : '[記憶]';
           const body = d._type === 'knowledge' ? String(d.content || d.summary || '').slice(0, 150) : String(d.content || '').slice(0, 100);

@@ -1578,7 +1578,7 @@ export async function POST(req: NextRequest) {
 ${timeRulesBlock}
 
 說話前的天條：
-- 需要回想過去說過的事、對方的喜好、自己的洞察 → 呼叫 query_knowledge_base
+- 需要產品知識、規範、法規、回想過去說過的事、對方的喜好、自己的洞察 → 呼叫 query_knowledge_base
 - 需要知道當前事件、時事、不確定的資訊 → 呼叫 web_search
 - 不確定就查，查了才說，不從空氣裡編。
 

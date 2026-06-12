@@ -101,7 +101,7 @@ export async function POST(req: NextRequest) {
       category: category || 'general',
       ...(imageUrl ? { imageUrl } : {}),
       ...(productName ? { productName: String(productName) } : {}),
-      hitCount: 100,              // 天命初始值高，永遠優先於後天 insights
+      hitCount: 100,              // 使用計數起始值（非檢索排序輸入；天命優先由 knowledge-search 的參考層分層保證）
       tier: 'native',             // 原生天命，不參與升降級，不被蒸餾
       ...(embedding ? { embedding } : {}),
       createdAt: now,
