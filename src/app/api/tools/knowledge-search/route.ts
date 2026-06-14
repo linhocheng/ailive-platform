@@ -25,6 +25,54 @@ const THRESHOLD = 0.3;
 const MAX_IMAGES = 2;
 const PER_PRODUCT_CAP = 3; // 語義 fallback 時單一產品最多取幾條，破除同域壟斷
 
+// 混合檢索（BM25 字面 + cosine 語義）權重與 RRF 常數。
+// 為什麼：text-embedding-004 在窄域（同品牌化妝品）cosine 全坍縮在 0.85-0.92，
+// 失去鑑別力——「法規」這種有明確關鍵詞的參考文件被產品文件擠出 top-N。
+// BM25 走字面匹配繞過坍縮（離線實測：法規查詢 BM25 命中 #1，cosine 才 #16）。
+// 2:1 偏重 BM25 但保留 cosine 的語義召回（同義詞、無字面重疊的查詢）。
+const RRF_K = 60;
+const W_BM25 = 2;
+const W_COS = 1;
+
+// 中文字元 bigram 斷詞（零依賴）：只留 CJK + 英數，滑動取 2-gram。
+// 中文沒空格，bigram 是無分詞器情境下穩健的 IR tokenization。
+function bigramTokens(text: string): string[] {
+  const chars = Array.from(text).filter(c => /[\u4e00-\u9fff\w]/.test(c));
+  const s = chars.join('');
+  const grams: string[] = [];
+  for (let i = 0; i < s.length - 1; i++) grams.push(s.slice(i, i + 2));
+  return grams;
+}
+
+// 對候選 docs 算 BM25，回傳 { id → score, id → rank }。query 時在記憶體建，零索引。
+function bm25Score(query: string, docs: Record<string, unknown>[]): { score: Map<string, number>; rank: Map<string, number> } {
+  const k1 = 1.5, b = 0.75;
+  const docToks = docs.map(d => bigramTokens(`${d.title || ''} ${d.content || ''}`));
+  const N = docs.length || 1;
+  const avgdl = docToks.reduce((s, t) => s + t.length, 0) / N;
+  const df = new Map<string, number>();
+  for (const toks of docToks) for (const g of new Set(toks)) df.set(g, (df.get(g) || 0) + 1);
+  const idf = (g: string) => Math.log((N - (df.get(g) || 0) + 0.5) / ((df.get(g) || 0) + 0.5) + 1);
+  const qToks = [...new Set(bigramTokens(query))];
+  const score = new Map<string, number>();
+  docs.forEach((d, i) => {
+    const tf = new Map<string, number>();
+    for (const g of docToks[i]) tf.set(g, (tf.get(g) || 0) + 1);
+    const dl = docToks[i].length;
+    let s = 0;
+    for (const g of qToks) {
+      const f = tf.get(g) || 0;
+      if (f === 0) continue;
+      s += idf(g) * (f * (k1 + 1)) / (f + k1 * (1 - b + b * dl / avgdl));
+    }
+    score.set(d._id as string, s);
+  });
+  const rank = new Map<string, number>();
+  [...docs].sort((a, b2) => (score.get(b2._id as string) || 0) - (score.get(a._id as string) || 0))
+    .forEach((d, r) => rank.set(d._id as string, r));
+  return { score, rank };
+}
+
 function imageRank(title: string, query = ''): number {
   const t = title.toLowerCase();
   const q = query.toLowerCase();
@@ -125,13 +173,30 @@ export async function POST(req: NextRequest) {
         .sort((a, b) => imageRank(String(a.title || ''), query) - imageRank(String(b.title || ''), query))
         .slice(0, MAX_IMAGES);
     } else {
-      const nonGeneralWithEmb = textDocs.filter(d => d.category !== 'general' && d.embedding && Array.isArray(d.embedding));
-      if (nonGeneralWithEmb.length > 0) {
+      const nonGeneral = textDocs.filter(d => d.category !== 'general');
+      if (nonGeneral.length > 0) {
         queryEmbedding = await generateEmbedding(query);
-        const ranked: Record<string, unknown>[] = nonGeneralWithEmb
-          .map(d => ({ ...d, _score: cosineSimilarity(queryEmbedding!, d.embedding as number[]) }))
-          .filter(d => (d._score as number) >= THRESHOLD)
-          .sort((a, b) => (b._score as number) - (a._score as number));
+        // cosine 分數 + 名次
+        const cosScore = new Map<string, number>();
+        for (const d of nonGeneral) {
+          const s = (d.embedding && Array.isArray(d.embedding))
+            ? cosineSimilarity(queryEmbedding, d.embedding as number[]) : 0;
+          cosScore.set(d._id as string, s);
+        }
+        const cosRank = new Map<string, number>();
+        [...nonGeneral].sort((a, b) => (cosScore.get(b._id as string) || 0) - (cosScore.get(a._id as string) || 0))
+          .forEach((d, r) => cosRank.set(d._id as string, r));
+        // BM25 字面分數 + 名次
+        const { score: bmScore, rank: bmRank } = bm25Score(query, nonGeneral);
+        // 相關性閘：cosine 達標 或 BM25 有命中，才當候選（擋掉完全不相關的 doc）
+        const candidates = nonGeneral.filter(d => {
+          const id = d._id as string;
+          return (cosScore.get(id) || 0) >= THRESHOLD || (bmScore.get(id) || 0) > 0;
+        });
+        // 加權 RRF 融合（BM25 重、cosine 輕）
+        const fusedScore = (id: string) =>
+          W_BM25 / (RRF_K + (bmRank.get(id) ?? 9999)) + W_COS / (RRF_K + (cosRank.get(id) ?? 9999));
+        const ranked = candidates.sort((a, b) => fusedScore(b._id as string) - fusedScore(a._id as string));
         // 同域去壟斷：每個產品最多取 PER_PRODUCT_CAP 條，避免單一產品塞滿 top-N
         const perProduct = new Map<string, number>();
         for (const d of ranked) {
@@ -139,7 +204,7 @@ export async function POST(req: NextRequest) {
           const c = perProduct.get(pn) || 0;
           if (c >= PER_PRODUCT_CAP) continue;
           perProduct.set(pn, c + 1);
-          knowledgeResults.push(d);
+          knowledgeResults.push({ ...d, _score: cosScore.get(d._id as string) || 0 });
           if (knowledgeResults.length >= limit) break;
         }
       }
