@@ -161,6 +161,7 @@ export async function POST(req: NextRequest) {
         const importance = Number(ins.importance || 2);
         const ref = await db.collection('platform_insights').add({
           characterId,
+          ...(userId && !String(userId).startsWith('anon') ? { userId } : {}),
           title: ins.title,
           content: ins.content,
           importance,

@@ -26,12 +26,18 @@ function stripJson(s: string): string {
 
 
 // source → memoryType 映射
+// 原則：來自真實對話（文字/語音）= identity（關係/情節記憶，會浮上心頭）；
+//       排程學習 / 接案任務 / 資源清單 = knowledge（按需查，不浮現）。
+// 2026-06 補語音來源：voice_conversation/realtime_conversation/voice/dialogue_end/auto_extract
+// 先前漏接，導致語音記憶被標 knowledge、被動注入時被擋（聖嚴 100% 隱形）。
 function getMemoryType(source: string): 'identity' | 'knowledge' {
   const identitySources = new Set([
     'sleep_time', 'self_awareness', 'sleep_self_awareness',
     'reflect', 'scheduler_reflect', 'scheduler_sleep',
     'post_reflection', 'post_memory', 'pre_publish_reflection',
     'conversation', 'awakening',
+    'voice_conversation', 'realtime_conversation', 'voice',
+    'dialogue_end', 'auto_extract',
   ]);
   return identitySources.has(source) ? 'identity' : 'knowledge';
 }
@@ -470,19 +476,18 @@ ${skillList}
         archive: insights.filter(i => i.tier === 'archive').length + archived.length,
       },
       byMemoryType: {
+        // 複用 getMemoryType（唯一真相），不再內聯複製 source 清單
         identity: insights.filter(i => {
           const mType = String(i.memoryType || '');
           if (mType === 'identity') return true;
           if (mType === 'knowledge') return false;
-          const IDENTITY_SOURCES = new Set(['sleep_time','self_awareness','sleep_self_awareness','reflect','scheduler_reflect','scheduler_sleep','post_reflection', 'post_memory','pre_publish_reflection','conversation','awakening']);
-          return IDENTITY_SOURCES.has(String(i.source || ''));
+          return getMemoryType(String(i.source || '')) === 'identity';
         }).length,
         knowledge: insights.filter(i => {
           const mType = String(i.memoryType || '');
           if (mType === 'knowledge') return true;
           if (mType === 'identity') return false;
-          const IDENTITY_SOURCES = new Set(['sleep_time','self_awareness','sleep_self_awareness','reflect','scheduler_reflect','scheduler_sleep','post_reflection', 'post_memory','pre_publish_reflection','conversation','awakening']);
-          return !IDENTITY_SOURCES.has(String(i.source || ''));
+          return getMemoryType(String(i.source || '')) === 'knowledge';
         }).length,
       },
       rootAnchorSource: rootAnchorEmbeddings.length > 0

@@ -40,6 +40,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: true, message: '對話太短，跳過沉澱', insights: [] });
     }
 
+    // userId 從對話取（記憶綁 userId，供被動注入做 user 隔離）；anon/空 → 不綁，當角色通用
+    const userId = String(convDoc.data()?.userId || '');
+
     // 組對話文字
     const dialogueText = messages
       .slice(-20) // 最近 20 條
@@ -79,6 +82,7 @@ ${dialogueText}`,
       const embedding = await generateEmbedding(`${ins.title} ${ins.content}`);
       const ref = await db.collection('platform_insights').add({
         characterId,
+        ...(userId && !userId.startsWith('anon') ? { userId } : {}),
         title: ins.title,
         content: ins.content,
         importance: ins.importance ?? 2,
@@ -121,7 +125,6 @@ ${dialogueText}`,
     // ── B2.4：promise-reflection — 自動標記 unfulfilled actions 哪些被兌現 ──
     // 失敗不阻斷；env PROMISE_REFLECTION_ENABLED=false 可全關
     let reflectionStats: Awaited<ReturnType<typeof reflectAndMarkFulfilled>> | null = null;
-    const userId = String(convDoc.data()?.userId || '');
     if (userId) {
       try {
         reflectionStats = await reflectAndMarkFulfilled({

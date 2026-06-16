@@ -97,6 +97,7 @@ ${dialogueText}`,
           const embedding = await generateEmbedding(`${ins.title} ${ins.content}`);
           const ref = await db.collection('platform_insights').add({
             characterId,
+            ...(userId && !String(userId).startsWith('anon') ? { userId } : {}),
             title: ins.title,
             content: ins.content,
             importance: ins.importance ?? 2,

@@ -509,7 +509,7 @@ specialist 選擇：
           if (toolName === 'remember') {
             const title = String(toolInput.title||''); const content = String(toolInput.content||''); const importance = Number(toolInput.importance??2);
             const embedding = await generateEmbedding(`${title} ${content}`);
-            await db.collection('platform_insights').add({ characterId, title, content, importance, source: 'voice', tier: 'fresh', hitCount: importance>=3?2:0, lastHitAt: null, embedding, createdAt: new Date().toISOString() });
+            await db.collection('platform_insights').add({ characterId, ...(userId && !String(userId).startsWith('anon') ? { userId } : {}), title, content, importance, source: 'voice', tier: 'fresh', hitCount: importance>=3?2:0, lastHitAt: null, embedding, createdAt: new Date().toISOString() });
             await db.collection('platform_characters').doc(characterId).update({ 'growthMetrics.totalInsights': FieldValue.increment(1) });
             return `已記住：${title}`;
           }

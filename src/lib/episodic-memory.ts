@@ -11,14 +11,6 @@
 import type { Firestore } from 'firebase-admin/firestore';
 import { generateEmbedding, cosineSimilarity } from '@/lib/embeddings';
 
-const IDENTITY_SOURCES = new Set([
-  'sleep_time', 'self_awareness', 'sleep_self_awareness',
-  'reflect', 'scheduler_reflect', 'scheduler_sleep',
-  'post_reflection', 'pre_publish_reflection',
-  'conversation', 'awakening',
-  'resource_awareness',
-]);
-
 function getTaipeiDate(): string {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Taipei' });
 }
@@ -35,34 +27,34 @@ export async function loadEpisodicBlock(
       .limit(50)
       .get();
 
-    const allFiltered = recentSnap.docs
+    // 資格層（2026-06 重構，廢除 source 白名單）：
+    //   不靠「來源」決定能不能浮上心頭——來源白名單會隨新功能（語音）漏接，
+    //   讓整批 voice_conversation 記憶隱形。改為只留兩條真正必要的閘 + 排序定勝負。
+    const base = recentSnap.docs
       .map(d => ({ ...d.data(), id: d.id } as Record<string, unknown>))
       .filter((d: Record<string, unknown>) => {
-        // Cross-user leak 防護：
-        // 1. 帶不同 userId 的 → 跳過
+        // userId 隔離（統一 knowledge-search 行為）：
+        //   帶 userId 的記憶 → 只給該 userId；無 userId → 角色通用，所有 session 可見。
         if (d.userId && d.userId !== userId) return false;
-        // 2. identity 記憶（角色自知）→ 全局可見，但要非 archive
+        // 封存的不浮現。
         if (d.tier === 'archive') return false;
-        const mType = String(d.memoryType || '');
-        if (mType === 'identity') return true;
-        // 3. 非 identity 且 userId=None：只有當前 userId 也為空時才帶入
-        //    避免 sleep_time/self_awareness 裡的他人名字（Polina/小艺）污染其他用戶
-        if (!d.userId && userId) return false;
-        if (mType === 'knowledge') return false;
-        return IDENTITY_SOURCES.has(String(d.source || ''));
+        return true;
       });
 
-    // 資源認知獨立帶入（完整內容，不截斷，不佔記憶名額）
-    const resourceDoc = allFiltered.find(
+    // 資源認知獨立帶入（完整內容，不截斷，不佔記憶名額；不受類型過濾）。
+    const resourceDoc = base.find(
       (d: Record<string, unknown>) => d.source === 'resource_awareness'
     ) as Record<string, unknown> | undefined;
     const resourceBlock = resourceDoc
       ? `\n\n【我的資源清單】\n${String(resourceDoc.content || '')}`
       : '';
 
-    // 一般記憶：排除資源認知
-    const candidates = allFiltered.filter(
-      (d: Record<string, unknown>) => d.source !== 'resource_awareness',
+    // 一般記憶候選：排除資源認知 + 排除知識類
+    //   （知識「按需查」不主動浮上心頭，被動腦海只放關係/身份記憶）。
+    const candidates = base.filter(
+      (d: Record<string, unknown>) =>
+        d.source !== 'resource_awareness' &&
+        String(d.memoryType || '') !== 'knowledge',
     );
 
     // 有 query → semantic search（embedding 相似度排序）；無 query → hitCount 排序

@@ -211,15 +211,6 @@ def load_recent_actions(
     return items[:limit]
 
 
-_EPISODIC_IDENTITY_SOURCES = {
-    "sleep_time", "self_awareness", "sleep_self_awareness",
-    "reflect", "scheduler_reflect", "scheduler_sleep",
-    "post_reflection", "pre_publish_reflection",
-    "conversation", "awakening",
-    "resource_awareness",
-}
-
-
 def load_episodic_block(character_id: str, user_id: str | None) -> str:
     """對齊 src/lib/episodic-memory.ts:loadEpisodicBlock
 
@@ -233,27 +224,23 @@ def load_episodic_block(character_id: str, user_id: str | None) -> str:
             "characterId", "==", character_id
         ).limit(50).get()
 
-        all_filtered: list[dict] = []
+        # 資格層（2026-06 重構，廢除 source 白名單，對齊 episodic-memory.ts）：
+        #   來源白名單會隨新功能（語音）漏接，讓整批 voice_conversation 記憶隱形。
+        #   改為只留 userId 隔離 + 非 archive，排序定勝負。
+        base: list[dict] = []
         for d in snap:
             data = d.to_dict() or {}
             data["id"] = d.id
             uid = data.get("userId")
-            if uid and uid != user_id:
+            if uid and uid != user_id:   # userId 隔離（無 userId = 角色通用，所有 session 可見）
                 continue
             if data.get("tier") == "archive":
                 continue
-            mtype = str(data.get("memoryType") or "")
-            if mtype == "identity":
-                all_filtered.append(data)
-                continue
-            if mtype == "knowledge":
-                continue
-            if str(data.get("source") or "") in _EPISODIC_IDENTITY_SOURCES:
-                all_filtered.append(data)
+            base.append(data)
 
-        # 資源認知獨立帶入（完整內容，不截斷，不佔記憶名額）
+        # 資源認知獨立帶入（完整內容，不截斷，不佔記憶名額；不受類型過濾）
         resource_doc = next(
-            (d for d in all_filtered if d.get("source") == "resource_awareness"),
+            (d for d in base if d.get("source") == "resource_awareness"),
             None,
         )
         resource_block = ""
@@ -262,6 +249,13 @@ def load_episodic_block(character_id: str, user_id: str | None) -> str:
                 "\n\n【我的資源清單】\n"
                 + str(resource_doc.get("content") or "")
             )
+
+        # 一般記憶候選：排除資源認知 + 排除知識類（知識按需查，不浮上心頭）
+        all_filtered = [
+            d for d in base
+            if d.get("source") != "resource_awareness"
+            and str(d.get("memoryType") or "") != "knowledge"
+        ]
 
         # 一般記憶：core 優先 → hitCount 加權 → 最近日期
         def _tier_score(t: str) -> int:

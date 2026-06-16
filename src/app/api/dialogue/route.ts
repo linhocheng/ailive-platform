@@ -1951,7 +1951,7 @@ ${convData.userProfile ? `【我認識這個人】\n${convData.userProfile}\n\n`
               const today = getTaipeiDate();
               for (const ins of insights) {
                 const embedding = await generateEmbedding(`${ins.title} ${ins.content}`);
-                await db.collection('platform_insights').add({ characterId, title: ins.title, content: ins.content, source: 'auto_extract', eventDate: today, tier: 'fresh', hitCount: 0, lastHitAt: null, embedding, createdAt: new Date().toISOString() });
+                await db.collection('platform_insights').add({ characterId, ...(userId && !String(userId).startsWith('anon') ? { userId } : {}), title: ins.title, content: ins.content, source: 'auto_extract', eventDate: today, tier: 'fresh', hitCount: 0, lastHitAt: null, embedding, createdAt: new Date().toISOString() });
               }
               await db.collection('platform_characters').doc(characterId).update({ 'growthMetrics.totalInsights': FieldValue.increment(insights.length) });
             } catch { /* 提煉失敗不中斷 */ }
