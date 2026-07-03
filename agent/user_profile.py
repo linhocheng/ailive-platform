@@ -46,6 +46,10 @@ def load_user_profile(user_id: str) -> dict | None:
 def upsert_user_profile(user_id: str, partial: dict) -> None:
     if not user_id:
         raise ValueError("upsert_user_profile: user_id required")
+    # 匿名 session 不持久化身份：anon id 不可靠等於一個人，多人同裝置共用會把
+    # 各自的 name/interests 全寫進同一筆 → 污染（金星事件 2026-05-30）。
+    if user_id.startswith("anon"):
+        return
     _ensure_init()
     db = firestore.client()
     ref = db.collection(COLLECTION).document(user_id)

@@ -56,6 +56,9 @@ export async function upsertUserProfile(
   partial: Partial<Omit<UserProfile, 'userId' | 'createdAt' | 'updatedAt'>>,
 ): Promise<void> {
   if (!userId) throw new Error('upsertUserProfile: userId required');
+  // 匿名 session 不持久化身份：anon id 不可靠等於一個人，多人同裝置共用會把
+  // 各自的 name/interests 全寫進同一筆 → 污染（金星事件 2026-05-30）。
+  if (userId.startsWith('anon')) return;
   const db = getFirestore();
   const ref = db.collection(COLLECTION).doc(userId);
   const now = new Date().toISOString();
