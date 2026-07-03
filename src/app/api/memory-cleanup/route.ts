@@ -13,19 +13,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getFirestore } from '@/lib/firebase-admin';
 import { cosineSimilarity, generateEmbedding } from '@/lib/embeddings';
+// getMemoryType 收斂到 sleep-engine（原本這裡有份缺語音來源的副本，
+// 語音記憶會被當 knowledge 從 core 降級——兩份即是零份）
+import { getMemoryType } from '@/lib/sleep-engine';
 
 const CORE_THRESHOLD = 0.5;
-
-function getMemoryType(source: string): 'identity' | 'knowledge' {
-  const identitySources = new Set([
-    'sleep_time','self_awareness','sleep_self_awareness',
-    'reflect','scheduler_reflect','scheduler_sleep',
-    'post_reflection','pre_publish_reflection','post_memory',
-    'conversation','awakening','resource_awareness',
-    'strategist_review',
-  ]);
-  return identitySources.has(source) ? 'identity' : 'knowledge';
-}
 
 export async function POST(req: NextRequest) {
   try {
