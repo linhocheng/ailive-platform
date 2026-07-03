@@ -307,6 +307,18 @@ def load_episodic_block(character_id: str, user_id: str | None) -> str:
                 + "\n".join(lines)
                 + "\n這些是我心裡還留著的片段，自然地帶進對話，不要每句都提。"
             )
+
+        # 命中計數（對齊 episodic-memory.ts）：被選進 prompt = 被用到。
+        # 不 bump 的話語音注入的記憶在 sleep 眼裡仍是 hitCount=0 → 30 天照樣 archive。
+        for ins in recent:
+            try:
+                db.collection("platform_insights").document(str(ins["id"])).update({
+                    "hitCount": int(ins.get("hitCount") or 0) + 1,
+                    "lastHitAt": datetime.now(timezone.utc).isoformat(),
+                })
+            except Exception:
+                pass
+
         return resource_block + recent_block
     except Exception as e:
         logger.warning(f"load_episodic_block failed: {e}")

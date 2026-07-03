@@ -17,6 +17,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { getAnthropicClient } from '@/lib/anthropic-via-bridge';
 import { getFirestore } from '@/lib/firebase-admin';
 import { generateEmbedding, cosineSimilarity } from '@/lib/embeddings';
+import { bm25Scores } from '@/lib/text-similarity';
 import { FieldValue } from 'firebase-admin/firestore';
 
 export const maxDuration = 30;
@@ -34,39 +35,12 @@ const RRF_K = 60;
 const W_BM25 = 2;
 const W_COS = 1;
 
-// 中文字元 bigram 斷詞（零依賴）：只留 CJK + 英數，滑動取 2-gram。
-// 中文沒空格，bigram 是無分詞器情境下穩健的 IR tokenization。
-function bigramTokens(text: string): string[] {
-  const chars = Array.from(text).filter(c => /[\u4e00-\u9fff\w]/.test(c));
-  const s = chars.join('');
-  const grams: string[] = [];
-  for (let i = 0; i < s.length - 1; i++) grams.push(s.slice(i, i + 2));
-  return grams;
-}
-
-// 對候選 docs 算 BM25，回傳 { id → score, id → rank }。query 時在記憶體建，零索引。
+// 對候選 docs 算 BM25，回傳 { id → score, id → rank }。
+// 計分核心收斂在 @/lib/text-similarity（episodic 檢索共用），這裡只做 id 映射。
 function bm25Score(query: string, docs: Record<string, unknown>[]): { score: Map<string, number>; rank: Map<string, number> } {
-  const k1 = 1.5, b = 0.75;
-  const docToks = docs.map(d => bigramTokens(`${d.title || ''} ${d.content || ''}`));
-  const N = docs.length || 1;
-  const avgdl = docToks.reduce((s, t) => s + t.length, 0) / N;
-  const df = new Map<string, number>();
-  for (const toks of docToks) for (const g of new Set(toks)) df.set(g, (df.get(g) || 0) + 1);
-  const idf = (g: string) => Math.log((N - (df.get(g) || 0) + 0.5) / ((df.get(g) || 0) + 0.5) + 1);
-  const qToks = [...new Set(bigramTokens(query))];
+  const scores = bm25Scores(query, docs.map(d => `${d.title || ''} ${d.content || ''}`));
   const score = new Map<string, number>();
-  docs.forEach((d, i) => {
-    const tf = new Map<string, number>();
-    for (const g of docToks[i]) tf.set(g, (tf.get(g) || 0) + 1);
-    const dl = docToks[i].length;
-    let s = 0;
-    for (const g of qToks) {
-      const f = tf.get(g) || 0;
-      if (f === 0) continue;
-      s += idf(g) * (f * (k1 + 1)) / (f + k1 * (1 - b + b * dl / avgdl));
-    }
-    score.set(d._id as string, s);
-  });
+  docs.forEach((d, i) => score.set(d._id as string, scores[i]));
   const rank = new Map<string, number>();
   [...docs].sort((a, b2) => (score.get(b2._id as string) || 0) - (score.get(a._id as string) || 0))
     .forEach((d, r) => rank.set(d._id as string, r));
