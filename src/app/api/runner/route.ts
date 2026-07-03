@@ -115,7 +115,9 @@ async function runSleepTask(characterId: string, char: Record<string, unknown>, 
     }
   }
 
-  // 合併相似（cosine > 0.88）
+  // 合併重複（判準與 /api/sleep 共用 @/lib/text-similarity 雙門檻）
+  // 鐵律同 sleep：只在同 userId 內比、輸家降 archive 可溯不硬刪
+  const { isDuplicateMemory } = await import('@/lib/text-similarity');
   const withEmb = insights.filter(i => i.embedding && Array.isArray(i.embedding) && i.tier !== 'archive');
   const mergedSet = new Set<string>();
   let mergedCount = 0;
@@ -123,11 +125,21 @@ async function runSleepTask(characterId: string, char: Record<string, unknown>, 
     if (mergedSet.has(withEmb[i].id as string)) continue;
     for (let j = i + 1; j < withEmb.length; j++) {
       if (mergedSet.has(withEmb[j].id as string)) continue;
+      if (String(withEmb[i].userId || '') !== String(withEmb[j].userId || '')) continue;
       const score = cosineSimilarity(withEmb[i].embedding as number[], withEmb[j].embedding as number[]);
-      if (score > 0.88) {
+      if (isDuplicateMemory(
+        score,
+        `${withEmb[i].title || ''} ${withEmb[i].content || ''}`,
+        `${withEmb[j].title || ''} ${withEmb[j].content || ''}`,
+      )) {
         const maxHit = Math.max((withEmb[i].hitCount as number)||0, (withEmb[j].hitCount as number)||0);
         await db.collection('platform_insights').doc(withEmb[i].id as string).update({ hitCount: maxHit });
-        await db.collection('platform_insights').doc(withEmb[j].id as string).delete();
+        await db.collection('platform_insights').doc(withEmb[j].id as string).update({
+          tier: 'archive',
+          mergedInto: withEmb[i].id as string,
+          archivedReason: 'dedup_merge',
+          archivedAt: new Date().toISOString(),
+        });
         mergedSet.add(withEmb[j].id as string);
         mergedCount++;
       }

@@ -31,6 +31,7 @@ import { addUserAction, getRecentUserActions, formatActionsBlock } from '@/lib/c
 import { buildTimeRulesBlock } from '@/lib/time-rules';
 import { loadUserProfile, upsertUserProfile, formatProfileBlock } from '@/lib/user-profile';
 import { loadUserObservations, upsertUserObservations, formatObservationsBlock } from '@/lib/user-observations';
+import { loadEpisodicBlock } from '@/lib/episodic-memory';
 import { enqueueStrategy } from '@/lib/cloud-tasks';
 
 export const maxDuration = 120;
@@ -1414,78 +1415,11 @@ export async function POST(req: NextRequest) {
     }
 
     // 3a. 抓最近 episodic insights（時間感注入）
-    // identity memoryType 的 source 清單
-    const IDENTITY_SOURCES = new Set([
-      'sleep_time', 'self_awareness', 'sleep_self_awareness',
-      'reflect', 'scheduler_reflect', 'scheduler_sleep',
-      'post_reflection', 'pre_publish_reflection',
-      'conversation', 'awakening',
-      'resource_awareness',  // 資源認知索引，讓角色知道自己有哪些素材
-    ]);
-
-    let episodicBlock = '';
-    try {
-      const recentSnap = await db.collection('platform_insights')
-        .where('characterId', '==', characterId)
-        .limit(50)
-        .get();
-
-      const allFiltered = recentSnap.docs
-        .map(d => ({ ...d.data(), id: d.id }))
-        .filter((d: Record<string, unknown>) => {
-          // Cross-user leak 防護：帶 userId 的只給該用戶看
-          if (d.userId && d.userId !== userId) return false;
-          if (d.tier === 'archive') return false;
-          const mType = String(d.memoryType || '');
-          if (mType === 'identity') return true;
-          if (mType === 'knowledge') return false;
-          return IDENTITY_SOURCES.has(String(d.source || ''));
-        });
-
-      // 資源認知獨立帶入（完整內容，不截斷，不佔記憶名額）
-      const resourceDoc = allFiltered.find((d: Record<string, unknown>) => d.source === 'resource_awareness') as Record<string, unknown> | undefined;
-      const resourceBlock = resourceDoc
-        ? `\n\n【我的資源清單】\n${String(resourceDoc.content || '')}`
-        : '';
-
-      // 一般記憶：排除資源認知
-      // 排序：core 優先 → hitCount 加權 → 最近日期
-      // core 記憶是身份定義，永遠在前；hitCount 反映活躍度；日期保底
-      const recentInsights = allFiltered
-        .filter((d: Record<string, unknown>) => d.source !== 'resource_awareness')
-        .sort((a: Record<string, unknown>, b: Record<string, unknown>) => {
-          const tierScore = (t: string) => t === 'core' ? 2 : t === 'fresh' ? 1 : 0;
-          const aTier = tierScore(String(a.tier || ''));
-          const bTier = tierScore(String(b.tier || ''));
-          if (bTier !== aTier) return bTier - aTier;
-          const aHit = Number(a.hitCount || 0);
-          const bHit = Number(b.hitCount || 0);
-          if (bHit !== aHit) return bHit - aHit;
-          return String(b.eventDate || '').localeCompare(String(a.eventDate || ''));
-        })
-        .slice(0, 3);
-
-      if (recentInsights.length > 0 || resourceBlock) {
-        const today = getTaipeiDate();
-        const lines = recentInsights.map((ins: Record<string, unknown>) => {
-          const eventDate = String(ins.eventDate || '');
-          const diffDays = eventDate
-            ? Math.floor((new Date(today).getTime() - new Date(eventDate).getTime()) / 86400000)
-            : null;
-          const timeLabel = diffDays === null ? '' :
-            diffDays === 0 ? '（今天）' :
-            diffDays === 1 ? '（昨天）' :
-            diffDays <= 7 ? `（${diffDays}天前）` :
-            `（${eventDate}）`;
-          const tier = ins.tier === 'self' ? '[關於我自己]' : '[記憶]';
-          return `- ${tier}${timeLabel} ${String(ins.title || '')}：${String(ins.content || '').slice(0, 80)}`;
-        });
-        const recentBlock = recentInsights.length > 0
-          ? `\n\n【最近的事】\n${lines.join('\n')}\n這些是我心裡還留著的片段，自然地帶進對話，不要每句都提。`
-          : '';
-        episodicBlock = resourceBlock + recentBlock;
-      }
-    } catch { /* 查不到不阻斷 */ }
+    // 2026-07 切到共用 lib（與 voice-stream / Python agent 同一份）：
+    //   舊 inline 版留著 IDENTITY_SOURCES 白名單，漏 voice/auto_extract 等來源，
+    //   sleep 跑過補標 memoryType 之前新記憶對文字對話全部隱形（真相分裂復辟）。
+    //   lib 版帶 query（當前 message）做語義排序——聊什麼撈什麼，不再固定同三條。
+    const episodicBlock = await loadEpisodicBlock(db, characterId, userId, message);
 
     // system_soul 優先（手動編修的最終版），沒有才 soul_core，再沒有才 enhancedSoul
     const soulText = (char.system_soul as string) || (char.soul_core as string) || (char.enhancedSoul as string) || '';

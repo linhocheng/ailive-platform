@@ -4,7 +4,7 @@
  * POST { characterId, dryRun? }
  *
  * 1. 讀所有 fresh insights
- * 2. 合併相似的（cosine > 0.88）
+ * 2. 合併重複的（雙門檻：cosine >= 0.9 AND CJK bigram 重疊 >= 0.5，同 userId，降 archive 不硬刪）
  * 3. hitCount >= 3 → 升格 core
  * 4. 久沒用（30天，hitCount=0）→ 降格 archived
  * 5. 生成自我洞察
@@ -16,6 +16,7 @@ import { getAnthropicClient } from '@/lib/anthropic-via-bridge';
 import { getFirestore } from '@/lib/firebase-admin';
 import { trackCost } from '@/lib/cost-tracker';
 import { generateEmbedding, cosineSimilarity } from '@/lib/embeddings';
+import { isDuplicateMemory } from '@/lib/text-similarity';
 
 export const maxDuration = 60;
 
@@ -166,7 +167,14 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 2. 合併相似（cosine > 0.88）
+    // 2. 合併重複（雙門檻：cosine >= 0.9 AND CJK bigram 重疊率 >= 0.5）
+    //
+    // 為什麼不能只看 cosine：同一對人的長篇敘事記憶 embedding 天生擠在一起，
+    // ailiveX 實測純 cosine 0.92 仍把「完全不同的事件」判成重複（大誤殺）。
+    // 真重複的特徵是「逐字級相似」，所以詞彙重疊是必要條件。
+    // 另外兩條鐵律：
+    //   - 只在同一 userId 範圍內比（跨用戶記憶本來就該不同，合併=殺記憶+洩漏）
+    //   - 永不硬刪：輸家降 archive + mergedInto 可溯，錯殺還救得回來
     const withEmb = insights.filter(i => i.embedding && Array.isArray(i.embedding) && i.tier !== 'archive');
     const toMerge: Array<[string, string]> = [];
     const mergedSet = new Set<string>();
@@ -175,25 +183,34 @@ export async function POST(req: NextRequest) {
       if (mergedSet.has(withEmb[i].id as string)) continue;
       for (let j = i + 1; j < withEmb.length; j++) {
         if (mergedSet.has(withEmb[j].id as string)) continue;
+        if (String(withEmb[i].userId || '') !== String(withEmb[j].userId || '')) continue;
         const score = cosineSimilarity(withEmb[i].embedding as number[], withEmb[j].embedding as number[]);
-        if (score > 0.88) {
-          toMerge.push([withEmb[i].id as string, withEmb[j].id as string]);
-          mergedSet.add(withEmb[j].id as string);
-        }
+        if (!isDuplicateMemory(
+          score,
+          `${withEmb[i].title || ''} ${withEmb[i].content || ''}`,
+          `${withEmb[j].title || ''} ${withEmb[j].content || ''}`,
+        )) continue;
+        toMerge.push([withEmb[i].id as string, withEmb[j].id as string]);
+        mergedSet.add(withEmb[j].id as string);
       }
     }
 
-    // 合併：保留第一條，刪除重複的
+    // 合併：保留第一條，重複的降 archive（可溯，不硬刪）
     if (!dryRun) {
-      for (const [keepId, deleteId] of toMerge) {
+      for (const [keepId, loserId] of toMerge) {
         const keepDoc = insights.find(i => i.id === keepId);
-        const deleteDoc = insights.find(i => i.id === deleteId);
-        if (keepDoc && deleteDoc) {
+        const loserDoc = insights.find(i => i.id === loserId);
+        if (keepDoc && loserDoc) {
           // 更新 hitCount 取最大值
-          const mergedHitCount = Math.max((keepDoc.hitCount as number) || 0, (deleteDoc.hitCount as number) || 0);
+          const mergedHitCount = Math.max((keepDoc.hitCount as number) || 0, (loserDoc.hitCount as number) || 0);
           await db.collection('platform_insights').doc(keepId).update({ hitCount: mergedHitCount });
-          await db.collection('platform_insights').doc(deleteId).delete();
-          merged.push(`${deleteDoc.title} → ${keepDoc.title}`);
+          await db.collection('platform_insights').doc(loserId).update({
+            tier: 'archive',
+            mergedInto: keepId,
+            archivedReason: 'dedup_merge',
+            archivedAt: new Date().toISOString(),
+          });
+          merged.push(`${loserDoc.title} → ${keepDoc.title}`);
         }
       }
     }
