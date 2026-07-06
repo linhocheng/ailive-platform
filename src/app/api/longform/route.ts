@@ -12,11 +12,13 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getAnthropicClient, AnthropicBridge } from '@/lib/anthropic-via-bridge';
 import { getFirestore } from '@/lib/firebase-admin';
 import Anthropic from '@anthropic-ai/sdk';
+import { hasOperatorAccess } from '@/lib/char-access';
 
 export const maxDuration = 300;
 export const runtime = 'nodejs';
 
 export async function POST(req: NextRequest) {
+  if (!hasOperatorAccess(req)) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   const body = await req.json() as {
     characterId: string;
     prompt: string;

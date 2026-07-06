@@ -8,9 +8,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getFirestore } from '@/lib/firebase-admin';
 import { loadUserObservations, upsertUserObservations } from '@/lib/user-observations';
+import { hasOperatorAccess } from '@/lib/char-access';
 
 export async function GET(req: NextRequest) {
   try {
+    if (!hasOperatorAccess(req)) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
     const characterId = req.nextUrl.searchParams.get('characterId');
     if (!characterId) return NextResponse.json({ error: 'characterId 必填' }, { status: 400 });
 
@@ -43,6 +45,7 @@ export async function GET(req: NextRequest) {
 
 export async function PATCH(req: NextRequest) {
   try {
+    if (!hasOperatorAccess(req)) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
     const { characterId, userId, personality, preferences, inferredInterests, notes } = await req.json();
     if (!characterId || !userId) {
       return NextResponse.json({ error: 'characterId, userId 必填' }, { status: 400 });

@@ -14,6 +14,7 @@ import { getAnthropicClient } from '@/lib/anthropic-via-bridge';
 import { redis } from '@/lib/redis';
 import { getFirestore } from '@/lib/firebase-admin';
 import { trackCost } from '@/lib/cost-tracker';
+import { hasOperatorAccess } from '@/lib/char-access';
 
 // 靈魂整理格式：當 rawSoul 需要梳理時使用
 // 不強制七咒律，保留原作者的風格與密度，只做結構性補強
@@ -71,6 +72,7 @@ const SOUL_CORE_PROMPT = `你是靈魂提煉師。
 
 export async function POST(req: NextRequest) {
   try {
+    if (!hasOperatorAccess(req)) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
     const db = getFirestore();
     const { characterId, skipForge } = await req.json();
 

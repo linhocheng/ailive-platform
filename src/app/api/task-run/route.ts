@@ -283,7 +283,7 @@ async function savePostDraft(
   const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'https://ailive-platform.vercel.app';
   fetch(`${baseUrl}/api/strategist-review`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'x-worker-secret': process.env.WORKER_SECRET || '' },
     body: JSON.stringify({ postId: ref.id, authorCharacterId: characterId }),
   }).catch(() => {}); // fire-and-forget，不阻斷
 

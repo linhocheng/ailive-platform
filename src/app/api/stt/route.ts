@@ -5,11 +5,14 @@
  * Return: { text: string }
  */
 import { NextRequest, NextResponse } from 'next/server';
+import { checkRateLimit } from '@/lib/rate-limit';
 
 export const maxDuration = 30;
 
 export async function POST(req: NextRequest) {
   try {
+    const rl = await checkRateLimit(req, 'stt', 30, 60);
+    if (!rl.ok) return NextResponse.json({ error: 'rate limited' }, { status: 429 });
     const geminiKey = process.env.GEMINI_API_KEY;
     if (!geminiKey) return NextResponse.json({ error: 'GEMINI_API_KEY 未設定' }, { status: 500 });
 

@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getFirestore } from '@/lib/firebase-admin';
 import { generateEmbedding, cosineSimilarity } from '@/lib/embeddings';
+import { hasOperatorAccess } from '@/lib/char-access';
 
 export async function GET(req: NextRequest) {
+  if (!hasOperatorAccess(req)) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   const characterId = req.nextUrl.searchParams.get('characterId') || 'se7K2jsx8P1ROVqE1Ppb';
   const query = req.nextUrl.searchParams.get('q') || '時尚搭配';
 

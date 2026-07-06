@@ -13,6 +13,7 @@
  * 底層 provider：body.ttsProvider > env TTS_PROVIDER > elevenlabs
  */
 import { NextRequest, NextResponse } from 'next/server';
+import { checkRateLimit } from '@/lib/rate-limit';
 import { preprocessTTS, type Provider } from '@/lib/tts-preprocess';
 import { getTTSProvider } from '@/lib/tts-providers';
 import type { TTSVoiceSettings } from '@/lib/tts-providers/types';
@@ -25,6 +26,8 @@ const VOICE_MALE   = '3D8gZpoA8QiwNEOs2oE7';
 
 export async function POST(req: NextRequest) {
   try {
+    const rl = await checkRateLimit(req, 'tts', 60, 60);
+    if (!rl.ok) return NextResponse.json({ error: 'rate limited' }, { status: 429 });
     const { text, voiceId, gender, ttsProvider, settings } = await req.json() as {
       text: string;
       voiceId?: string;

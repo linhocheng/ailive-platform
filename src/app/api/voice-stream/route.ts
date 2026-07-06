@@ -15,7 +15,8 @@
  * data: {"type":"error","message":"..."}      ← 錯誤
  */
 
-import { NextRequest } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
+import { checkRateLimit } from '@/lib/rate-limit';
 import Anthropic from '@anthropic-ai/sdk';
 import { getAnthropicClient } from '@/lib/anthropic-via-bridge';
 import { withRetry } from '@/lib/anthropic-retry';
@@ -110,6 +111,9 @@ async function streamToBase64(stream: ReadableStream<Uint8Array>): Promise<strin
 
 // ===== Main handler =====
 export async function POST(req: NextRequest) {
+  const rl = await checkRateLimit(req, 'voice-stream', 40, 60);
+  if (!rl.ok) return NextResponse.json({ error: 'rate limited' }, { status: 429 });
+
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream({

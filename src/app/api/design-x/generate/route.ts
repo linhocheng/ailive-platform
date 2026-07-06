@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import mammoth from 'mammoth';
 import { getAnthropicClient } from '@/lib/anthropic-via-bridge';
+import { hasOperatorAccess } from '@/lib/char-access';
 
 const enc = new TextEncoder();
 
@@ -100,6 +101,9 @@ Responsive: @media (max-width: 768px) — scale down font sizes, adjust padding
 {{CONTENT}}`;
 
 export async function POST(req: NextRequest) {
+  if (!hasOperatorAccess(req)) {
+    return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401, headers: { 'Content-Type': 'application/json' } });
+  }
   const stream = new ReadableStream({
     async start(controller) {
       try {

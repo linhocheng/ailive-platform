@@ -8,6 +8,7 @@ import { getAnthropicClient } from '@/lib/anthropic-via-bridge';
 import { getFirestore } from '@/lib/firebase-admin';
 import { generateEmbedding } from '@/lib/embeddings';
 import { trackCost } from '@/lib/cost-tracker';
+import { hasOperatorAccess } from '@/lib/char-access';
 
 export const maxDuration = 60;
 
@@ -17,6 +18,8 @@ function getTaipeiDate(): string {
 
 export async function POST(req: NextRequest) {
   try {
+    const workerOk = !!process.env.WORKER_SECRET && req.headers.get('x-worker-secret') === process.env.WORKER_SECRET;
+    if (!workerOk && !hasOperatorAccess(req)) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
     const { postId, authorCharacterId } = await req.json();
     if (!postId || !authorCharacterId) {
       return NextResponse.json({ error: 'postId, authorCharacterId 必填' }, { status: 400 });

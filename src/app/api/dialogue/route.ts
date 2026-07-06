@@ -19,6 +19,7 @@ import { shouldInjectGap } from '@/lib/time-awareness';
 import { detectGear, MODELS, getMaxTokens } from '@/lib/llm-router';
 import { callGemini } from '@/lib/gemini-client';
 import { getFirestore } from '@/lib/firebase-admin';
+import { checkRateLimit } from '@/lib/rate-limit';
 import { FieldValue } from 'firebase-admin/firestore';
 import { generateEmbedding, cosineSimilarity } from '@/lib/embeddings';
 import { generateImageForCharacter, buildGenerateImageDescription } from '@/lib/generate-image';
@@ -1236,6 +1237,8 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
+    const rl = await checkRateLimit(req, 'dialogue', 40, 60);
+    if (!rl.ok) return NextResponse.json({ error: 'rate limited' }, { status: 429 });
     const db = getFirestore();
     const { characterId, userId, message, conversationId, image, voiceMode, isNewVisit } = await req.json();
 

@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { redis } from '@/lib/redis';
+import { hasOperatorAccess } from '@/lib/char-access';
 
 export async function GET(req: NextRequest) {
   try {
+    if (!hasOperatorAccess(req)) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
     const id = req.nextUrl.searchParams.get('id');
     if (!id) return NextResponse.json({ error: 'id 必填' }, { status: 400 });
     await redis.del(`char:${id}`);

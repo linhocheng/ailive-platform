@@ -46,4 +46,10 @@ export const redis = {
   async expire(key: string, ttlSeconds: number): Promise<void> {
     await redisCall(['EXPIRE', key, ttlSeconds]);
   },
+
+  /** 原子遞增，回傳遞增後的值 */
+  async incr(key: string): Promise<number> {
+    const result = await redisCall(['INCR', key]);
+    return Number(result) || 0;
+  },
 };
