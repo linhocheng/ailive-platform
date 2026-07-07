@@ -474,7 +474,7 @@ ${outputFormat}`;
       const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'https://ailive-platform.vercel.app';
       const sleepRes = await fetch(`${baseUrl}/api/sleep`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-worker-secret': process.env.WORKER_SECRET || '' },
         body: JSON.stringify({ characterId }),
       });
       const sleepData = await sleepRes.json();

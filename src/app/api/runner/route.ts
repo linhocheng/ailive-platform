@@ -17,7 +17,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getAnthropicClient } from '@/lib/anthropic-via-bridge';
 import { getFirestore } from '@/lib/firebase-admin';
 
-export const maxDuration = 60;
+// 300：sleep task 含矛盾裁決（step 2b，預算 60s、bridge 冷呼叫實測 34s）後 60s 裝不下
+export const maxDuration = 300;
 
 // 台北時間轉換
 function getTaipeiNow() {

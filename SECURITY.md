@@ -15,6 +15,7 @@
 |---|---|---|
 | operator-only（純後台，client 不呼叫） | soul-enhance、user-observations(PII)、longform、strategist-guide、debug-kb、cache-clear、design-x/generate | `hasOperatorAccess` |
 | worker-secret（內部 fetch） | strategist-review（task-run 打它，帶 `x-worker-secret`） | `WORKER_SECRET` |
+| worker-secret 或 operator | sleep（task-run 帶 `x-worker-secret`；Adam 手動用 operator cookie。2026-07-07 補鎖，第一輪漏網的付費 LLM 路由） | `WORKER_SECRET` / `hasOperatorAccess` |
 | IP 限流（合法匿名的付費路由） | dialogue 40/分、voice-stream 40/分、tts 60/分、stt 30/分 | `checkRateLimit` |
 | cron | runner、sync-services | `CRON_SECRET`（已設 prod） |
 

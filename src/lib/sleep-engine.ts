@@ -8,6 +8,7 @@
  * 流程：
  * 1. 升降級（rootRelevance 決定升 core；knowledge 快速衰退）
  * 2. 合併重複（雙門檻：cosine >= 0.9 AND CJK bigram >= 0.5，同 userId，降 archive 不硬刪）
+ * 2b. 矛盾裁決（灰區配對 → LLM 判斷題 → supersededBy，2026-07-07）
  * 3. 自我洞察 → 4. self_awareness 水位線提煉 → 5. soul_proposal → 6. skills 整理
  */
 import type { Firestore } from 'firebase-admin/firestore';
@@ -43,6 +44,7 @@ export function getMemoryType(source: string): 'identity' | 'knowledge' {
 export interface SleepSummary {
   totalInsights: number;
   merged: number;
+  contradictions: number;
   upgraded: number;
   archived: number;
   blocked: number;
@@ -58,6 +60,47 @@ export interface SleepSummary {
 export interface SleepResult {
   summary: SleepSummary;
   healthReport: Record<string, unknown>;
+}
+
+// 矛盾裁決的判斷題（step 2b 的 LLM 部分，抽出來讓驗證腳本可以獨立打合成配對）
+// 回傳 null = 判定失敗（bridge 斷線/JSON 壞），caller 跳過這對，下輪再審
+export async function judgeContradiction(
+  client: { messages: { create: (args: Anthropic.MessageCreateParamsNonStreaming) => Promise<Anthropic.Message> } },
+  characterId: string,
+  a: Record<string, unknown>,
+  b: Record<string, unknown>,
+): Promise<{ verdict: Record<string, unknown>; actionable: boolean; currentIsA: boolean } | null> {
+  const fmt = (m: Record<string, unknown>) =>
+    `（記錄於 ${String(m.createdAt || '未知').slice(0, 10)}）${String(m.title || '')}：${String(m.content || '').slice(0, 300)}`;
+  try {
+    const res = await client.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 150,
+      messages: [{
+        role: 'user',
+        content: `兩條關於同一位用戶的記憶：
+
+A ${fmt(a)}
+
+B ${fmt(b)}
+
+判斷：
+1. 兩條是否在講同一件事實或同一個狀態？（不同事件、同件事的不同面向，都不算）
+2. 若是，內容是否互相矛盾（不能同時為真）？
+3. 若矛盾，哪一條反映現況？優先看內容裡的時間線索（「搬到」「換了」「現在」），沒有線索才看記錄日期較新者。
+
+只回 JSON，不要其他文字：
+{"sameMatter":true或false,"contradictory":true或false,"current":"A"或"B"或"unsure"}`,
+      }],
+    });
+    await trackCost(characterId, 'claude-haiku-4-5-20251001', res.usage?.input_tokens ?? 0, res.usage?.output_tokens ?? 0, 'sleep-contradiction');
+    const verdict = JSON.parse(stripJson((res.content[0] as Anthropic.TextBlock).text)) as Record<string, unknown>;
+    const actionable = verdict.sameMatter === true && verdict.contradictory === true
+      && (verdict.current === 'A' || verdict.current === 'B');
+    return { verdict, actionable, currentIsA: verdict.current === 'A' };
+  } catch {
+    return null;
+  }
 }
 
 export async function runSleepEngine(
@@ -195,6 +238,17 @@ export async function runSleepEngine(
   const toMerge: Array<[string, string]> = [];
   const mergedSet = new Set<string>();
 
+  // 矛盾裁決候選（step 2b 用）：同 userId、cosine 進灰區、但雙門檻沒判成重複的配對。
+  // 「住台北」vs「搬到高雄」就是這種——語義夠近（同一件事實），字面差遠（bigram 低），
+  // 去重抓不到，兩條並存 = 角色精神分裂。在同一個 O(n²) 迴圈順手收集，不另跑一遍。
+  const CONTRADICTION_COSINE_FLOOR = 0.7;
+  const memTypeOf = (m: Record<string, unknown>): 'identity' | 'knowledge' => {
+    const t = String(m.memoryType || '');
+    if (t === 'identity' || t === 'knowledge') return t;
+    return getMemoryType(String(m.source || ''));
+  };
+  const contradictionCandidates: Array<{ a: Record<string, unknown>; b: Record<string, unknown>; score: number }> = [];
+
   for (let i = 0; i < withEmb.length; i++) {
     if (mergedSet.has(withEmb[i].id as string)) continue;
     for (let j = i + 1; j < withEmb.length; j++) {
@@ -205,7 +259,17 @@ export async function runSleepEngine(
         score,
         `${withEmb[i].title || ''} ${withEmb[i].content || ''}`,
         `${withEmb[j].title || ''} ${withEmb[j].content || ''}`,
-      )) continue;
+      )) {
+        // 只裁 identity（用戶事實/關係）；self 是自我洞察，演化不是矛盾，不裁
+        if (
+          score >= CONTRADICTION_COSINE_FLOOR &&
+          withEmb[i].tier !== 'self' && withEmb[j].tier !== 'self' &&
+          memTypeOf(withEmb[i]) === 'identity' && memTypeOf(withEmb[j]) === 'identity'
+        ) {
+          contradictionCandidates.push({ a: withEmb[i], b: withEmb[j], score });
+        }
+        continue;
+      }
       toMerge.push([withEmb[i].id as string, withEmb[j].id as string]);
       mergedSet.add(withEmb[j].id as string);
     }
@@ -231,8 +295,98 @@ export async function runSleepEngine(
     }
   }
 
-  // 3. 自我洞察
   const client = getAnthropicClient(apiKey);
+
+  // 2b. 矛盾裁決（2026-07-07 新增）
+  //
+  // 分工天條：找配對（cosine 灰區）、驗回答格式、寫欄位、降級——全是程式；
+  // 只有「這兩條是不是同一件事實且互相矛盾」這一個判斷題丟 LLM。
+  // LLM 回答視為不可信文字：JSON 壞了 / 答非 A|B → 跳過這對，不 re-ask 模型修，
+  // 下次 sleep 自然重審。輸家寫 supersededBy 降 archive，仿 mergedInto，永不硬刪。
+  // 兩層上限，防吃光 lambda（runner / /api/sleep 的 maxDuration = 300）：
+  // - 對數上限：每次睡眠最多 12 對，其餘下輪再審（備忘錄會接棒）
+  // - 時間預算：裁決迴圈總計 60s，到了就停；單次 bridge call 40s timeout
+  //   （實測 bridge 冷呼叫 34s / 暖呼叫 7.5s；預設 280s 一次卡住就吃光 lambda）
+  const MAX_ARBITRATION_PAIRS = 12;
+  const ARBITRATION_TIME_BUDGET_MS = 60_000;
+  const arbClient = getAnthropicClient(apiKey, { bridgeTimeoutMs: 40_000 });
+  const contradictions: string[] = [];
+  const contradictionDetail: Array<Record<string, unknown>> = [];
+  const supersededSet = new Set<string>();
+
+  // 裁決備忘錄：記憶內容不可變，一對判一次就夠。沒有這層的話，
+  // 窄域 embedding 坍縮（Vivi 實測 200 條記憶生出 649 對 cosine>0.7，不相關的也 0.98+）
+  // 會讓同樣的配對每晚重複送審。判過就記檔，穩態只審新記憶帶來的新配對。
+  const pairKey = (x: string, y: string) => x < y ? `${x}_${y}` : `${y}_${x}`;
+  const checkedPairs = new Set<string>();
+  const checksSnap = await db.collection('platform_contradiction_checks')
+    .where('characterId', '==', characterId)
+    .select()
+    .get();
+  checksSnap.forEach(d => checkedPairs.add(d.id));
+
+  // 排序用「配對中較新記憶的時間」而非 cosine——窄域坍縮下 cosine 0.98+ 沒有鑑別力，
+  // 而矛盾裁決要抓的正是「新記憶推翻舊事實」，新事實的配對優先審
+  const pairNewest = ({ a, b }: { a: Record<string, unknown>; b: Record<string, unknown> }) =>
+    Math.max(
+      new Date(String(a.createdAt || 0)).getTime() || 0,
+      new Date(String(b.createdAt || 0)).getTime() || 0,
+    );
+  const uncheckedCandidates = contradictionCandidates
+    .filter(({ a, b }) => !checkedPairs.has(pairKey(a.id as string, b.id as string)));
+  const rankedPairs = uncheckedCandidates
+    .sort((x, y) => pairNewest(y) - pairNewest(x))
+    .slice(0, MAX_ARBITRATION_PAIRS);
+  const droppedByCap = uncheckedCandidates.length - rankedPairs.length;
+
+  const arbStartedAt = Date.now();
+  let arbTimeBudgetHit = false;
+
+  for (const { a, b, score } of rankedPairs) {
+    if (Date.now() - arbStartedAt > ARBITRATION_TIME_BUDGET_MS) { arbTimeBudgetHit = true; break; }
+    // 這輪已被去重合併或已被裁決的，跳過剩餘配對
+    if (mergedSet.has(a.id as string) || mergedSet.has(b.id as string)) continue;
+    if (supersededSet.has(a.id as string) || supersededSet.has(b.id as string)) continue;
+
+    const judged = await judgeContradiction(arbClient, characterId, a, b);
+    if (!judged) {
+      // 單對失敗（bridge 斷線/JSON 壞）不阻斷睡眠，不記備忘錄，這對下輪再審
+      contradictionDetail.push({ a: `${a.title}`, b: `${b.title}`, cosine: Math.round(score * 1000) / 1000, verdict: 'error', action: 'none' });
+      continue;
+    }
+    const { verdict, actionable, currentIsA } = judged;
+
+    contradictionDetail.push({
+      a: `${a.title}`, b: `${b.title}`, cosine: Math.round(score * 1000) / 1000,
+      verdict, action: actionable ? `supersede ${currentIsA ? 'B' : 'A'}` : 'none',
+    });
+
+    if (!dryRun) {
+      await db.collection('platform_contradiction_checks').doc(pairKey(a.id as string, b.id as string)).set({
+        characterId,
+        aId: a.id, bId: b.id,
+        contradictory: actionable,
+        checkedAt: new Date().toISOString(),
+      });
+    }
+    if (!actionable) continue;
+
+    const winner = currentIsA ? a : b;
+    const loser = currentIsA ? b : a;
+    supersededSet.add(loser.id as string);
+
+    if (!dryRun) {
+      await db.collection('platform_insights').doc(loser.id as string).update({
+        tier: 'archive',
+        supersededBy: winner.id as string,
+        archivedReason: 'contradiction_superseded',
+        archivedAt: new Date().toISOString(),
+      });
+    }
+    contradictions.push(`${loser.title} ⇒ 由「${winner.title}」取代`);
+  }
+
+  // 3. 自我洞察
   const coreInsights = insights
     .filter(i => i.tier === 'core' || (i.hitCount as number) >= 2)
     .slice(0, 5)
@@ -527,12 +681,22 @@ ${skillList}
       : 'none',
     blockedFromCore: blocked.length,
     blockedNames: blocked,
+    contradictionArbitration: {
+      candidates: contradictionCandidates.length,
+      alreadyChecked: contradictionCandidates.length - uncheckedCandidates.length,
+      judged: rankedPairs.length,
+      superseded: contradictions.length,
+      droppedByCap, // 超過每輪上限、留待下輪的配對數（不沉默截斷）
+      timeBudgetHit: arbTimeBudgetHit, // true = 15s 預算用完提前收工，剩的下輪審
+      detail: contradictionDetail,
+    },
   };
 
   return {
     summary: {
       totalInsights: insights.length,
       merged: merged.length,
+      contradictions: contradictions.length,
       upgraded: upgraded.length,
       archived: archived.length,
       blocked: blocked.length,
