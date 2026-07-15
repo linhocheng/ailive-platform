@@ -7,6 +7,10 @@
     {
       "path": "/api/sync-services",
       "schedule": "0 */6 * * *"
+    },
+    {
+      "path": "/api/livekit/agent-sleep",
+      "schedule": "*/20 * * * *"
     }
   ],
   "functions": {

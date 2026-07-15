@@ -91,6 +91,8 @@ export default function RealtimeCallPage() {
   const [diagLogs, setDiagLogs] = useState<DiagLog[]>([]);
   const [diag, setDiag] = useState<Diag>({ livekitUrl: '', roomName: '', identity: '' });
   const [micMuted, setMicMuted] = useState(false);
+  // 開關制：agent 平時關機省磚頭費，進頁自動喚醒（/api/livekit/wake），ready 前不放行撥號
+  const [agentGate, setAgentGate] = useState<'waking'|'ready'>('waking');
   const [researchPhase, setResearchPhase] = useState<'idle'|'searching'|'data_ready'|'delivered'>('idle');
   const researchResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -381,9 +383,35 @@ export default function RealtimeCallPage() {
     }).catch(() => {});
   }, [characterId]);
 
+  // 開關制喚醒：進頁 POST wake（關著就開機），之後輪詢 GET 直到 agent 開機蓋章。
+  // 冷開機 ready 後再緩衝 6 秒等 worker 向 LiveKit 註冊完；90 秒保底放行（寧可撥了等，不永久卡死）。
+  useEffect(() => {
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const startedAt = Date.now();
+    const poll = async (first: boolean) => {
+      let ready = false;
+      try {
+        const res = await fetch('/api/livekit/wake', first ? { method: 'POST' } : undefined);
+        const d = await res.json();
+        ready = d.state === 'ready';
+      } catch { /* 網路抖動照輪詢 */ }
+      if (stopped) return;
+      if (ready) {
+        if (first) setAgentGate('ready'); // 本來就醒著，直接放行
+        else timer = setTimeout(() => { if (!stopped) setAgentGate('ready'); }, 6000);
+        return;
+      }
+      if (Date.now() - startedAt > 90_000) { setAgentGate('ready'); return; }
+      timer = setTimeout(() => poll(false), 4000);
+    };
+    poll(true);
+    return () => { stopped = true; if (timer) clearTimeout(timer); };
+  }, []);
+
   const hasCharImage = !!characterImage;
   const bgSrc = characterImage || '/default-voice-bg.jpg';
-  const canConnect = state === 'idle' || state === 'disconnected' || state === 'error';
+  const canConnect = agentGate === 'ready' && (state === 'idle' || state === 'disconnected' || state === 'error');
   const canDisconnect = state === 'connected' || state === 'waiting-agent' || state === 'in-call';
   const inCall = state === 'in-call' || state === 'waiting-agent';
   const min = Math.floor(elapsed / 60), sec = elapsed % 60;
@@ -469,7 +497,7 @@ export default function RealtimeCallPage() {
         <div style={{ marginTop:28, fontSize:18, letterSpacing:'0.8em', textTransform:'uppercase', fontWeight:200,
           color: state==='in-call' ? '#00f2ff' : state==='error' ? '#ef4444' : 'rgba(255,255,255,0.6)',
           transition:'all 0.6s ease' }}>
-          {stateLabel[state]}
+          {agentGate !== 'ready' && (state === 'idle' || state === 'disconnected' || state === 'error') ? '( 喚醒中 )' : stateLabel[state]}
         </div>
 
         {/* 通話時長 */}
